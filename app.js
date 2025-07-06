@@ -1029,7 +1029,7 @@ app.post("/api/reset-password", async (req, res) => {
   res.json({ message: "Password updated! Login with your new password." });
 });
 
-// 2B. Reset password via mobile OTP
+// 2B. Reset password via mobile OTP 
 app.post("/api/reset-password-otp", async (req, res) => {
   const { mobile, otp, newPassword } = req.body;
   if (!mobile || !otp || !newPassword) return res.status(400).json({ message: "Missing data" });
@@ -1049,11 +1049,11 @@ app.post("/api/reset-password-otp", async (req, res) => {
   res.json({ message: "Password updated! Login with your new password." });
 });
 
-
+// Health checks / root endpoints
 app.get("/", (req, res) => res.send("GoDavai API is running..."));
 app.get("/test", (req, res) => res.send("Backend is running!"));
 
-// -- Only show all routes if in development/debug mode
+// --- Only show all routes if in development/debug mode ---
 function printRoutes() {
   if (process.env.NODE_ENV !== 'production') {
     app._router.stack.forEach(r => {
@@ -1064,41 +1064,7 @@ function printRoutes() {
   }
 }
 
-const PORT = process.env.PORT || 5000;
+// DO NOT add any mongoose.connect or app.listen code here!
+// This file should ONLY setup the Express app and export it:
 
-// Connect DB and handle signals for graceful shutdown
-mongoose.connect(
-  process.env.MONGO_URI,
-  { useNewUrlParser: true, useUnifiedTopology: true }
-)
-  .then(() => {
-    const server = app.listen(PORT, () => {
-      console.log(`GoDavai backend running on http://localhost:${PORT}`);
-      printRoutes();
-    });
-
-    // --- Handle SIGINT/SIGTERM for safe exit in prod environments ---
-    process.on('SIGINT', () => {
-      console.log("SIGINT received. Shutting down...");
-      server.close(() => {
-        mongoose.disconnect().then(() => {
-          console.log("MongoDB disconnected. Exiting.");
-          process.exit(0);
-        });
-      });
-    });
-
-    process.on('SIGTERM', () => {
-      console.log("SIGTERM received. Shutting down...");
-      server.close(() => {
-        mongoose.disconnect().then(() => {
-          console.log("MongoDB disconnected. Exiting.");
-          process.exit(0);
-        });
-      });
-    });
-  })
-  .catch((err) => {
-    console.error("Mongo connection error:", err.message);
-    process.exit(1);
-  });
+module.exports = app;
