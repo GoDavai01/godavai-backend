@@ -1,11 +1,12 @@
+// server.js
 const mongoose = require("mongoose");
 require("dotenv").config();
 
-const app = require("./app"); // Import the app
+const app = require("./app"); // Import the Express app
 
 const PORT = process.env.PORT || 5000;
 
-// NEVER log secrets in production!
+// Show important envs only in dev
 if (process.env.NODE_ENV !== "production") {
   console.log("ENV PORT:", process.env.PORT);
   console.log("MONGO_URI:", process.env.MONGO_URI ? "set" : "missing");
@@ -21,7 +22,7 @@ mongoose.connect(process.env.MONGO_URI, {
       console.log(`GoDavai backend running on http://localhost:${PORT}`);
     });
 
-    // Graceful shutdown
+    // Graceful shutdown (for Render/Heroku/Cloud)
     const shutdown = () => {
       console.log("🔄 Shutting down server...");
       server.close(() => {
