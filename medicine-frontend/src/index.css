@@ -1,0 +1,40 @@
+.container {
+  max-width: 480px;
+  margin: 40px auto;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.09);
+  padding: 24px;
+  padding-bottom: 80px; /* Added for BottomNavBar */
+}
+
+.medicine-list, .pharmacy-list {
+  margin-top: 16px;
+}
+
+.medicine-item, .pharmacy-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.qty-btns button {
+  padding: 4px 10px;
+  font-size: 18px;
+  background: #0a1128;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.qty-btns span {
+  font-size: 18px;
+}
+html, body, #root {
+  height: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
