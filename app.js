@@ -36,6 +36,7 @@ const passwordResetTokens = {};
 const userRoutes = require('./routes/users');
 const ordersRouter = require('./routes/orders');
 const { createPaymentRecord } = require('./controllers/paymentsController');
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000").split(",");
 
 // --- For Password Reset ---
 function randomOTP() {
@@ -44,7 +45,14 @@ function randomOTP() {
 
 // Core config
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
