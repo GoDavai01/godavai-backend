@@ -48,15 +48,17 @@ function randomOTP() {
 }
 
 // Allow www and non-www
-function isOriginAllowed(origin) {
-  if (!origin) return true;
-  return allowedOrigins.some(o => {
-    if (o === origin) return true;
-    // Allow for www/non-www
-    if (o.replace("https://www.", "https://") === origin.replace("https://www.", "https://")) return true;
-    return false;
-  });
+function normalizeOrigin(url) {
+  // Lowercase, remove trailing slashes, remove www
+  return url ? url.replace(/^https?:\/\/(www\.)?/, 'https://').replace(/\/$/, '').toLowerCase() : '';
 }
+
+function isOriginAllowed(origin) {
+  if (!origin) return true; // Allow Postman, server-side, etc.
+  const normOrigin = normalizeOrigin(origin);
+  return allowedOrigins.some(o => normalizeOrigin(o) === normOrigin);
+}
+
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -106,7 +108,6 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/orders', ordersRouter);
 app.use("/api/allorders", require("./routes/allorders"));
 app.use("/api/pharmacy", require("./routes/pharmacyAuth"));
-app.options("*", cors());
 
 // ============= GLOBAL LOGGER (DISABLE/REDUCE IN PRODUCTION) =============
 if (process.env.NODE_ENV !== 'production') {
