@@ -3,9 +3,10 @@ const axios = require('axios');
 
 async function sendSmsMSG91(mobile, message) {
   const authkey = process.env.MSG91_AUTHKEY;
-  const sender = process.env.MSG91_SENDER || "GODAVI"; // Fallback to GODAVI
+  const sender = process.env.MSG91_SENDER || "GODAVAI"; // Fallback to GODAVAI
   const route = 4; // 4 = transactional
   const country = 91;
+  const template_id = process.env.MSG91_TEMPLATE_ID; // <-- Add this line!
 
   const url = `https://api.msg91.com/api/v2/sendsms`;
 
@@ -16,7 +17,8 @@ async function sendSmsMSG91(mobile, message) {
     sms: [
       {
         message,
-        to: [mobile.startsWith("91") ? mobile : "91" + mobile]
+        to: [mobile.startsWith("91") ? mobile : "91" + mobile],
+        template_id // <-- Add this field!
       }
     ]
   };
