@@ -4,13 +4,15 @@ const router = express.Router();
 const User = require("../models/User");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
+const { sendSmsMSG91 } = require("../utils/sms"); // <-- IMPORT your real MSG91 sender
 
 const isEmail = (str) => /\S+@\S+\.\S+/.test(str);
 const OTP_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
-// Use your real SMS/email sender here in production!
+// --- SEND OTP VIA MSG91 (production) or log (dev) ---
 async function sendOtpMsg91(mobile, otp) {
-  // TODO: Integrate with MSG91 or your provider in production
+  const message = `Your GoDavai OTP is ${otp}.`;
+  await sendSmsMSG91(mobile, message);
   if (process.env.NODE_ENV !== "production") {
     console.log(`[DEV] OTP for ${mobile}: ${otp}`);
   }
