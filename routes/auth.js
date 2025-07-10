@@ -5,6 +5,7 @@ const User = require("../models/User");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const { sendSmsMSG91 } = require("../utils/sms"); // <-- IMPORT your real MSG91 sender
+const nodemailer = require("nodemailer"); // <--- Added for email OTP
 
 const isEmail = (str) => /\S+@\S+\.\S+/.test(str);
 const OTP_EXPIRY = 10 * 60 * 1000; // 10 minutes
@@ -19,7 +20,32 @@ async function sendOtpMsg91(mobile, otp) {
 }
 
 async function sendOtpEmail(email, otp) {
-  // TODO: Integrate with your real email provider
+  // Nodemailer production-ready implementation
+  const transporter = nodemailer.createTransport({
+  host: "smtp.hostinger.com",
+  port: 465, // or 587 if TLS
+  secure: true, // true for 465, false for 587
+  auth: {
+    user: process.env.EMAIL_USER, // info@godavaii.com
+    pass: process.env.EMAIL_PASS, // actual password for that mailbox
+  },
+});
+
+  const mailOptions = {
+    from: `"GoDavai" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: "GoDavai Login OTP",
+    html: `
+      <div style="font-family:sans-serif">
+        <h2>Your GoDavai OTP</h2>
+        <p style="font-size:22px;letter-spacing:4px"><b>${otp}</b></p>
+        <p>This OTP is valid for 10 minutes.</p>
+      </div>
+    `,
+  };
+
+  await transporter.sendMail(mailOptions);
+
   if (process.env.NODE_ENV !== "production") {
     console.log(`[DEV] OTP for ${email}: ${otp}`);
   }
