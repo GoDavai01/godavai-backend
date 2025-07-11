@@ -206,6 +206,8 @@ app.post("/api/pharmacy/register", (req, res) => {
   "name","ownerName","city","area","address","contact","email","password","qualification",
   "stateCouncilReg","drugLicenseRetail","gstin","bankAccount","ifsc","declarationAccepted"
 ];
+console.log("Incoming registration:", req.body);
+console.log("Incoming files:", req.files);
 const missingFields = requiredFields.filter(f => !req.body[f]);
 if (missingFields.length) {
   return res.status(400).json({ 
@@ -384,8 +386,57 @@ app.post("/api/admin/approve-pharmacy", async (req, res) => {
   try {
     const { pharmacyId } = req.body;
     if (!pharmacyId) return res.status(400).json({ message: "pharmacyId required" });
+
     // Update the pharmacy to "approved"
-    await Pharmacy.findByIdAndUpdate(pharmacyId, { status: "approved", approved: true });
+    const pharmacy = await Pharmacy.findByIdAndUpdate(
+      pharmacyId,
+      { status: "approved", approved: true },
+      { new: true }
+    );
+    if (!pharmacy) return res.status(404).json({ message: "Pharmacy not found" });
+
+    // --- SEND APPROVAL EMAIL ---
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport({
+      host: "smtp.hostinger.com", // or as per your provider
+      port: 465,
+      secure: true,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    const mailOptions = {
+      from: `"GoDavai" <${process.env.EMAIL_USER}>`,
+      to: pharmacy.email,
+      subject: "GoDavai Pharmacy Approval – You’re Ready to Start!",
+      html: `
+        <div style="font-family:sans-serif;background:#F9FAFB;padding:25px 18px;border-radius:8px">
+          <h2 style="color:#13C0A2;">Welcome to GoDavai!</h2>
+          <p>Hi <b>${pharmacy.ownerName || pharmacy.name}</b>,</p>
+          <p>Your pharmacy <b>${pharmacy.name}</b> has been <span style="color:#13C0A2;"><b>approved</b></span> on GoDavai!</p>
+          <p>You can now <a href="https://www.godavaii.com/pharmacy/login" style="color:#FFD43B;text-decoration:underline">login</a> and start receiving medicine orders from new customers.</p>
+          <ul>
+            <li><b>Pharmacy Name:</b> ${pharmacy.name}</li>
+            <li><b>Contact:</b> ${pharmacy.contact}</li>
+            <li><b>City/Area:</b> ${pharmacy.city}, ${pharmacy.area}</li>
+          </ul>
+          <p>If you have any questions, our support team is here to help!</p>
+          <br>
+          <p>Thank you for partnering with GoDavai.<br/>Let’s deliver better health together!</p>
+          <p style="color:#13C0A2;">Team GoDavai</p>
+        </div>
+      `
+    };
+
+    try {
+      await transporter.sendMail(mailOptions);
+      console.log("✅ Pharmacy approval email sent to:", pharmacy.email);
+    } catch (emailErr) {
+      console.error("❌ Failed to send pharmacy approval email:", emailErr);
+    }
+
     res.json({ message: "Pharmacy approved!" });
   } catch (err) {
     res.status(500).json({ message: "Could not approve pharmacy" });
