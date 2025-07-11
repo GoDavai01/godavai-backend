@@ -202,12 +202,18 @@ app.post("/api/pharmacy/register", (req, res) => {
     ) {
       return res.status(400).json({ message: "Invalid or missing timings" });
     }
-    if (!name || !ownerName || !city || !area || !address || !contact || !email || !password ||
-      !qualification || !stateCouncilReg || !drugLicenseRetail || !gstin ||
-      !bankAccount || !ifsc || !declarationAccepted
-    ) {
-      return res.status(400).json({ message: "Missing required fields" });
-    }
+    const requiredFields = [
+  "name","ownerName","city","area","address","contact","email","password","qualification",
+  "stateCouncilReg","drugLicenseRetail","gstin","bankAccount","ifsc","declarationAccepted"
+];
+const missingFields = requiredFields.filter(f => !req.body[f]);
+if (missingFields.length) {
+  return res.status(400).json({ 
+    message: "Missing required fields",
+    fieldsMissing: missingFields 
+  });
+}
+
 
     const hashed = await bcrypt.hash(password, 10);
     function filePath(field) {
@@ -248,6 +254,39 @@ if (existingPin) {
         digitalSignature: filePath("digitalSignature"),
       });
       await pharmacy.save();
+      // After pharmacy.save() and BEFORE res.status(201)...
+const transporter = nodemailer.createTransport({
+  host: "smtp.hostinger.com", // change to smtp.gmail.com if using Gmail, or as per your provider
+  port: 465, // or 587 for TLS
+  secure: true, // true for port 465, false for 587
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+const mailOptions = {
+  from: `"GoDavai" <${process.env.EMAIL_USER}>`,
+  to: pharmacy.email,
+  subject: "GoDavai: Pharmacy Registration Received",
+  html: `
+    <div style="font-family:sans-serif">
+      <h2>Welcome to GoDavai!</h2>
+      <p>Hi <b>${pharmacy.ownerName}</b>,</p>
+      <p>Your pharmacy registration for <b>${pharmacy.name}</b> has been received and is now under review by our admin team.</p>
+      <p>You will be notified by email/SMS as soon as your account is approved.</p>
+      <br>
+      <p>Thank you for joining the GoDavai!</p>
+      <p>Team GoDavai</p>
+    </div>
+  `
+};
+try {
+  await transporter.sendMail(mailOptions);
+  console.log("✅ Registration email sent to:", pharmacy.email);
+} catch (emailErr) {
+  console.error("❌ Failed to send registration email:", emailErr);
+}
       res.status(201).json({ message: "Pharmacy registration submitted! Await admin approval." });
     } catch (err) {
       res.status(500).json({ message: "Registration failed", error: err.message });
