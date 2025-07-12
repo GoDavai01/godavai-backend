@@ -219,8 +219,14 @@ if (missingFields.length) {
 
     const hashed = await bcrypt.hash(password, 10);
     function filePath(field) {
-      return req.files && req.files[field] ? req.files[field][0].path.replace(/\\/g, "/") : undefined;
-    }
+  if (req.files && req.files[field]) {
+    // Always return relative path from /uploads
+    const p = req.files[field][0].path.replace(/\\/g, "/");
+    const idx = p.indexOf("/uploads/");
+    return idx !== -1 ? p.substring(idx) : p;
+  }
+  return undefined;
+}
     try {
       // --- PIN VALIDATION LOGIC ---
 const { pin, contact } = req.body;
