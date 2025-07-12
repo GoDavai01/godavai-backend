@@ -87,7 +87,14 @@ router.post("/verify-otp", async (req, res) => {
     if (!contact || !otp)
       return res.status(400).json({ message: "Contact and OTP required." });
 
-    const pharmacy = await Pharmacy.findOne({ contact });
+    // Detect email or mobile
+    const isEmail = contact.includes("@");
+    let pharmacy;
+    if (isEmail) {
+      pharmacy = await Pharmacy.findOne({ email: contact });
+    } else {
+      pharmacy = await Pharmacy.findOne({ contact });
+    }
     if (!pharmacy || !pharmacy.otp || !pharmacy.otpExpiry)
       return res.status(400).json({ message: "OTP not found. Please request again." });
 
