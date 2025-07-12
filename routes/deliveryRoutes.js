@@ -53,6 +53,62 @@ router.post(
         aadhaarDocUrl, panDocUrl,
         status: "pending"
       });
+
+      // --- SEND WELCOME + REGISTRATION RECEIVED EMAIL ---
+      const nodemailer = require("nodemailer");
+      const transporter = nodemailer.createTransport({
+        host: "smtp.hostinger.com", // Or your SMTP provider
+        port: 465,
+        secure: true,
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS,
+        },
+      });
+
+      const mailOptions = {
+        from: `"GoDavai" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: "Thanks for Joining GoDavai Delivery Partner Program!",
+        html: `
+          <div style="font-family:sans-serif;background:#F9FAFB;padding:24px 20px;border-radius:10px">
+            <h2 style="color:#13C0A2;">Welcome to GoDavai Delivery!</h2>
+            <p>Hi <b>${name}</b>,</p>
+            <p>
+              Thank you for your interest in joining <b>GoDavai</b> as a Delivery Partner!
+              <br><br>
+              GoDavai is India’s fastest-growing medicine delivery platform, and our partners are the heartbeat of our mission to deliver better health to every doorstep.
+            </p>
+            <ul>
+              <li><b>What’s next?</b> Our admin team will verify your details and documents shortly.</li>
+              <li>You’ll get an approval email/SMS as soon as your profile is verified.</li>
+              <li>Once approved, you can log in and start accepting orders instantly!</li>
+            </ul>
+            <p>
+              <b>Why GoDavai?</b><br>
+              - Fastest payouts in the industry<br>
+              - Transparent order system<br>
+              - Supportive & responsive partner team<br>
+              - Be a part of something meaningful: delivering medicines, saving lives.
+            </p>
+            <p style="margin-top:14px;">
+              If you have any questions, our team is here to help—just reply to this email.<br>
+              <b>Thank you for applying to GoDavai Delivery. We look forward to welcoming you onboard!</b>
+            </p>
+            <br>
+            <p style="color:#13C0A2;">Team GoDavai<br>
+            <small>Together, let's deliver better health.</small></p>
+          </div>
+        `,
+      };
+
+      try {
+        await transporter.sendMail(mailOptions);
+        console.log("✅ Delivery partner registration email sent to:", email);
+      } catch (emailErr) {
+        console.error("❌ Failed to send registration email:", emailErr);
+      }
+
       res.status(201).json({ msg: "Submitted for approval", id: delivery._id });
     } catch (err) {
       console.error("Register delivery partner error:", err);
@@ -72,12 +128,62 @@ router.get("/pending", async (req, res) => {
   }
 });
 
-// 3. Approve a delivery partner (admin)
+// 3. Approve a delivery partner (admin) + send approval email
 router.post("/approve", async (req, res) => {
   try {
     const { id } = req.body;
     if (!isValidId(id)) return res.status(400).json({ error: "Invalid ID" });
-    await DeliveryPartner.findByIdAndUpdate(id, { status: "approved" });
+
+    // Update status
+    const deliveryPartner = await DeliveryPartner.findByIdAndUpdate(
+      id,
+      { status: "approved" },
+      { new: true }
+    );
+    if (!deliveryPartner) return res.status(404).json({ error: "Partner not found" });
+
+    // --- Nodemailer send approval email ---
+    const nodemailer = require("nodemailer");
+    const transporter = nodemailer.createTransport({
+      host: "smtp.hostinger.com", // Or your SMTP provider
+      port: 465,
+      secure: true,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    const mailOptions = {
+      from: `"GoDavai" <${process.env.EMAIL_USER}>`,
+      to: partner.email,
+      subject: "GoDavai Delivery Partner Approval 🚀",
+      html: `
+        <div style="font-family:sans-serif;background:#F9FAFB;padding:25px 18px;border-radius:8px">
+          <h2 style="color:#13C0A2;">Welcome to GoDavai Delivery!</h2>
+          <p>Hi <b>${partner.name}</b>,</p>
+          <p>Your application as a <b>Delivery Partner</b> on GoDavai has been <span style="color:#13C0A2;"><b>approved</b></span>!</p>
+          <p>You can now <a href="https://www.godavaii.com/delivery/login" style="color:#FFD43B;text-decoration:underline">login</a>, accept delivery jobs, and start earning.</p>
+          <ul>
+            <li><b>Name:</b> ${partner.name}</li>
+            <li><b>Mobile:</b> ${partner.mobile}</li>
+            <li><b>City/Area:</b> ${partner.city}, ${partner.area}</li>
+          </ul>
+          <p>If you have any questions, reach out to our support team any time.</p>
+          <br>
+          <p>Thank you for joining GoDavai Delivery!<br/>Let’s deliver smiles together.</p>
+          <p style="color:#13C0A2;">Team GoDavai</p>
+        </div>
+      `,
+    };
+
+    try {
+      await transporter.sendMail(mailOptions);
+      console.log("✅ Delivery partner approval email sent to:", deliveryPartner.email);
+    } catch (emailErr) {
+      console.error("❌ Failed to send delivery partner approval email:", emailErr);
+    }
+
     res.json({ msg: "Approved" });
   } catch (err) {
     console.error("Approve delivery partner error:", err);
@@ -310,7 +416,7 @@ router.patch("/orders/:orderId/status", async (req, res) => {
     if (!isValidId(req.params.orderId)) return res.status(400).json({ error: "Invalid orderId" });
     const { orderId } = req.params;
     const { status } = req.body;
-    const order = await Order.findById(orderId);
+    const order = await Order.findById(orderId).populate("pharmacy").populate("userId");
     if (!order) return res.status(404).json({ error: "Order not found" });
     if (!order.deliveryPartner) return res.status(400).json({ error: "No delivery partner assigned" });
 
@@ -330,6 +436,71 @@ router.patch("/orders/:orderId/status", async (req, res) => {
     ) {
       await Payment.updateOne({ orderId: order._id }, { status: "paid" });
     }
+
+    // === SEND ORDER DELIVERED EMAIL TO CUSTOMER ===
+    if (status === "delivered") {
+      try {
+        const user = order.userId;
+        const orderItems = order.items
+          .map(
+            (item) =>
+              `<tr>
+                <td style="padding: 8px 0;">${item.name} <span style="color:#777;font-size:13px">x${item.quantity}</span></td>
+                <td style="text-align:right;padding: 8px 0;">₹${item.price * item.quantity}</td>
+              </tr>`
+          )
+          .join("");
+        const transporter = require("nodemailer").createTransport({
+          host: "smtp.hostinger.com",
+          port: 465,
+          secure: true,
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+          },
+        });
+
+        await transporter.sendMail({
+          from: `"GoDavai" <${process.env.EMAIL_USER}>`,
+          to: user.email,
+          subject: `Your GoDavai Order #${order._id} Delivered!`,
+          html: `
+            <div style="font-family:Roboto,sans-serif;background:#F9FAFB;padding:26px 16px 18px 16px;border-radius:11px;max-width:480px;margin:auto;">
+              <div style="text-align:center">
+                <img src="https://www.godavaii.com/logo192.png" alt="GoDavai" width="60" style="margin-bottom:10px"/>
+                <h2 style="color:#13C0A2;margin:0 0 10px 0;">Order Delivered 🚚</h2>
+              </div>
+              <p>Hi <b>${user.name || "Customer"}</b>,</p>
+              <p>Your GoDavai order <b>#${order._id}</b> has been <span style="color:#13C0A2">delivered</span> successfully! Thank you for trusting us with your health needs.</p>
+              <div style="background:#fff;border-radius:6px;padding:15px 18px;margin:20px 0 12px 0;box-shadow:0 2px 8px rgba(0,0,0,0.03);">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:16px;">
+                  <thead>
+                    <tr><th align="left" style="color:#13C0A2;font-size:16px;padding-bottom:10px">Medicine</th>
+                    <th align="right" style="color:#13C0A2;font-size:16px;padding-bottom:10px">Price</th></tr>
+                  </thead>
+                  <tbody>
+                    ${orderItems}
+                    <tr><td style="border-top:1px solid #eaeaea;padding-top:8px;font-weight:700">Total</td>
+                    <td style="border-top:1px solid #eaeaea;padding-top:8px;text-align:right;font-weight:700">₹${order.total}</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p style="margin:16px 0 6px 0;">We hope you’re satisfied with your purchase.<br>
+              <b>Feeling better already? Place your next order on GoDavai for more savings and a seamless experience!</b></p>
+              <a href="https://www.godavaii.com/" style="display:inline-block;margin-top:10px;background:#13C0A2;color:#fff;font-weight:700;text-decoration:none;padding:10px 24px;border-radius:6px;letter-spacing:0.5px;">Order Again &rarr;</a>
+              <p style="margin-top:22px;font-size:14px;color:#777;text-align:center">
+                For queries or feedback, reply to this email.<br>Wishing you good health!<br>
+                <span style="color:#13C0A2;">GoDavai Customer Support</span>
+              </p>
+            </div>
+          `,
+        });
+        console.log("✅ Order delivered email sent to:", user.email);
+      } catch (emailErr) {
+        console.error("❌ Failed to send delivered email:", emailErr);
+      }
+    }
+
     res.json({ success: true, order });
   } catch (err) {
     console.error("Update order status error:", err);

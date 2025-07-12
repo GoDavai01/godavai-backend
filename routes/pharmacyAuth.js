@@ -7,16 +7,25 @@ const jwt = require("jsonwebtoken");
 const { sendSmsMSG91 } = require("../utils/sms");
 
 const OTP_EXPIRY = 2 * 60 * 1000; // 2 minutes
+const nodemailer = require("nodemailer"); // Add to top if not present
 
 // --- 1. SEND OTP (after PIN check) ---
 router.post("/send-otp", async (req, res) => {
   try {
     const { contact, pin } = req.body;
-    if (!contact || !pin) return res.status(400).json({ message: "Mobile and PIN required." });
+    if (!contact || !pin)
+      return res.status(400).json({ message: "Mobile/email and PIN required." });
 
-    const pharmacy = await Pharmacy.findOne({ contact });
+    // Determine if email or mobile
+    const isEmail = contact.includes("@");
+    let pharmacy;
+    if (isEmail) {
+      pharmacy = await Pharmacy.findOne({ email: contact });
+    } else {
+      pharmacy = await Pharmacy.findOne({ contact });
+    }
     if (!pharmacy)
-      return res.status(404).json({ message: "Pharmacy not found for this number." });
+      return res.status(404).json({ message: "Pharmacy not found for this " + (isEmail ? "email." : "mobile.") });
 
     if (pharmacy.status !== "approved") {
       return res.status(403).json({ message: "Registration pending. Please wait for admin approval." });
@@ -36,10 +45,35 @@ router.post("/send-otp", async (req, res) => {
     pharmacy.otpExpiry = new Date(Date.now() + OTP_EXPIRY);
     await pharmacy.save();
 
-    // === PRODUCTION: SEND OTP VIA SMS ONLY ===
-    await sendSmsMSG91(contact, `Your GoDavai Pharmacy OTP is: ${otp}`);
+    if (isEmail) {
+      // Send OTP via email using nodemailer
+      const transporter = nodemailer.createTransport({
+        host: "smtp.hostinger.com", // update if needed
+        port: 465,
+        secure: true,
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS,
+        },
+      });
 
-    res.json({ success: true, message: "OTP sent to registered mobile number." });
+      await transporter.sendMail({
+        from: `"GoDavai" <${process.env.EMAIL_USER}>`,
+        to: pharmacy.email,
+        subject: "GoDavai Pharmacy OTP",
+        html: `<div>
+                <h3>Your GoDavai Pharmacy OTP is:</h3>
+                <div style="font-size:2rem;font-weight:bold;letter-spacing:5px;">${otp}</div>
+                <p>This OTP will expire in 2 minutes.</p>
+              </div>`,
+      });
+
+      return res.json({ success: true, message: "OTP sent to registered email address." });
+    } else {
+      // Send OTP via MSG91 SMS
+      await sendSmsMSG91(contact, `Your GoDavai Pharmacy OTP is: ${otp}`);
+      return res.json({ success: true, message: "OTP sent to registered mobile number." });
+    }
   } catch (err) {
     console.error("Pharmacy send-otp error:", err);
     res.status(500).json({ message: err.message || "Could not send OTP." });
