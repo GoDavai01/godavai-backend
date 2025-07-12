@@ -74,8 +74,24 @@ app.use(cors({
   },
   credentials: true,
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
-  allowedHeaders: "*",       // <--- Allows ANY header (for all custom headers your frontend might send)
-  exposedHeaders: "*",       // <--- Exposes ANY header to frontend
+  allowedHeaders: [
+    "Origin",
+    "X-Requested-With",
+    "Content-Type",
+    "Accept",
+    "Authorization",
+    "deliverypartnerid",
+    "pharmacyid",
+    "adminid",
+    "userid",
+    "x-access-token",
+    "x-refresh-token",
+    "x-csrf-token"
+  ].join(","),
+  exposedHeaders: [
+    "Authorization",
+    "x-access-token"
+  ].join(","),
 }));
 
 app.use(express.json({ limit: '10mb' }));

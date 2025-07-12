@@ -156,18 +156,18 @@ router.post("/approve", async (req, res) => {
 
     const mailOptions = {
       from: `"GoDavai" <${process.env.EMAIL_USER}>`,
-      to: partner.email,
+      to: deliveryPartner.email,
       subject: "GoDavai Delivery Partner Approval 🚀",
       html: `
         <div style="font-family:sans-serif;background:#F9FAFB;padding:25px 18px;border-radius:8px">
           <h2 style="color:#13C0A2;">Welcome to GoDavai Delivery!</h2>
-          <p>Hi <b>${partner.name}</b>,</p>
+          <p>Hi <b>${deliveryPartner.name}</b>,</p>
           <p>Your application as a <b>Delivery Partner</b> on GoDavai has been <span style="color:#13C0A2;"><b>approved</b></span>!</p>
           <p>You can now <a href="https://www.godavaii.com/delivery/login" style="color:#FFD43B;text-decoration:underline">login</a>, accept delivery jobs, and start earning.</p>
           <ul>
-            <li><b>Name:</b> ${partner.name}</li>
-            <li><b>Mobile:</b> ${partner.mobile}</li>
-            <li><b>City/Area:</b> ${partner.city}, ${partner.area}</li>
+            <li><b>Name:</b> ${deliveryPartner.name}</li>
+            <li><b>Mobile:</b> ${deliveryPartner.mobile}</li>
+            <li><b>City/Area:</b> ${deliveryPartner.city}, ${deliveryPartner.area}</li>
           </ul>
           <p>If you have any questions, reach out to our support team any time.</p>
           <br>
