@@ -59,7 +59,6 @@ function isOriginAllowed(origin) {
   return allowedOrigins.some(o => normalizeOrigin(o) === normOrigin);
 }
 
-
 app.use(cors({
   origin: function (origin, callback) {
     // DEBUG LOGGING
@@ -75,7 +74,8 @@ app.use(cors({
   },
   credentials: true,
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
-  allowedHeaders: "Origin,X-Requested-With,Content-Type,Accept,Authorization"
+  allowedHeaders: "*",       // <--- Allows ANY header (for all custom headers your frontend might send)
+  exposedHeaders: "*",       // <--- Exposes ANY header to frontend
 }));
 
 app.use(express.json({ limit: '10mb' }));
