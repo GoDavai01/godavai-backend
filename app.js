@@ -638,28 +638,41 @@ app.patch("/api/pharmacy/medicines/:id", auth, async (req, res) => {
     return res.status(400).json({ message: "Name, price, stock required" });
   }
 
-  // Optional fallback for missing description
+  // Handle category as array always
+  let categories = undefined;
+  if (category !== undefined) {
+    if (Array.isArray(category)) {
+      categories = category.length ? category : ["Miscellaneous"];
+    } else if (typeof category === "string" && category) {
+      categories = [category];
+    } else {
+      categories = ["Miscellaneous"];
+    }
+  }
+
   let description = req.body.description;
   if (!description && name) {
     description = await generateMedicineDescription(name);
   }
 
+  const updateFields = {
+    name,
+    brand,
+    price,
+    stock,
+    ...(categories && { category: categories }),
+    ...(description && { description })
+  };
   const med = await Medicine.findOneAndUpdate(
     { _id: req.params.id, pharmacy: req.user.pharmacyId },
-    {
-      name,
-      brand,
-      price,
-      stock,
-      ...(category && { category }),
-      ...(description && { description })
-    },
+    updateFields,
     { new: true }
   );
 
   if (!med) return res.status(404).json({ message: "Medicine not found" });
   res.json(med);
 });
+
 app.delete("/api/pharmacy/medicines/:id", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   await Medicine.deleteOne({ _id: req.params.id, pharmacy: req.user.pharmacyId });
