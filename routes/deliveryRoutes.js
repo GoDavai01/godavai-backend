@@ -312,7 +312,11 @@ router.post("/update-location", async (req, res) => {
     const { partnerId, orderId, lat, lng } = req.body;
     if (partnerId && !isValidId(partnerId)) return res.status(400).json({ error: "Invalid partnerId" });
     if (orderId && !isValidId(orderId)) return res.status(400).json({ error: "Invalid orderId" });
-    await DeliveryPartner.findByIdAndUpdate(partnerId, { location: { lat, lng, lastUpdated: new Date() } });
+    await DeliveryPartner.findByIdAndUpdate(partnerId, {
+  location: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
+  lastUpdated: new Date()
+});
+
     if (orderId) {
       await Order.findByIdAndUpdate(orderId, { driverLocation: { lat, lng, lastUpdated: new Date() } });
     }
@@ -523,5 +527,43 @@ router.get("/orders", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch orders" });
   }
 });
+
+// Check if at least one delivery partner is active in city
+router.get("/active-partner-in-city", async (req, res) => {
+  try {
+    const city = req.query.city;
+    if (!city) return res.status(400).json({ error: "city required" });
+
+    const active = await DeliveryPartner.findOne({
+      city: new RegExp(city, "i"),
+      active: true,
+      status: "approved"
+    });
+    res.json({ activePartnerExists: !!active });
+  } catch (err) {
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// GET /api/delivery/active-partner-nearby?lat=...&lng=...
+router.get("/active-partner-nearby", async (req, res) => {
+  const { lat, lng } = req.query;
+  if (!lat || !lng) return res.json({ activePartnerExists: false });
+  try {
+    const partner = await DeliveryPartner.findOne({
+      active: true,
+      location: {
+        $near: {
+          $geometry: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
+          $maxDistance: 8000
+        }
+      }
+    });
+    res.json({ activePartnerExists: !!partner });
+  } catch {
+    res.json({ activePartnerExists: false });
+  }
+});
+
 
 module.exports = router;

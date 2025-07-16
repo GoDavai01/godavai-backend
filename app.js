@@ -277,6 +277,19 @@ if (existingPin) {
         photo: filePath("photo"),
         digitalSignature: filePath("digitalSignature"),
       });
+      // After collecting city, area, address:
+const fullAddress = `${address}, ${area}, ${city}`;
+const geo = await geocodeAddress(fullAddress);
+if (geo) {
+  pharmacy.location = {
+    type: "Point",
+    coordinates: [geo.lng, geo.lat], // [lng, lat] order!
+    formatted: geo.formatted
+  };
+} else {
+  // Optional: You can choose to block registration, or just skip location
+  pharmacy.location = undefined;
+}
       await pharmacy.save();
       // After pharmacy.save() and BEFORE res.status(201)...
 const transporter = nodemailer.createTransport({
@@ -616,6 +629,7 @@ app.post("/api/pharmacy/medicines", auth, medicineImageUpload.single("image"), a
       img,
       pharmacy: req.user.pharmacyId,
       category: category || "Miscellaneous",
+      type: type || "Tablet",
       description: description || "No description available."
     });
 
@@ -661,6 +675,7 @@ app.patch("/api/pharmacy/medicines/:id", auth, async (req, res) => {
     price,
     stock,
     ...(categories && { category: categories }),
+    ...(type && { type }),
     ...(description && { description })
   };
   const med = await Medicine.findOneAndUpdate(

@@ -165,4 +165,28 @@ router.post("/suggest-for-prescription", async (req, res) => {
   }
 });
 
+// GET /api/pharmacies/nearby?lat=...&lng=...
+router.get("/nearby", async (req, res) => {
+  const { lat, lng, maxDistance = 8000 } = req.query; // meters
+  if (!lat || !lng) return res.status(400).json({ error: "lat/lng required" });
+  try {
+    const pharmacies = await Pharmacy.aggregate([
+      {
+        $geoNear: {
+          near: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
+          distanceField: "dist.calculated",
+          maxDistance: parseInt(maxDistance),
+          spherical: true,
+          query: { active: true, status: "approved" }
+        }
+      },
+      { $limit: 25 }
+    ]);
+    res.json(pharmacies);
+  } catch (err) {
+    res.status(500).json({ error: "Geo search error" });
+  }
+});
+
+
 module.exports = router;

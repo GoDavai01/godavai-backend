@@ -1,4 +1,3 @@
-// models/DeliveryPartner.js
 const mongoose = require("mongoose");
 
 const DeliveryPartnerSchema = new mongoose.Schema({
@@ -18,14 +17,24 @@ const DeliveryPartnerSchema = new mongoose.Schema({
     ifsc: { type: String, required: true, trim: true },
     accountHolder: { type: String, required: true, trim: true }
   },
-  // Live GPS location tracking
+  // GeoJSON live location
   location: {
-    lat: { type: Number },
-    lng: { type: Number },
+    type: {
+      type: String,
+      enum: ["Point"],
+      default: "Point"
+    },
+    coordinates: {
+      type: [Number], // [lng, lat]
+      default: [0, 0]
+    },
+    formatted: { type: String }, // Optional: store pretty address if needed
     lastUpdated: { type: Date }
   },
   status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
   active: { type: Boolean, default: false }
 }, { timestamps: true });
+
+DeliveryPartnerSchema.index({ location: "2dsphere" });
 
 module.exports = mongoose.model("DeliveryPartner", DeliveryPartnerSchema);

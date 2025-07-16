@@ -6,6 +6,11 @@ const PharmacySchema = new mongoose.Schema({
   city: { type: String, required: true, trim: true },
   area: { type: String, required: true, trim: true },
   address: { type: String, required: true, trim: true },
+  location: {
+  type: { type: String, enum: ["Point"], default: "Point" },
+  coordinates: { type: [Number], default: [0, 0] }, // [lng, lat]
+  formatted: { type: String }
+},
   contact: { type: String, required: true, unique: true, trim: true },
   email: { type: String, required: true, unique: true, trim: true },
   password: { type: String, required: true },
@@ -60,5 +65,8 @@ const PharmacySchema = new mongoose.Schema({
   otp: { type: String },
   otpExpiry: { type: Date }
 }, { timestamps: true }); // <-- replaces manual createdAt
+
+
+PharmacySchema.index({ location: "2dsphere" });
 
 module.exports = mongoose.model('Pharmacy', PharmacySchema);
