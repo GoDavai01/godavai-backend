@@ -41,6 +41,7 @@ const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000").spl
 // ADD THESE DEBUG LOGS HERE:
 console.log("[ENV FRONTEND_URL]:", process.env.FRONTEND_URL);
 console.log("[Allowed origins]:", allowedOrigins);
+const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
 
 // --- For Password Reset ---
 function randomOTP() {
@@ -1237,6 +1238,45 @@ function printRoutes() {
     });
   }
 }
+
+// Proxy for Geocoding (lat,lng -> address)
+app.get('/api/geocode', async (req, res) => {
+  const { lat, lng } = req.query;
+  if (!lat || !lng) return res.status(400).json({ error: "Missing lat/lng" });
+  try {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`;
+    const response = await axios.get(url);
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch geocode", detail: err.message });
+  }
+});
+
+// Proxy for Place Autocomplete (address search box)
+app.get('/api/place-autocomplete', async (req, res) => {
+  const { input } = req.query;
+  if (!input) return res.status(400).json({ error: "Missing input" });
+  try {
+    const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${GOOGLE_MAPS_API_KEY}&types=address&components=country:in`;
+    const response = await axios.get(url);
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch autocomplete", detail: err.message });
+  }
+});
+
+// Proxy for Place Details (get lat/lng by place_id)
+app.get('/api/place-details', async (req, res) => {
+  const { place_id } = req.query;
+  if (!place_id) return res.status(400).json({ error: "Missing place_id" });
+  try {
+    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&key=${GOOGLE_MAPS_API_KEY}`;
+    const response = await axios.get(url);
+    res.json(response.data);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch place details", detail: err.message });
+  }
+});
 
 // DO NOT add any mongoose.connect or app.listen code here!
 // This file should ONLY setup the Express app and export it:
