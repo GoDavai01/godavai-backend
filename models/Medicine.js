@@ -9,6 +9,7 @@ const MedicineSchema = new mongoose.Schema({
   stock: { type: Number, default: 0, min: 0 },
   img: { type: String, trim: true },  // Image URL
   category: { type: [String], default: ["Miscellaneous"] },  // <-- MULTI!
+  type: { type: String, default: "Tablet" }, // <-- Add this line
   trending: { type: Boolean, default: false },
   pharmacy: { type: mongoose.Schema.Types.ObjectId, ref: "Pharmacy" },
   description: { type: String, trim: true },
