@@ -10,6 +10,7 @@ const auth = require("../middleware/auth");
 const { notifyUser, saveInAppNotification } = require("../utils/notify");
 const { createPaymentRecord } = require('../controllers/paymentsController');
 const Payment = require("../models/Payment");
+const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY; // or process.env.GOOGLE_MAPS_API_KEY
 
 // 1. Create a new order
 router.post("/", auth, async (req, res) => {
@@ -26,7 +27,7 @@ router.post("/", auth, async (req, res) => {
     if (!address || typeof address.lat !== 'number' || typeof address.lng !== 'number') {
       return res.status(400).json({ error: "Address must include lat and lng (map pin)." });
     }
-    
+
     const order = await Order.create({
       items,
       address,
@@ -352,7 +353,7 @@ router.get("/:orderId/eta", async (req, res) => {
     const userLng = order.address.lng || 77.0266;
     const driverLat = order.driverLocation.lat;
     const driverLng = order.driverLocation.lng;
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${driverLat},${driverLng}&destination=${userLat},${userLng}&key=YOUR_GOOGLE_API_KEY`;
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${driverLat},${driverLng}&destination=${userLat},${userLng}&key=process.env.GOOGLE_API_KEY`;
     const resp = await axios.get(url);
     const eta = resp.data.routes?.[0]?.legs?.[0]?.duration?.text || "N/A";
     res.json({ eta });
