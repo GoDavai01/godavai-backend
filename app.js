@@ -259,6 +259,18 @@ if (existingPin) {
   return res.status(409).json({ message: "PIN already in use. Choose another." });
 }
 
+const lat = req.body.lat ? parseFloat(req.body.lat) : null;
+const lng = req.body.lng ? parseFloat(req.body.lng) : null;
+
+let location = undefined;
+if (lat && lng) {
+  location = {
+    type: "Point",
+    coordinates: [lng, lat],
+    formatted: req.body.locationFormatted || "",
+  };
+}
+
       const pharmacy = new Pharmacy({
         name, ownerName, city, area, address, contact, email, password: hashed,pin: pinHash,
         qualification, stateCouncilReg, drugLicenseRetail, drugLicenseWholesale,
@@ -277,6 +289,7 @@ if (existingPin) {
         addressProof: filePath("addressProof"),
         photo: filePath("photo"),
         digitalSignature: filePath("digitalSignature"),
+        location, 
       });
       // After collecting city, area, address:
 const fullAddress = `${address}, ${area}, ${city}`;
