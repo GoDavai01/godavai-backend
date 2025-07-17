@@ -23,7 +23,10 @@ router.post("/", auth, async (req, res) => {
     if (!items || !address || !pharmacyId || !total) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-
+    if (!address || typeof address.lat !== 'number' || typeof address.lng !== 'number') {
+      return res.status(400).json({ error: "Address must include lat and lng (map pin)." });
+    }
+    
     const order = await Order.create({
       items,
       address,
