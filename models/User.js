@@ -6,6 +6,14 @@ const addressSchema = new mongoose.Schema({
   name: String,
   phone: String,
   addressLine: String,
+  formatted: String,   // <-- Add this!
+  city: String,        // <-- Add this!
+  state: String,       // <-- Add this!
+  country: String,     // <-- Add this!
+  postal_code: String, // <-- Add this!
+  lat: Number,         // <-- Add this!
+  lng: Number,         // <-- Add this!
+  place_id: String,    // <-- Add this!
   floor: String,
   landmark: String,
   isDefault: { type: Boolean, default: false },
