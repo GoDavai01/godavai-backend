@@ -513,6 +513,7 @@ router.patch("/orders/:orderId/status", async (req, res) => {
 });
 
 // 12. Get assigned orders for logged-in delivery partner
+// 12. Get assigned orders for logged-in delivery partner
 router.get("/orders", async (req, res) => {
   const deliveryPartnerId = req.headers['deliverypartnerid'] || req.query.deliveryPartnerId;
   if (!deliveryPartnerId || !isValidId(deliveryPartnerId)) return res.status(400).json({ error: "Invalid deliveryPartnerId" });
@@ -521,7 +522,22 @@ router.get("/orders", async (req, res) => {
       deliveryPartner: deliveryPartnerId,
       status: { $in: ["assigned", "accepted", "out_for_delivery"] }
     }).populate("pharmacy");
-    res.json(orders);
+    // PATCH: Add .lat/.lng for pharmacy.location (for dashboard/frontend)
+    const patchedOrders = orders.map(order => {
+      if (
+        order.pharmacy &&
+        order.pharmacy.location &&
+        Array.isArray(order.pharmacy.location.coordinates) &&
+        order.pharmacy.location.coordinates.length === 2
+      ) {
+        const [lng, lat] = order.pharmacy.location.coordinates;
+        order.pharmacy.location.lat = lat;
+        order.pharmacy.location.lng = lng;
+      }
+      return order;
+    });
+
+    res.json(patchedOrders);
   } catch (err) {
     console.error("Get assigned orders error:", err);
     res.status(500).json({ error: "Failed to fetch orders" });
