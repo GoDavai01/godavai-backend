@@ -293,6 +293,7 @@ if (lat && lng) {
       });
       // After collecting city, area, address:
 const fullAddress = `${address}, ${area}, ${city}`;
+if (!location || !location.formatted) {
 const geo = await geocodeAddress(fullAddress);
 if (geo) {
   pharmacy.location = {
@@ -303,7 +304,8 @@ if (geo) {
 } else {
   // Optional: You can choose to block registration, or just skip location
   pharmacy.location = undefined;
-}
+ }
+} 
       await pharmacy.save();
       // After pharmacy.save() and BEFORE res.status(201)...
 const transporter = nodemailer.createTransport({

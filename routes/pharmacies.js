@@ -191,12 +191,18 @@ router.get("/nearby", async (req, res) => {
 // routes/pharmacies.js
 router.patch('/set-location', auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
-  const { lat, lng } = req.body;
+  const { lat, lng, formatted } = req.body;
   if (!lat || !lng) return res.status(400).json({ message: "lat/lng required" });
   try {
     const updated = await Pharmacy.findByIdAndUpdate(
       req.user.pharmacyId,
-      { location: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] } },
+      {
+        location: {
+          type: "Point",
+          coordinates: [parseFloat(lng), parseFloat(lat)],
+          formatted: formatted || ""
+        }
+      },
       { new: true }
     );
     res.json({ message: "Location updated", location: updated.location });
