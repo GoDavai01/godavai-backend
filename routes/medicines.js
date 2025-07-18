@@ -12,14 +12,15 @@ const generateDescription = require("../utils/generateDescription");
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const dir = path.join(__dirname, "../uploads");
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+    const dir = path.join(__dirname, "../uploads/medicines");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); // Ensure parent folders!
     cb(null, dir);
   },
   filename: function (req, file, cb) {
     cb(null, Date.now() + path.extname(file.originalname));
   }
 });
+
 
 const upload = multer({ storage });
 
@@ -46,7 +47,7 @@ router.post("/pharmacy/medicines", upload.single("image"), async (req, res) => {
       pharmacy: pharmacyId
     });
     if (req.file) {
-      med.img = "/uploads/" + req.file.filename;
+      med.img = "/uploads/medicines/" + req.file.filename;
     }
     const desc = await generateDescription(name);
     if (desc) med.description = desc;

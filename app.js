@@ -658,42 +658,58 @@ app.post("/api/pharmacy/medicines", auth, medicineImageUpload.single("image"), a
 });
 
 
-app.patch("/api/pharmacy/medicines/:id", auth, async (req, res) => {
+app.patch("/api/pharmacy/medicines/:id", auth, medicineImageUpload.single("image"), async (req, res) => {
   if (!req.user.pharmacyId)
     return res.status(403).json({ message: "Not authorized" });
 
-  const { name, price, stock, category, brand } = req.body;
+  let { name, price, mrp, stock, category, brand, type, customType } = req.body;
 
   if (!name || !price || !stock) {
     return res.status(400).json({ message: "Name, price, stock required" });
   }
 
   // Handle category as array always
-  let categories = undefined;
+  let categories;
   if (category !== undefined) {
-    if (Array.isArray(category)) {
-      categories = category.length ? category : ["Miscellaneous"];
-    } else if (typeof category === "string" && category) {
+    try {
+      // Category may be sent as JSON string from FormData
+      if (typeof category === "string" && category.startsWith("[")) {
+        categories = JSON.parse(category);
+      } else if (Array.isArray(category)) {
+        categories = category.length ? category : ["Miscellaneous"];
+      } else if (typeof category === "string" && category) {
+        categories = [category];
+      } else {
+        categories = ["Miscellaneous"];
+      }
+    } catch {
       categories = [category];
-    } else {
-      categories = ["Miscellaneous"];
     }
   }
 
-  let description = req.body.description;
-  if (!description && name) {
-    description = await generateMedicineDescription(name);
-  }
-
-  const updateFields = {
+  let updateFields = {
     name,
     brand,
     price,
+    mrp,
     stock,
     ...(categories && { category: categories }),
-    ...(type && { type }),
-    ...(description && { description })
+    ...(type && { type: type === "Other" ? customType : type }),
   };
+
+  // If a new image was uploaded
+  if (req.file) {
+    updateFields.img = "/uploads/medicines/" + req.file.filename;
+  }
+
+  // Optionally: regenerate description if name changed
+  if (name) {
+    try {
+      const description = await generateMedicineDescription(name);
+      updateFields.description = description;
+    } catch { /* Ignore error */ }
+  }
+
   const med = await Medicine.findOneAndUpdate(
     { _id: req.params.id, pharmacy: req.user.pharmacyId },
     updateFields,
