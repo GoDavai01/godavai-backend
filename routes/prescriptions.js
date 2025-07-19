@@ -8,6 +8,7 @@ const auth = require('../middleware/auth');
 const mongoose = require('mongoose');
 const Order = require("../models/Order");
 const User = require("../models/User");
+const { findPharmaciesNearby } = require('../utils/pharmacyGeo');
 
 // CRON: Prevent double schedule in dev
 let cronRegistered = global.__GODAVAI_CRON_REGISTERED__;
@@ -33,12 +34,18 @@ function isValidId(id) {
 }
 
 // Find next best pharmacy (not in excludeIds)
-async function findNextBestPharmacy({city, area, excludeIds = []}) {
-  const pharmacyQuery = { active: true, city: new RegExp(city, "i") };
-  if (area) pharmacyQuery.area = new RegExp(area, "i");
-  if (excludeIds.length) pharmacyQuery._id = { $nin: excludeIds };
-  const pharmacies = await Pharmacy.find(pharmacyQuery).sort({ rating: -1, createdAt: 1 }).lean();
-  return pharmacies[0] || null;
+async function findNextBestPharmacy({ address, excludeIds = [] }) {
+  if (address && address.lat && address.lng) {
+    const nearby = await findPharmaciesNearby({
+      lat: address.lat,
+      lng: address.lng,
+      maxDistance: 5000,
+      excludeIds
+    });
+    return nearby[0] || null;
+  }
+  // (Optional: fallback to old city/area logic, but not recommended)
+  return null;
 }
 
 // Assign to next pharmacy, or cancel if limit reached (max 5)
@@ -53,10 +60,9 @@ async function assignNextPharmacy(order) {
     return false;
   }
   const nextPharmacy = await findNextBestPharmacy({
-    city: order.city,
-    area: order.area,
-    excludeIds: order.pharmaciesTried
-  });
+  address: order.address,
+  excludeIds: order.pharmaciesTried
+});
   if (!nextPharmacy) {
     order.status = "cancelled";
     order.timeline.push({ status: "cancelled", date: new Date() });
@@ -79,10 +85,10 @@ async function autoSplitAndAssignUnavailable(prescriptionOrder, parentOrder = nu
     prescriptionOrder.pharmaciesTried.push(prescriptionOrder.pharmacyCandidates[0]);
   if (prescriptionOrder.pharmaciesTried.length >= 5) return null;
   const nextPharmacy = await findNextBestPharmacy({
-    city: prescriptionOrder.city,
-    area: prescriptionOrder.area,
-    excludeIds: prescriptionOrder.pharmaciesTried
-  });
+  address: prescriptionOrder.address,
+  excludeIds: prescriptionOrder.pharmaciesTried
+});
+
   if (!nextPharmacy) return null;
   const newCandidates = [nextPharmacy._id];
   const quoteExpiry = new Date(Date.now() + 7.25 * 60 * 1000);
@@ -145,17 +151,19 @@ router.post('/order', auth, async (req, res) => {
       }
       pharmacyIds = [new mongoose.Types.ObjectId(chosenPharmacyId)];
       pharmaciesTried = [new mongoose.Types.ObjectId(chosenPharmacyId)];
-    } else {
-      const pharmacyQuery = { active: true };
-      if (city) pharmacyQuery.city = new RegExp(city, "i");
-      if (area) pharmacyQuery.area = new RegExp(area, "i");
-      const pharmacies = await Pharmacy.find(pharmacyQuery).sort({ rating: -1, createdAt: 1 }).select('_id');
-      if (!pharmacies.length) {
-        return res.status(404).json({ message: "No active pharmacies found" });
-      }
-      pharmacyIds = [pharmacies[0]._id];
-      pharmaciesTried = [pharmacies[0]._id];
-    }
+    } 
+    else {
+  // Find nearest pharmacy by map, within 5km
+  if (!address || !address.lat || !address.lng) {
+    return res.status(400).json({ message: "Please select a valid address with location." });
+  }
+  const nearby = await findPharmaciesNearby({ lat: address.lat, lng: address.lng, maxDistance: 5000 });
+  if (!nearby.length) {
+    return res.status(404).json({ message: "No pharmacies found within 5km of your location." });
+  }
+  pharmacyIds = [nearby[0]._id];
+  pharmaciesTried = [nearby[0]._id];
+}
     const expiryMins = 9.5;
     const quoteExpiry = new Date(Date.now() + expiryMins * 60 * 1000);
 
