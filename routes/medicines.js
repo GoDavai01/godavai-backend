@@ -108,26 +108,55 @@ router.get("/find", async (req, res) => {
 
 // --- Get all offers for a medicine by name (for SearchResults table) ---
 router.get("/by-name", async (req, res) => {
-  let { name, city, area } = req.query;
+  let { name, lat, lng, maxDistance = 8000 } = req.query;
   if (!name) return res.json([]);
-  city = city ? city.trim() : "";
-  area = area ? area.trim() : "";
-  try {
-    let pharmacyFilter = {};
-    if (city) pharmacyFilter.city = { $regex: city, $options: "i" };
-    if (area) pharmacyFilter.area = { $regex: area, $options: "i" };
 
-    const pharmacies = await Pharmacy.find(pharmacyFilter).select("_id name city area");
+  try {
+    let pharmacies = [];
+    if (lat && lng) {
+      pharmacies = await Pharmacy.aggregate([
+        {
+          $geoNear: {
+            near: {
+              type: "Point",
+              coordinates: [parseFloat(lng), parseFloat(lat)]
+            },
+            distanceField: "distance",
+            maxDistance: parseInt(maxDistance), // meters
+            spherical: true,
+            query: { active: true, status: "approved" }
+          }
+        },
+        { $limit: 25 }
+      ]);
+    } else {
+      // Fallback to city/area if no location
+      let pharmacyFilter = { active: true, status: "approved" };
+      if (req.query.city) pharmacyFilter.city = { $regex: req.query.city, $options: "i" };
+      if (req.query.area) pharmacyFilter.area = { $regex: req.query.area, $options: "i" };
+      pharmacies = await Pharmacy.find(pharmacyFilter);
+    }
+
     const pharmacyIds = pharmacies.map(p => p._id);
 
-    if (!pharmacyIds.length) return res.json([]);
-
-    const filter = {
+    // Get all medicines with this name from these pharmacies
+    const meds = await Medicine.find({
       name: { $regex: `^${name}$`, $options: "i" },
-      pharmacy: { $in: pharmacyIds }
-    };
+      pharmacy: { $in: pharmacyIds },
+      stock: { $gt: 0 }
+    }).populate("pharmacy");
 
-    const meds = await Medicine.find(filter).populate("pharmacy");
+    // Map pharmacyId -> distance
+    const distMap = {};
+    pharmacies.forEach(p => distMap[p._id.toString()] = p.distance);
+
+    // Sort medicines by distance
+    meds.sort((a, b) =>
+      (distMap[a.pharmacy._id.toString()] || 1e9) -
+      (distMap[b.pharmacy._id.toString()] || 1e9)
+    );
+
+    // Optionally: include the pharmacy distance in response for UI
     const output = meds.map(med => ({
       pharmacy: med.pharmacy,
       pharmacyName: med.pharmacy?.name || "Unknown",
@@ -136,7 +165,9 @@ router.get("/by-name", async (req, res) => {
       medId: med._id,
       name: med.name,
       brand: med.brand,
+      distance: distMap[med.pharmacy._id.toString()] || null
     }));
+
     res.json(output);
   } catch (err) {
     console.error("Get all offers by medicine name error:", err);

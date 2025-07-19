@@ -20,7 +20,7 @@ router.post("/send-otp", async (req, res) => {
     const isEmail = contact.includes("@");
     let pharmacy;
     if (isEmail) {
-      pharmacy = await Pharmacy.findOne({ email: contact });
+      pharmacy = await Pharmacy.findOne({ email: new RegExp(`^${contact}$`, "i") });
     } else {
       pharmacy = await Pharmacy.findOne({ contact });
     }
@@ -91,7 +91,7 @@ router.post("/verify-otp", async (req, res) => {
     const isEmail = contact.includes("@");
     let pharmacy;
     if (isEmail) {
-      pharmacy = await Pharmacy.findOne({ email: contact });
+      pharmacy = await Pharmacy.findOne({ email: new RegExp(`^${contact}$`, "i") });
     } else {
       pharmacy = await Pharmacy.findOne({ contact });
     }
