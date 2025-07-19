@@ -63,7 +63,7 @@ router.post("/send-otp", async (req, res) => {
 
     let user;
     if (isEmail(identifier)) {
-      user = await User.findOne({ email: identifier });
+      user = await User.findOne({ email: identifier.toLowerCase() });
       if (!user) user = new User({ email: identifier, name: "New User" });
     } else {
       user = await User.findOne({ mobile: identifier });
@@ -95,7 +95,7 @@ router.post("/verify-otp", async (req, res) => {
     identifier = (identifier + "").trim();
 
     let user = await User.findOne({
-      $or: [{ mobile: identifier }, { email: identifier }],
+      $or: [{ mobile: identifier }, { email: identifier.toLowerCase() }],
     });
     if (!user || !user.otp || !user.otpExpiry)
       return res.status(400).json({ error: "OTP not found." });
