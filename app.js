@@ -819,26 +819,9 @@ app.get("/api/pharmacy/orders", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   const pharmacy = await Pharmacy.findById(req.user.pharmacyId);
   if (!pharmacy) return res.status(403).json({ message: "Invalid pharmacy" });
-  const orders = await Order.find({ pharmacy: pharmacy._id }).lean();
-  // Remove address field from each order object
-  const sanitizedOrders = orders.map(order => {
-    // Remove entire address object, or just the sensitive fields you want
-    if (order.address) {
-      // Option 1: Remove entire address object
-      delete order.address;
-
-      // Option 2: If you want to keep coordinates or pin, you can delete only specific fields
-      // delete order.address.addressLine;
-      // delete order.address.landmark;
-      // delete order.address.floor;
-      // delete order.address.city;
-      // ... etc.
-    }
-    return order;
-  });
-  res.json(sanitizedOrders);
+  const orders = await Order.find({ pharmacy: pharmacy._id });
+  res.json(orders);
 });
-
 
 app.patch("/api/pharmacy/orders/:orderId", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
