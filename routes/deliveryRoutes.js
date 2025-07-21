@@ -41,6 +41,13 @@ router.post(
       } = req.body;
       const aadhaarDocUrl = req.files?.aadhaarDoc?.[0]?.path || "";
       const panDocUrl = req.files?.panDoc?.[0]?.path || "";
+      // Block registration if either doc is missing
+if (!req.files?.aadhaarDoc || !req.files?.aadhaarDoc[0]) {
+  return res.status(400).json({ error: "Aadhaar document is required" });
+}
+if (!req.files?.panDoc || !req.files?.panDoc[0]) {
+  return res.status(400).json({ error: "PAN document is required" });
+}
 
       const hashedPassword = await bcrypt.hash(password, 10);
 
