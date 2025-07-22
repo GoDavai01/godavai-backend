@@ -609,6 +609,38 @@ app.get("/api/pharmacy/medicines", auth, async (req, res) => {
 
 app.post("/api/pharmacy/medicines", auth, medicineImageUpload.single("image"), async (req, res) => {
   try {
+    const stringSimilarity = require('string-similarity');
+const DEFAULT_CATEGORIES = [
+  "Pain Relief",
+  "Fever",
+  "Cough & Cold",
+  "Antibiotic",
+  "Digestive",
+  "Diabetes",
+  "Hypertension",
+  "Supplements",
+  "Other"
+];
+
+// Check for similar custom categories
+const allMedicines = await Medicine.find({ pharmacy: req.user.pharmacyId });
+const existingCustomCategories = Array.from(
+  new Set(allMedicines.flatMap(m =>
+    Array.isArray(m.category) ? m.category : (m.category ? [m.category] : [])
+  ).filter(c => !!c && !DEFAULT_CATEGORIES.includes(c)))
+);
+const allCategories = [...DEFAULT_CATEGORIES, ...existingCustomCategories];
+
+const customCategory = req.body.customCategory?.trim();
+if (customCategory) {
+  const match = stringSimilarity.findBestMatch(customCategory, allCategories);
+  if (match.bestMatch.rating > 0.75) {
+    return res.status(400).json({
+      error: `Category "${customCategory}" is too similar to existing category "${match.bestMatch.target}". Please select existing or check spelling.`
+    });
+  }
+}
+
     let img;
     if (req.file) {
       img = "/uploads/medicines/" + req.file.filename;
@@ -661,6 +693,36 @@ app.post("/api/pharmacy/medicines", auth, medicineImageUpload.single("image"), a
 app.patch("/api/pharmacy/medicines/:id", auth, medicineImageUpload.single("image"), async (req, res) => {
   if (!req.user.pharmacyId)
     return res.status(403).json({ message: "Not authorized" });
+  const stringSimilarity = require('string-similarity');
+const DEFAULT_CATEGORIES = [
+  "Pain Relief",
+  "Fever",
+  "Cough & Cold",
+  "Antibiotic",
+  "Digestive",
+  "Diabetes",
+  "Hypertension",
+  "Supplements",
+  "Other"
+];
+
+const allMedicines = await Medicine.find({ pharmacy: req.user.pharmacyId });
+const existingCustomCategories = Array.from(
+  new Set(allMedicines.flatMap(m =>
+    Array.isArray(m.category) ? m.category : (m.category ? [m.category] : [])
+  ).filter(c => !!c && !DEFAULT_CATEGORIES.includes(c)))
+);
+const allCategories = [...DEFAULT_CATEGORIES, ...existingCustomCategories];
+
+const customCategory = req.body.customCategory?.trim();
+if (customCategory) {
+  const match = stringSimilarity.findBestMatch(customCategory, allCategories);
+  if (match.bestMatch.rating > 0.75) {
+    return res.status(400).json({
+      error: `Category "${customCategory}" is too similar to existing category "${match.bestMatch.target}". Please select existing or check spelling.`
+    });
+  }
+}
 
   let { name, price, mrp, stock, category, brand, type, customType } = req.body;
 
