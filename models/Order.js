@@ -72,6 +72,9 @@ const orderSchema = new mongoose.Schema({
     lng: { type: Number },
     lastUpdated: { type: Date },
   },
+  invoiceFile: {
+  type: String
+},
 }, { timestamps: true }); // Adds updatedAt, keeps your createdAt
 
 module.exports = mongoose.model("Order", orderSchema);
