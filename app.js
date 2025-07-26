@@ -128,6 +128,19 @@ app.use('/api/orders', ordersRouter);
 app.use("/api/allorders", require("./routes/allorders"));
 app.use("/api/pharmacy", require("./routes/pharmacyAuth"));
 
+app.get('/debug-invoices', (req, res) => {
+  const fs = require('fs');
+  const invoicesDir = path.join(process.env.UPLOADS_DIR || path.join(__dirname, "uploads"), "invoices");
+  let files = [];
+  try {
+    files = fs.readdirSync(invoicesDir);
+  } catch (e) {
+    files = ["ERROR: " + e.message];
+  }
+  res.json({ dir: invoicesDir, files });
+});
+
+
 // ============= GLOBAL LOGGER (DISABLE/REDUCE IN PRODUCTION) =============
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, res, next) => {
