@@ -251,6 +251,13 @@ router.put("/:orderId/status", async (req, res) => {
     const order = await Order.findByIdAndUpdate(orderId, updateObj, { new: true });
     if (!order) return res.status(404).json({ error: "Order not found" });
 
+    // === ADD THIS BLOCK ===
+    if (status.toLowerCase() === "delivered") {
+      // Call your invoice logic (controller)
+      await markOrderDelivered({ params: { id: orderId } }, res);
+      return; // Prevent sending response twice!
+    }
+
     const pharmacy = await Pharmacy.findById(order.pharmacy);
     const user = await User.findById(order.userId);
 
