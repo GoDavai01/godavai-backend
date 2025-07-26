@@ -99,14 +99,15 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Upload folders
-const UPLOADS_DIR = path.join(__dirname, "uploads");
+const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 const PRESC_DIR = path.join(__dirname, "uploads", "prescriptions");
 if (!fs.existsSync(PRESC_DIR)) fs.mkdirSync(PRESC_DIR, { recursive: true });
 
 // Static assets (for serving uploaded files)
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use('/invoices', express.static(path.join(__dirname, 'uploads', 'invoices')));
+
+app.use('/uploads', express.static(UPLOADS_DIR));
+app.use('/invoices', express.static(path.join(UPLOADS_DIR, 'invoices')));
 
 // Routes (leave unchanged - already modular and clean)
 app.use("/api/pharmacy", require("./routes/pharmacies"));
