@@ -12,7 +12,7 @@ const generateDescription = require("../utils/generateDescription");
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const dir = path.join(__dirname, "../uploads/medicines");
+    const dir = "/uploads/medicines";
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); // Ensure parent folders!
     cb(null, dir);
   },

@@ -9,9 +9,11 @@ const mongoose = require("mongoose");
 const DeliveryPartner = require("../models/DeliveryPartner");
 const Order = require("../models/Order");
 const otpMap = new Map();
+const fs = require("fs");
 const Payment = require("../models/Payment");
 
 // Multer config for document uploads
+fs.mkdirSync("uploads/delivery-docs", { recursive: true });
 const upload = multer({
   dest: "uploads/delivery-docs/",
   limits: { fileSize: 3 * 1024 * 1024 },
