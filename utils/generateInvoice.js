@@ -1,12 +1,10 @@
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+const { UPLOADS_DIR } = require('../config');    // <--- change here
 
-// You can pass UPLOADS_DIR from your main app, or set a default here for standalone use:
-const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, 'uploads');
 const invoicesDir = path.join(UPLOADS_DIR, 'invoices');
 
-// Ensure the invoices directory exists
 if (!fs.existsSync(invoicesDir)) {
   fs.mkdirSync(invoicesDir, { recursive: true });
 }
