@@ -22,10 +22,13 @@ exports.markOrderDelivered = async (req, res) => {
     const customer = await User.findById(order.customerId);
 
     // 2. Ensure uploads/invoices directory exists
-    const invoicesDir = path.join(__dirname, '..', 'uploads', 'invoices');
+    // New:
+const { UPLOADS_DIR } = require('../config');
+const invoicesDir = path.join(UPLOADS_DIR, 'invoices');
     if (!fs.existsSync(invoicesDir)) {
       fs.mkdirSync(invoicesDir, { recursive: true });
     }
+    
 
     // 3. Generate invoice file path
     const invoiceFile = `invoice-${order._id}.pdf`;
