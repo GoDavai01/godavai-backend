@@ -106,7 +106,7 @@ if (!fs.existsSync(PRESC_DIR)) fs.mkdirSync(PRESC_DIR, { recursive: true });
 
 // Static assets (for serving uploaded files)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-app.use('/invoices', express.static(path.join(__dirname, 'invoices')));
+app.use('/invoices', express.static(path.join(__dirname, 'uploads', 'invoices')));
 
 // Routes (leave unchanged - already modular and clean)
 app.use("/api/pharmacy", require("./routes/pharmacies"));

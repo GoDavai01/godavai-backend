@@ -1,6 +1,7 @@
 // controllers/orderController.js
 
 const path = require('path');
+const fs = require('fs');
 const generateInvoice = require('../utils/generateInvoice'); // ✅ your invoice util
 const Order = require('../models/Order');
 const Pharmacy = require('../models/Pharmacy');
@@ -20,10 +21,17 @@ exports.markOrderDelivered = async (req, res) => {
     const pharmacy = await Pharmacy.findById(order.pharmacyId);
     const customer = await User.findById(order.customerId);
 
-    // 2. Generate invoice
-    const invoiceFile = `invoice-${order._id}.pdf`;
-    const savePath = path.join(__dirname, '..', 'invoices', invoiceFile); // ⬅️ adjust folder if needed
+    // 2. Ensure uploads/invoices directory exists
+    const invoicesDir = path.join(__dirname, '..', 'uploads', 'invoices');
+    if (!fs.existsSync(invoicesDir)) {
+      fs.mkdirSync(invoicesDir, { recursive: true });
+    }
 
+    // 3. Generate invoice file path
+    const invoiceFile = `invoice-${order._id}.pdf`;
+    const savePath = path.join(invoicesDir, invoiceFile);
+
+    // 4. Generate the invoice PDF
     generateInvoice({
       order: {
         invoiceNo: `GV-MED-${order._id}`,
@@ -45,7 +53,7 @@ exports.markOrderDelivered = async (req, res) => {
       savePath
     });
 
-    // 3. Save invoice path to DB
+    // 5. Save public invoice path to DB (so frontend can access via /invoices/...)
     order.invoiceFile = `/invoices/${invoiceFile}`;
     await order.save();
 
