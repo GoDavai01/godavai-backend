@@ -10,6 +10,7 @@ const auth = require("../middleware/auth");
 const { notifyUser, saveInAppNotification } = require("../utils/notify");
 const { createPaymentRecord } = require('../controllers/paymentsController');
 const Payment = require("../models/Payment");
+const { markOrderDelivered } = require('../controllers/orderController');
 const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY; // or process.env.GOOGLE_MAPS_API_KEY
 
 // 1. Create a new order
@@ -443,5 +444,7 @@ router.post('/:orderId/ratings', async (req, res) => {
     res.status(500).json({ error: 'Failed to submit ratings.' });
   }
 });
+
+router.post('/:id/deliver', markOrderDelivered);
 
 module.exports = router;
