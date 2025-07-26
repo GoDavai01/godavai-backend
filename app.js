@@ -1,5 +1,8 @@
 // app.js
 require('dotenv').config();
+require('./utils/ensureFolders');
+const fs = require("fs");
+const path = require("path");
 
 // REMOVE or COMMENT OUT debug logs in production
 // console.log('SERVER STARTED, ENV:', process.env.NODE_ENV, 'PORT:', process.env.PORT);
@@ -12,8 +15,6 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
-const path = require("path");
-const fs = require("fs");
 const multer = require("multer");
 const { createCanvas } = require("canvas");
 const crypto = require("crypto");
@@ -101,8 +102,6 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 // Upload folders
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
-const PRESC_DIR = path.join(__dirname, "uploads", "prescriptions");
-if (!fs.existsSync(PRESC_DIR)) fs.mkdirSync(PRESC_DIR, { recursive: true });
 
 // Static assets (for serving uploaded files)
 
@@ -198,7 +197,6 @@ const pharmacyDocsUpload = multer({
   { name: "photo", maxCount: 1 },
   { name: "digitalSignature", maxCount: 1 }
 ]);
-app.use("/uploads", express.static(UPLOADS_DIR));
 
 // ========== PHARMACY REGISTRATION (Multer comes BEFORE body parser!) ==========
 app.post("/api/pharmacy/register", (req, res) => {
