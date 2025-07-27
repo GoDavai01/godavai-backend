@@ -14,7 +14,7 @@ exports.markOrderDelivered = async (req, res) => {
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
-    order.status = 'Delivered';
+    order.status = 'delivered';
     await order.save();
 
     const pharmacy = await Pharmacy.findById(order.pharmacyId || order.pharmacy);
