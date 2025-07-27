@@ -138,6 +138,22 @@ app.get('/debug-invoices', (req, res) => {
   res.json({ dir: invoicesDir, files });
 });
 
+app.get('/debug-s3', async (req, res) => {
+  const AWS = require('aws-sdk');
+  const s3 = new AWS.S3();
+  const params = {
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Prefix: 'medicines/'
+  };
+  s3.listObjectsV2(params, (err, data) => {
+    if (err) return res.status(500).json({ err: err.message });
+    res.json(data.Contents.map(obj => ({
+      key: obj.Key,
+      url: `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${obj.Key}`
+    })));
+  });
+});
+
 
 // ============= GLOBAL LOGGER (DISABLE/REDUCE IN PRODUCTION) =============
 if (process.env.NODE_ENV !== 'production') {
