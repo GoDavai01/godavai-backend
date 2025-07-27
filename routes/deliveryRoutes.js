@@ -12,6 +12,7 @@ const otpMap = new Map();
 const upload = require("../utils/upload"); // replaces multer config
 const fs = require("fs");
 const Payment = require("../models/Payment");
+const { markOrderDelivered } = require("../controllers/orderController");
 
 // Multer config for document uploads
 fs.mkdirSync("uploads/delivery-docs", { recursive: true });
@@ -445,6 +446,27 @@ router.patch("/orders/:orderId/status", async (req, res) => {
 
     // === SEND ORDER DELIVERED EMAIL TO CUSTOMER ===
     if (status === "delivered") {
+      // 1. Generate/Upload Invoice (fire-and-forget; don’t block response)
+  try {
+    // Add at the TOP of your file if not already:
+    // const { markOrderDelivered } = require("../controllers/orderController");
+    // (If you already require this controller, don't duplicate.)
+
+    // Fire and forget – don't await so response is fast:
+    require("../controllers/orderController")
+      .markOrderDelivered(
+        { params: { id: orderId } }, 
+        { 
+          json: () => {}, 
+          status: () => ({ json: () => {} }) 
+        }
+      );
+    console.log("🧾 Invoice generation/upload triggered for order", orderId);
+  } catch (invErr) {
+    console.error("❌ Failed to trigger invoice generation/upload:", invErr);
+  }
+
+  // 2. Email to Customer (your code)
       try {
         const user = order.userId;
         const orderItems = order.items
