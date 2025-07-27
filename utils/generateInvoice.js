@@ -3,12 +3,20 @@ const PDFDocument = require('pdfkit');
 function getPrintableAddress(addr) {
   if (!addr) return "";
   if (typeof addr === "string") return addr;
+  if (addr.formatted) return addr.formatted;
+  if (addr.fullAddress) return addr.fullAddress;
+  // Try addressLine, floor, area, city
+  const mainParts = [addr.addressLine, addr.floor, addr.area, addr.city].filter(Boolean);
+  if (mainParts.length) return mainParts.join(", ");
+  // Try everything except lat/lng/coordinates/object fields
   const ignore = ["lat", "lng", "coordinates"];
-  return Object.entries(addr)
+  const rest = Object.entries(addr)
     .filter(([k, v]) => v && !ignore.includes(k) && typeof v !== "object")
-    .map(([k, v]) => v)
-    .join(", ");
+    .map(([k, v]) => v);
+  if (rest.length) return rest.join(", ");
+  return JSON.stringify(addr);
 }
+
 
 async function generateInvoice({ order, pharmacy, customer }) {
   const doc = new PDFDocument({ margin: 40, size: "A4" });
