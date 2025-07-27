@@ -15,7 +15,10 @@ const Payment = require("../models/Payment");
 const { markOrderDelivered } = require("../controllers/orderController");
 
 // Multer config for document uploads
-fs.mkdirSync("uploads/delivery-docs", { recursive: true });
+const isS3 = !!process.env.AWS_BUCKET_NAME;
+if (!isS3) {
+  fs.mkdirSync("uploads/delivery-docs", { recursive: true });
+}
 
 
 function isValidId(id) {

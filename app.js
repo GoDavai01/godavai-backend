@@ -103,7 +103,7 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Upload folders
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
+if (!isS3 && !fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
 // Routes (leave unchanged - already modular and clean)
 app.use("/api/pharmacy", require("./routes/pharmacies"));
@@ -198,7 +198,7 @@ const pharmacyDocsUpload = isS3
         destination: (req, file, cb) => {
           const key = req.body?.email || req.body?.contact || "unknown";
           const folder = path.join(UPLOADS_DIR, "pharmacies", key.replace(/[^a-zA-Z0-9@.]/g, "_"));
-          if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+          if (!isS3 && !fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
           cb(null, folder);
         },
         filename: (req, file, cb) => {
@@ -621,7 +621,7 @@ const medicineImageUpload = (() => {
         storage: multer.diskStorage({
           destination: function (req, file, cb) {
             const folder = path.join(UPLOADS_DIR, "medicines");
-            if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+            if (!isS3 && !fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
             cb(null, folder);
           },
           filename: function (req, file, cb) {

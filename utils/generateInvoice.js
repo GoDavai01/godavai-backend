@@ -21,46 +21,56 @@ async function generateInvoice({ order, pharmacy, customer }) {
   const tableHeaderBG = "#eafaf3";
 
   // Header
-  doc.fontSize(22).fillColor(primary).font('Helvetica-Bold').text('GODAVAII', { align: 'left' });
-  doc.moveDown(0.2);
-  doc.fontSize(12).fillColor('black').font('Helvetica').text('Invoice for Medicine Purchase', { align: 'left' });
+  doc
+    .fontSize(22)
+    .fillColor(primary)
+    .font('Helvetica-Bold')
+    .text('GODAVAII', { align: 'left' });
+  doc.moveDown(0.2)
+    .fontSize(12)
+    .fillColor('black')
+    .font('Helvetica')
+    .text('Invoice for Medicine Purchase', { align: 'left' });
 
   // Draw a top line
-  doc.moveDown(0.5);
-  doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor(lightGrey).lineWidth(1).stroke();
+  doc.moveDown(0.5)
+    .moveTo(40, doc.y).lineTo(555, doc.y).strokeColor(lightGrey).lineWidth(1).stroke();
+  
+  // Invoice/Order/Date/Pharmacy
+  doc.moveDown(0.7)
+    .fontSize(10)
+    .fillColor('black')
+    .font('Helvetica');
 
-  // Invoice & Pharmacy Info (two columns)
-  doc.moveDown(0.7).fontSize(10).fillColor('black').font('Helvetica');
+  // Left column: Invoice
   const startY = doc.y;
-  doc.font('Helvetica-Bold').text(`Invoice No:`, 40, startY, { continued: true }).font('Helvetica').text(` ${order.invoiceNo || ''}`);
-  doc.font('Helvetica-Bold').text(`Order ID:`, 40, doc.y, { continued: true }).font('Helvetica').text(` ${order.orderId || ''}`);
-  doc.font('Helvetica-Bold').text(`Order Date:`, 40, doc.y, { continued: true }).font('Helvetica').text(` ${order.date || ''}`);
-  doc.font('Helvetica-Bold').text(`Delivery Date:`, 40, doc.y, { continued: true }).font('Helvetica').text(` ${order.deliveryDate || ''}`);
+  doc.text(`Invoice No:`, 40, startY, { continued: true, font: "Helvetica-Bold" }).font('Helvetica').text(` ${order.invoiceNo || ''}`);
+  doc.text(`Order ID:`, 40, doc.y, { continued: true, font: "Helvetica-Bold" }).font('Helvetica').text(` ${order.orderId || ''}`);
+  doc.text(`Order Date:`, 40, doc.y, { continued: true, font: "Helvetica-Bold" }).font('Helvetica').text(` ${order.date || ''}`);
+  doc.text(`Delivery Date:`, 40, doc.y, { continued: true, font: "Helvetica-Bold" }).font('Helvetica').text(` ${order.deliveryDate || ''}`);
 
   // Right column: Pharmacy
   const rightColX = 320;
-  let pharmacyY = startY;
-  doc.font('Helvetica-Bold').text(`Pharmacy:`, rightColX, pharmacyY);
-  doc.font('Helvetica').text(`${pharmacy?.name || ''}`, rightColX + 70, pharmacyY);
-  pharmacyY = doc.y;
-  doc.font('Helvetica-Bold').text(`Address:`, rightColX, pharmacyY);
-  doc.font('Helvetica').text(`${pharmacy?.address || ''}`, rightColX + 70, pharmacyY);
-  pharmacyY = doc.y;
-  doc.font('Helvetica-Bold').text(`GSTIN:`, rightColX, pharmacyY);
-  doc.font('Helvetica').text(`${pharmacy?.gstin || ''}`, rightColX + 70, pharmacyY);
+  doc.font('Helvetica-Bold').text(`Pharmacy:`, rightColX, startY);
+  doc.font('Helvetica').text(`${pharmacy?.name || ''}`, rightColX + 70, startY);
+  doc.font('Helvetica-Bold').text(`Address:`, rightColX, doc.y);
+  doc.font('Helvetica').text(`${pharmacy?.address || ''}`, rightColX + 70, doc.y);
+  doc.font('Helvetica-Bold').text(`GSTIN:`, rightColX, doc.y);
+  doc.font('Helvetica').text(`${pharmacy?.gstin || ''}`, rightColX + 70, doc.y);
 
   // Customer
-  doc.moveDown(1.2);
+  doc.moveDown(1.5);
   doc.font('Helvetica-Bold').text(`Customer:`, 40, doc.y, { continued: true }).font('Helvetica').text(` ${customer?.name || ''}`);
   doc.font('Helvetica-Bold').text(`Address:`, 40, doc.y, { continued: true }).font('Helvetica').text(` ${getPrintableAddress(customer?.address)}`);
 
   // Draw section line before table
-  doc.moveDown(0.6);
-  doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor(tableHeaderBG).lineWidth(1.5).stroke();
+  doc.moveDown(0.6)
+    .moveTo(40, doc.y).lineTo(555, doc.y).strokeColor(tableHeaderBG).lineWidth(1.5).stroke();
 
-  // Table Header
+  // Items Table
   let tableY = doc.y + 8;
   const colXs = [50, 90, 260, 320, 400];
+  // Table Header BG
   doc.rect(40, tableY, 515, 22).fill(tableHeaderBG).stroke();
   doc.font('Helvetica-Bold').fontSize(10).fillColor(primary)
     .text('S.No', colXs[0], tableY + 6, { width: 35 })
@@ -82,6 +92,7 @@ async function generateInvoice({ order, pharmacy, customer }) {
     doc.text('₹' + (item.price || 0), colXs[3], rowY + 6, { width: 60, align: 'center' });
     doc.text('₹' + total.toFixed(2), colXs[4], rowY + 6, { width: 60, align: 'center' });
     rowY += 22;
+    // Optionally: draw horizontal line after each row
     doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor(lightGrey).lineWidth(0.5).stroke();
   });
 
@@ -104,18 +115,23 @@ async function generateInvoice({ order, pharmacy, customer }) {
     .text('Total Amount:', summaryX, sumY, { width: labelW, align: 'right' })
     .text('₹' + grandTotal.toFixed(2), summaryX + labelW + 5, sumY, { width: valueW, align: 'right' });
 
-  // Payment mode
+  // Payment mode (left, below table)
   doc.font('Helvetica').fontSize(10).fillColor('black')
     .text(`Payment Mode: ${order.paymentMode || ''}`, 40, sumY + 28);
 
-  // Footer - at the bottom
-  doc.fontSize(8).fillColor('black')
+  // Footer - bottom aligned
+  doc.fontSize(8)
+    .fillColor('black')
     .text('Note: This invoice is issued by the pharmacy.', 40, 730)
     .text('Godavaii acts only as a facilitator for orders and delivery.', 40, 742);
 
-  doc.fontSize(10).fillColor(primary).font('Helvetica-Bold')
-    .text('Thank you for choosing GODAVAII', 40, 760, { align: 'center' });
-  doc.fontSize(9).fillColor('black').font('Helvetica')
+  doc.fontSize(10)
+    .fillColor(primary)
+    .font('Helvetica-Bold')
+    .text('Thank you for choosing GODAVAII', 40, 760, { align: 'center' })
+    .fontSize(9)
+    .fillColor('black')
+    .font('Helvetica')
     .text('www.godavaii.in | +91-XXXXXXXXXX', { align: 'center' });
 
   doc.end();

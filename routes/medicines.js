@@ -10,19 +10,26 @@ const fs = require("fs");
 const mongoose = require("mongoose");
 const generateDescription = require("../utils/generateDescription");
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const dir = "/uploads/medicines";
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); // Ensure parent folders!
-    cb(null, dir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + path.extname(file.originalname));
-  }
-});
+const isS3 = !!process.env.AWS_BUCKET_NAME;
 
-
-const upload = multer({ storage });
+let upload;
+if (isS3) {
+  // Use your existing S3 upload middleware (from utils/upload.js or similar)
+  upload = require("../utils/upload"); // Make sure this points to your S3 multer config
+} else {
+  // Only set up diskStorage if NOT using S3
+  const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      const dir = "uploads/medicines"; // relative, not absolute!
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); // Ensure parent folders!
+      cb(null, dir);
+    },
+    filename: function (req, file, cb) {
+      cb(null, Date.now() + path.extname(file.originalname));
+    }
+  });
+  upload = multer({ storage });
+}
 
 function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
