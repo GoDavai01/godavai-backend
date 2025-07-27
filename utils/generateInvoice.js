@@ -1,27 +1,10 @@
+// utils/generateInvoice.js
+
 const PDFDocument = require('pdfkit');
-const fs = require('fs');
-const path = require('path');
-const { UPLOADS_DIR } = require('../config');    // <--- change here
+const getStream = require('get-stream'); // npm install get-stream
 
-const invoicesDir = path.join(UPLOADS_DIR, 'invoices');
-
-if (!fs.existsSync(invoicesDir)) {
-  fs.mkdirSync(invoicesDir, { recursive: true });
-}
-
-function generateInvoice({ order, pharmacy, customer, savePath }) {
-  // If savePath is not given, auto-generate one
-  if (!savePath) {
-    const fileName = `invoice_${order.invoiceNo || order.orderId || Date.now()}.pdf`;
-    savePath = path.join(invoicesDir, fileName);
-  }
-
-  // Log where invoice will be saved
-  console.log("Generating invoice at:", savePath);
-
-  const doc = new PDFDocument({ margin: 50 });
-
-  doc.pipe(fs.createWriteStream(savePath));
+async function generateInvoice({ order, pharmacy, customer }) {
+const doc = new PDFDocument({ margin: 50 });
 
   // Header
   doc
@@ -93,8 +76,8 @@ function generateInvoice({ order, pharmacy, customer, savePath }) {
 
   doc.end();
 
-  // Optional: Return the path for further use
-  return savePath;
+  // Return as Buffer (awaitable)
+  return await getStream.buffer(doc);
 }
 
 module.exports = generateInvoice;

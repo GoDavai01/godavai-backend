@@ -131,7 +131,10 @@ async function autoSplitAndAssignUnavailable(prescriptionOrder, parentOrder = nu
 router.post('/upload', upload.single('prescription'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-    const url = req.file.path.replace(/\\/g, '/').replace(/^.*uploads/, '/uploads');
+
+    // S3: req.file.location is the public URL
+    // Local: req.file.path (as fallback)
+    const url = req.file.location || (req.file.path.replace(/\\/g, '/').replace(/^.*uploads/, '/uploads'));
     res.json({ url });
   } catch (err) {
     console.error("Upload error:", err);

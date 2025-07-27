@@ -1,27 +1,26 @@
-// utils/upload.js
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+const multerS3 = require('multer-s3');
+const s3 = require('./s3-setup');
 
-// Ensure upload folder exists
-const uploadDir = path.join(__dirname, '../uploads/prescriptions');
-fs.mkdirSync(uploadDir, { recursive: true });
-
-// Storage engine for local uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
+const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+const upload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.AWS_BUCKET_NAME,
+    acl: 'public-read',
+    metadata: (req, file, cb) => cb(null, { fieldName: file.fieldname }),
+    key: (req, file, cb) => {
+      const filename = Date.now() + '-' + file.originalname.replace(/\s/g, '_');
+      cb(null, filename);
+    }
+  }),
+  fileFilter: (req, file, cb) => {
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error("Invalid file type (only jpg/png/pdf)"));
+    }
+    cb(null, true);
   },
-  filename: (req, file, cb) => {
-    // Save unique filenames to avoid collision
-    const ext = path.extname(file.originalname);
-    const base = path.basename(file.originalname, ext);
-    const unique = `${base}-${Date.now()}${ext}`;
-    cb(null, unique);
-  }
+  limits: { fileSize: 5 * 1024 * 1024 },
 });
-
-// Multer middleware
-const upload = multer({ storage });
 
 module.exports = upload;

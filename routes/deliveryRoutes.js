@@ -9,20 +9,13 @@ const mongoose = require("mongoose");
 const DeliveryPartner = require("../models/DeliveryPartner");
 const Order = require("../models/Order");
 const otpMap = new Map();
+const upload = require("../utils/upload"); // replaces multer config
 const fs = require("fs");
 const Payment = require("../models/Payment");
 
 // Multer config for document uploads
 fs.mkdirSync("uploads/delivery-docs", { recursive: true });
-const upload = multer({
-  dest: "uploads/delivery-docs/",
-  limits: { fileSize: 3 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const allowed = /jpeg|jpg|png|pdf/;
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, allowed.test(ext));
-  }
-});
+
 
 function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
@@ -41,8 +34,8 @@ router.post(
         name, mobile, email, password, vehicle, city, area,
         aadhaarNumber, panNumber, bankAccount, ifsc, accountHolder
       } = req.body;
-      const aadhaarDocUrl = req.files?.aadhaarDoc?.[0]?.path || "";
-      const panDocUrl = req.files?.panDoc?.[0]?.path || "";
+      const aadhaarDocUrl = req.files?.aadhaarDoc?.[0]?.location || "";
+      const panDocUrl = req.files?.panDoc?.[0]?.location || "";
       // Block registration if either doc is missing
 if (!req.files?.aadhaarDoc || !req.files?.aadhaarDoc[0]) {
   return res.status(400).json({ error: "Aadhaar document is required" });

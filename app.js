@@ -36,6 +36,8 @@ const { sendSmsMSG91 } = require("./utils/sms");
 const passwordResetTokens = {};
 const userRoutes = require('./routes/users');
 const ordersRouter = require('./routes/orders');
+const upload = require('./utils/upload');
+const isS3 = !!process.env.AWS_BUCKET_NAME;
 const { createPaymentRecord } = require('./controllers/paymentsController');
 const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000").split(",").map(url => url.trim());
 
@@ -103,11 +105,6 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
-// Static assets (for serving uploaded files)
-
-app.use('/uploads', express.static(UPLOADS_DIR));
-app.use('/invoices', express.static(path.join(UPLOADS_DIR, 'invoices')));
-
 // Routes (leave unchanged - already modular and clean)
 app.use("/api/pharmacy", require("./routes/pharmacies"));
 app.use("/api/pharmacies", require("./routes/pharmacies"));
@@ -162,29 +159,8 @@ app.get("/api/pharmacy/orders", auth, async (req, res) => {
 });
 
 // -------- Multer & File Upload for Pharmacy Registration --------
-const pharmacyDocsStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const key = req.body?.email || req.body?.contact || "unknown";
-    const folder = path.join(UPLOADS_DIR, "pharmacies", key.replace(/[^a-zA-Z0-9@.]/g, "_"));
-    if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-    cb(null, folder);
-  },
-  filename: (req, file, cb) => {
-    const safeName = Date.now() + "-" + file.originalname.replace(/\s/g, "_");
-    cb(null, safeName);
-  }
-});
 const allowedMimeTypes = ["image/jpeg", "image/png", "application/pdf"];
-const pharmacyDocsUpload = multer({
-  storage: pharmacyDocsStorage,
-  limits: { fileSize: 2 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (!allowedMimeTypes.includes(file.mimetype)) {
-      return cb(new Error("Only JPEG, PNG, and PDF files allowed!"));
-    }
-    cb(null, true);
-  }
-}).fields([
+const pharmacyDocFields = [
   { name: "qualificationCert", maxCount: 1 },
   { name: "councilCert", maxCount: 1 },
   { name: "retailLicense", maxCount: 1 },
@@ -196,7 +172,31 @@ const pharmacyDocsUpload = multer({
   { name: "addressProof", maxCount: 1 },
   { name: "photo", maxCount: 1 },
   { name: "digitalSignature", maxCount: 1 }
-]);
+];
+const pharmacyDocsUpload = isS3
+  ? upload.fields(pharmacyDocFields)
+  : multer({
+      storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+          const key = req.body?.email || req.body?.contact || "unknown";
+          const folder = path.join(UPLOADS_DIR, "pharmacies", key.replace(/[^a-zA-Z0-9@.]/g, "_"));
+          if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+          cb(null, folder);
+        },
+        filename: (req, file, cb) => {
+          const safeName = Date.now() + "-" + file.originalname.replace(/\s/g, "_");
+          cb(null, safeName);
+        }
+      }),
+      limits: { fileSize: 2 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        if (!allowedMimeTypes.includes(file.mimetype)) {
+          return cb(new Error("Only JPEG, PNG, and PDF files allowed!"));
+        }
+        cb(null, true);
+      }
+    }).fields(pharmacyDocFields);
+
 
 // ========== PHARMACY REGISTRATION (Multer comes BEFORE body parser!) ==========
 app.post("/api/pharmacy/register", (req, res) => {
@@ -250,13 +250,18 @@ if (missingFields.length) {
     const hashed = await bcrypt.hash(password, 10);
     function filePath(field) {
   if (req.files && req.files[field]) {
-    // Always return relative path from /uploads
-    const p = req.files[field][0].path.replace(/\\/g, "/");
-    const idx = p.indexOf("/uploads/");
-    return idx !== -1 ? p.substring(idx) : p;
+    // S3: use file.location, local: use /uploads/...
+    return isS3
+      ? req.files[field][0].location
+      : (() => {
+          const p = req.files[field][0].path.replace(/\\/g, "/");
+          const idx = p.indexOf("/uploads/");
+          return idx !== -1 ? p.substring(idx) : p;
+        })();
   }
   return undefined;
 }
+
     try {
       // --- PIN VALIDATION LOGIC ---
 const { pin, contact } = req.body;
@@ -591,28 +596,30 @@ async function generateMedicineImage(medicineName) {
 
 // ========== PHARMACY MEDICINE IMAGE UPLOAD ENDPOINTS ==========
 
-const medicineImageStorage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const folder = path.join(UPLOADS_DIR, "medicines");
-    if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-    cb(null, folder);
-  },
-  filename: function (req, file, cb) {
-    const ext = path.extname(file.originalname);
-    const name = req.body.name ? req.body.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() : "medicine";
-    cb(null, name + "_" + Date.now() + ext);
-  }
-});
-const medicineImageUpload = multer({
-  storage: medicineImageStorage,
-  limits: { fileSize: 2 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) {
-      return cb(new Error("Only JPEG, PNG, or WEBP allowed"));
-    }
-    cb(null, true);
-  }
-});
+const medicineImageUpload = isS3
+  ? upload.single('image')
+  : multer({
+      storage: multer.diskStorage({
+        destination: function (req, file, cb) {
+          const folder = path.join(UPLOADS_DIR, "medicines");
+          if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+          cb(null, folder);
+        },
+        filename: function (req, file, cb) {
+          const ext = path.extname(file.originalname);
+          const name = req.body.name ? req.body.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() : "medicine";
+          cb(null, name + "_" + Date.now() + ext);
+        }
+      }),
+      limits: { fileSize: 2 * 1024 * 1024 },
+      fileFilter: (req, file, cb) => {
+        if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) {
+          return cb(new Error("Only JPEG, PNG, or WEBP allowed"));
+        }
+        cb(null, true);
+      }
+    }).single('image');
+
 
 app.get("/api/pharmacy/medicines", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
@@ -620,7 +627,8 @@ app.get("/api/pharmacy/medicines", auth, async (req, res) => {
   res.json(medicines);
 });
 
-app.post("/api/pharmacy/medicines", auth, medicineImageUpload.single("image"), async (req, res) => {
+app.post("/api/pharmacy/medicines", auth, medicineImageUpload, async (req, res) => {
+
   try {
     const stringSimilarity = require('string-similarity');
 const DEFAULT_CATEGORIES = [
@@ -656,8 +664,8 @@ if (customCategory) {
 
     let img;
     if (req.file) {
-      img = "/uploads/medicines/" + req.file.filename;
-    } else {
+  img = isS3 ? req.file.location : "/uploads/medicines/" + req.file.filename;
+} else {
       try {
         img = await generateMedicineImage(req.body.name || "Medicine");
       } catch {
@@ -703,7 +711,7 @@ if (customCategory) {
 });
 
 
-app.patch("/api/pharmacy/medicines/:id", auth, medicineImageUpload.single("image"), async (req, res) => {
+app.patch("/api/pharmacy/medicines/:id", auth, medicineImageUpload, async (req, res) => {
   if (!req.user.pharmacyId)
     return res.status(403).json({ message: "Not authorized" });
   const stringSimilarity = require('string-similarity');
@@ -774,7 +782,7 @@ if (customCategory) {
 
   // If a new image was uploaded
   if (req.file) {
-    updateFields.img = "/uploads/medicines/" + req.file.filename;
+    updateFields.img = isS3 ? req.file.location : "/uploads/medicines/" + req.file.filename;
   }
 
   // Optionally: regenerate description if name changed
