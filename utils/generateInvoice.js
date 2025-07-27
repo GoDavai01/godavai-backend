@@ -43,10 +43,10 @@ const doc = new PDFDocument({ margin: 50 });
 
   let subtotal = 0;
   (order.items || []).forEach((item, i) => {
-    const total = (item.qty || 0) * (item.price || 0);
+    const total = (item.quantity || 0) * (item.price || 0);
     subtotal += total;
     doc.text(
-      `|  ${i + 1}   | ${String(item.name || '').padEnd(20)} |  ${item.qty || 0}  | ₹${item.price || 0}  | ₹${total.toFixed(2)} |`
+      `|  ${i + 1}   | ${String(item.name || '').padEnd(20)} |  ${item.quantity || 0}  | ₹${item.price || 0}  | ₹${total.toFixed(2)} |`
     );
   });
 
