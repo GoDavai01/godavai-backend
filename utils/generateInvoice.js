@@ -37,6 +37,7 @@ async function generateInvoice({ order, pharmacy, customer }) {
   doc.font('Helvetica-Bold').text(`Order Date:`, 40, doc.y, { continued: true }).font('Helvetica').text(` ${order.date || ''}`);
   doc.font('Helvetica-Bold').text(`Delivery Date:`, 40, doc.y, { continued: true }).font('Helvetica').text(` ${order.deliveryDate || ''}`);
 
+  // Right column: Pharmacy
   const rightColX = 320;
   let pharmacyY = startY;
   doc.font('Helvetica-Bold').text(`Pharmacy:`, rightColX, pharmacyY);
@@ -113,8 +114,8 @@ async function generateInvoice({ order, pharmacy, customer }) {
     .text('Godavaii acts only as a facilitator for orders and delivery.', 40, 742);
 
   doc.fontSize(10).fillColor(primary).font('Helvetica-Bold')
-    .text('Thank you for choosing GODAVAII', 40, 760, { align: 'center' })
-    .fontSize(9).fillColor('black').font('Helvetica')
+    .text('Thank you for choosing GODAVAII', 40, 760, { align: 'center' });
+  doc.fontSize(9).fillColor('black').font('Helvetica')
     .text('www.godavaii.in | +91-XXXXXXXXXX', { align: 'center' });
 
   doc.end();
