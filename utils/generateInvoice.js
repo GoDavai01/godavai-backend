@@ -1,20 +1,22 @@
-// utils/generateInvoice.js
-
 const PDFDocument = require('pdfkit');
-const getStream = require('get-stream').default; // <-- FIXED
 
 async function generateInvoice({ order, pharmacy, customer }) {
-const doc = new PDFDocument({ margin: 50 });
+  const doc = new PDFDocument({ margin: 50 });
+  const buffers = [];
+  doc.on('data', buffers.push.bind(buffers));
 
-  // Header
+  // --- TEST LINE, REMOVE LATER ---
+  doc.fontSize(28).fillColor('red').text('TEST PDF - GODAVAII', 50, 50);
+
+  // --- YOUR EXISTING PDF CODE BELOW ---
   doc
     .fontSize(20)
+    .fillColor('black')
     .text('GODAVAII', { align: 'center' })
     .fontSize(14)
     .text('Invoice for Medicine Purchase', { align: 'center' })
     .moveDown();
 
-  // Order details
   doc
     .fontSize(11)
     .text(`Invoice No: ${order.invoiceNo || ''}`)
@@ -23,20 +25,17 @@ const doc = new PDFDocument({ margin: 50 });
     .text(`Delivery Date: ${order.deliveryDate || ''}`)
     .moveDown();
 
-  // Pharmacy details
   doc
-    .text(`Pharmacy: ${pharmacy.name || ''}`)
-    .text(`Address: ${pharmacy.address || ''}`)
-    .text(`GSTIN: ${pharmacy.gstin || ''}`)
+    .text(`Pharmacy: ${pharmacy?.name || ''}`)
+    .text(`Address: ${pharmacy?.address || ''}`)
+    .text(`GSTIN: ${pharmacy?.gstin || ''}`)
     .moveDown();
 
-  // Customer details
   doc
-    .text(`Customer: ${customer.name || ''}`)
-    .text(`Address: ${customer.address || ''}`)
+    .text(`Customer: ${customer?.name || ''}`)
+    .text(`Address: ${customer?.address || ''}`)
     .moveDown();
 
-  // Items Table Header
   doc.text('--------------------------------------------------------------');
   doc.text('| S.No | Medicine Name       | Qty | Price |   Total   |');
   doc.text('--------------------------------------------------------------');
@@ -76,8 +75,12 @@ const doc = new PDFDocument({ margin: 50 });
 
   doc.end();
 
-  // Return as Buffer (awaitable)
-  return await getStream(doc);
+  return new Promise((resolve, reject) => {
+    doc.on('end', () => {
+      resolve(Buffer.concat(buffers));
+    });
+    doc.on('error', reject);
+  });
 }
 
 module.exports = generateInvoice;
