@@ -8,7 +8,7 @@ const upload = multer({
   storage: multerS3({
     s3: s3,
     bucket: process.env.AWS_BUCKET_NAME,
-    acl: 'public-read',
+     // acl: 'public-read',  // <-- Gone!
     metadata: (req, file, cb) => cb(null, { fieldName: file.fieldname }),
     key: (req, file, cb) => {
       // Choose folder based on fieldname or route

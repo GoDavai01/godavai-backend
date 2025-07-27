@@ -47,7 +47,7 @@ exports.markOrderDelivered = async (req, res) => {
       Key: s3Key,
       Body: invoiceBuffer,
       ContentType: 'application/pdf',
-      ACL: 'public-read',
+       // acl: 'public-read',  // <-- Gone!
     }).promise();
 
     order.invoiceFile = s3Res.Location;
