@@ -1,7 +1,7 @@
 // utils/generateInvoice.js
 
 const PDFDocument = require('pdfkit');
-const getStream = require('get-stream'); // npm install get-stream
+const getStream = require('get-stream').default; // <-- FIXED
 
 async function generateInvoice({ order, pharmacy, customer }) {
 const doc = new PDFDocument({ margin: 50 });
@@ -77,7 +77,7 @@ const doc = new PDFDocument({ margin: 50 });
   doc.end();
 
   // Return as Buffer (awaitable)
-  return await getStream.buffer(doc);
+  return await getStream(doc);
 }
 
 module.exports = generateInvoice;
