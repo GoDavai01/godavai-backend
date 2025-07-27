@@ -123,6 +123,8 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/orders', ordersRouter);
 app.use("/api/allorders", require("./routes/allorders"));
 app.use("/api/pharmacy", require("./routes/pharmacyAuth"));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 app.get('/debug-invoices', (req, res) => {
   const fs = require('fs');
@@ -596,29 +598,45 @@ async function generateMedicineImage(medicineName) {
 
 // ========== PHARMACY MEDICINE IMAGE UPLOAD ENDPOINTS ==========
 
-const medicineImageUpload = isS3
-  ? upload.single('image')
-  : multer({
-      storage: multer.diskStorage({
-        destination: function (req, file, cb) {
-          const folder = path.join(UPLOADS_DIR, "medicines");
-          if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-          cb(null, folder);
-        },
-        filename: function (req, file, cb) {
-          const ext = path.extname(file.originalname);
-          const name = req.body.name ? req.body.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() : "medicine";
-          cb(null, name + "_" + Date.now() + ext);
+const medicineImageUpload = (() => {
+  const uploadMiddleware = isS3
+    ? upload.single('image')
+    : multer({
+        storage: multer.diskStorage({
+          destination: function (req, file, cb) {
+            const folder = path.join(UPLOADS_DIR, "medicines");
+            if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+            cb(null, folder);
+          },
+          filename: function (req, file, cb) {
+            const ext = path.extname(file.originalname);
+            const name = req.body.name
+              ? req.body.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()
+              : "medicine";
+            cb(null, name + "_" + Date.now() + ext);
+          }
+        }),
+        limits: { fileSize: 2 * 1024 * 1024 },
+        fileFilter: (req, file, cb) => {
+          if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) {
+            return cb(new Error("Only JPEG, PNG, or WEBP allowed"));
+          }
+          cb(null, true);
         }
-      }),
-      limits: { fileSize: 2 * 1024 * 1024 },
-      fileFilter: (req, file, cb) => {
-        if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) {
-          return cb(new Error("Only JPEG, PNG, or WEBP allowed"));
-        }
-        cb(null, true);
+      }).single('image');
+
+  // ✅ wrap to allow optional image
+  return (req, res, next) => {
+    uploadMiddleware(req, res, function (err) {
+      if (err) {
+        console.error("Upload error:", err);
+        return res.status(400).json({ message: "Upload error", error: err.message });
       }
-    }).single('image');
+      next(); // continue even if no file
+    });
+  };
+})();
+
 
 
 app.get("/api/pharmacy/medicines", auth, async (req, res) => {
