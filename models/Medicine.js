@@ -8,6 +8,7 @@ const MedicineSchema = new mongoose.Schema({
   discount: { type: Number, default: 0, min: 0, max: 100 }, // Percentage or fixed? Set max if percentage
   stock: { type: Number, default: 0, min: 0 },
   img: { type: String, trim: true },  // Image URL
+  images: { type: [String], default: [] }, // <--- add this
   category: { type: [String], default: ["Miscellaneous"] },  // <-- MULTI!
   type: { type: String, default: "Tablet" }, // <-- Add this line
   trending: { type: Boolean, default: false },

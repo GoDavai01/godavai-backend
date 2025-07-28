@@ -35,14 +35,21 @@ function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
 
-// Add new medicine (image optional)
-router.post("/pharmacy/medicines", upload.single("image"), async (req, res) => {
+// Add new medicine (support MULTIPLE images)
+router.post("/pharmacy/medicines", upload.array("images", 5), async (req, res) => {
   try {
     const pharmacyId = req.pharmacyId || req.user?._id || req.headers["x-pharmacy-id"];
     const { name, brand, price, mrp, stock, category, discount } = req.body;
     if (!pharmacyId || !name || !brand || !price || !mrp || !stock || !category) {
       return res.status(400).json({ error: "Missing fields." });
     }
+
+    // Handle uploaded images
+    let images = [];
+    if (req.files && req.files.length) {
+      images = req.files.map(f => "/uploads/medicines/" + f.filename);
+    }
+
     const med = new Medicine({
       name,
       brand,
@@ -51,13 +58,14 @@ router.post("/pharmacy/medicines", upload.single("image"), async (req, res) => {
       stock,
       category,
       discount: discount || 0,
-      pharmacy: pharmacyId
+      pharmacy: pharmacyId,
+      img: images[0],   // for legacy single-image use
+      images           // <-- All images go here!
     });
-    if (req.file) {
-      med.img = "/uploads/medicines/" + req.file.filename;
-    }
+
     const desc = await generateDescription(name);
     if (desc) med.description = desc;
+
     await med.save();
     res.json({ success: true, medicine: med });
   } catch (err) {
@@ -65,6 +73,65 @@ router.post("/pharmacy/medicines", upload.single("image"), async (req, res) => {
     res.status(500).json({ error: "Failed to add medicine" });
   }
 });
+
+// Edit a medicine (support MULTIPLE images)
+// PATCH /pharmacy/medicines/:id
+router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, res) => {
+  try {
+    const med = await Medicine.findById(req.params.id);
+    if (!med) return res.status(404).json({ error: "Medicine not found." });
+
+    const { name, brand, price, mrp, stock, category, discount } = req.body;
+
+    // Handle text fields
+    if (name) med.name = name;
+    if (brand) med.brand = brand;
+    if (price) med.price = price;
+    if (mrp) med.mrp = mrp;
+    if (stock) med.stock = stock;
+    if (category) med.category = category;
+    if (discount !== undefined) med.discount = discount;
+
+    if (req.files && req.files.length) {
+  const images = req.files.map(f => "/uploads/medicines/" + f.filename);
+  // Append to existing images, do not overwrite
+  med.images = [...(med.images || []), ...images];
+  // If there's no main image, set it to the first available
+  if (!med.img) med.img = med.images[0];
+}
+    await med.save();
+    res.json({ success: true, medicine: med });
+  } catch (err) {
+    console.error("Edit medicine error:", err);
+    res.status(500).json({ error: "Failed to update medicine" });
+  }
+});
+
+// Remove a single image from a medicine
+router.patch("/pharmacy/medicines/:id/remove-image", async (req, res) => {
+  const { image } = req.body; // pass the image URL/path to remove
+  if (!image) return res.status(400).json({ error: "Image path required." });
+  try {
+    const med = await Medicine.findById(req.params.id);
+    if (!med) return res.status(404).json({ error: "Medicine not found." });
+
+    med.images = (med.images || []).filter(img => img !== image);
+
+    // If main img is the one being deleted, set a new one
+    if (med.img === image) med.img = med.images[0] || "";
+
+    await med.save();
+
+    // Optionally: delete file from disk if local storage
+    // (do it carefully: don't delete from S3 or disk if that image is used by another medicine!)
+
+    res.json({ success: true, images: med.images, img: med.img });
+  } catch (err) {
+    console.error("Remove medicine image error:", err);
+    res.status(500).json({ error: "Failed to remove image" });
+  }
+});
+
 
 // --- Autocomplete: Search for unique medicine names ---
 router.get("/search", async (req, res) => {
