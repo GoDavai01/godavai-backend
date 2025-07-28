@@ -36,7 +36,7 @@ exports.markOrderDelivered = async (req, res) => {
       },
       customer: {
         name: customer?.name,
-        address: customer?.address
+        address: order.address
       }
     });
 

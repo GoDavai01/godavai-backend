@@ -17,7 +17,6 @@ function getPrintableAddress(addr) {
   return JSON.stringify(addr);
 }
 
-
 async function generateInvoice({ order, pharmacy, customer }) {
   const doc = new PDFDocument({ margin: 40, size: "A4" });
   const buffers = [];
@@ -87,8 +86,8 @@ async function generateInvoice({ order, pharmacy, customer }) {
     doc.text(i + 1, colXs[0], rowY + 6, { width: 35 });
     doc.text(item.name || '', colXs[1], rowY + 6, { width: 170 });
     doc.text(item.quantity || '', colXs[2], rowY + 6, { width: 40, align: 'center' });
-    doc.text('₹' + (item.price || 0), colXs[3], rowY + 6, { width: 60, align: 'center' });
-    doc.text('₹' + total.toFixed(2), colXs[4], rowY + 6, { width: 60, align: 'center' });
+    doc.text('Rs.' + (item.price || 0), colXs[3], rowY + 6, { width: 60, align: 'center' });
+    doc.text('Rs.' + total.toFixed(2), colXs[4], rowY + 6, { width: 60, align: 'center' });
     rowY += 22;
     doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor(lightGrey).lineWidth(0.5).stroke();
   });
@@ -101,26 +100,36 @@ async function generateInvoice({ order, pharmacy, customer }) {
   doc.font('Helvetica-Bold').fontSize(11);
   let sumY = rowY + 16;
   doc.text('Subtotal:', summaryX, sumY, { width: labelW, align: 'right' });
-  doc.font('Helvetica').text('₹' + subtotal.toFixed(2), summaryX + labelW + 5, sumY, { width: valueW, align: 'right' });
+  doc.font('Helvetica').text('Rs.' + subtotal.toFixed(2), summaryX + labelW + 5, sumY, { width: valueW, align: 'right' });
   sumY += 17;
   doc.font('Helvetica-Bold').text('GST (5%):', summaryX, sumY, { width: labelW, align: 'right' });
-  doc.font('Helvetica').text('₹' + gst.toFixed(2), summaryX + labelW + 5, sumY, { width: valueW, align: 'right' });
+  doc.font('Helvetica').text('Rs.' + gst.toFixed(2), summaryX + labelW + 5, sumY, { width: valueW, align: 'right' });
   sumY += 10;
   doc.moveTo(summaryX, sumY + 15).lineTo(summaryX + labelW + valueW + 20, sumY + 15).strokeColor(primary).lineWidth(1).stroke();
   sumY += 22;
   doc.font('Helvetica-Bold').fontSize(13).fillColor(primary)
     .text('Total Amount:', summaryX, sumY, { width: labelW, align: 'right' })
-    .text('₹' + grandTotal.toFixed(2), summaryX + labelW + 5, sumY, { width: valueW, align: 'right' });
+    .text('Rs.' + grandTotal.toFixed(2), summaryX + labelW + 5, sumY, { width: valueW, align: 'right' });
+
+  // Print order note if present
+  if (order.notes) {
+    doc.moveDown(1.2);
+    doc.fontSize(9).fillColor('#00897b').font('Helvetica-Bold').text('Order Note:', 40, doc.y);
+    doc.fontSize(9).fillColor('#333').font('Helvetica').text(order.notes, 100, doc.y, { width: 400 });
+  }
 
   // Payment mode
+  doc.moveDown(0.8);
   doc.font('Helvetica').fontSize(10).fillColor('black')
-    .text(`Payment Mode: ${order.paymentMode || ''}`, 40, sumY + 28);
+    .text(`Payment Mode: ${order.paymentMode || ''}`, 40, doc.y);
 
-  // Footer - at the bottom
-  doc.fontSize(8).fillColor('black')
+  // Footer - faint separator, small, light font, left-aligned
+  doc.moveTo(40, 720).lineTo(555, 720).strokeColor('#E0E0E0').lineWidth(1).stroke();
+  doc.fontSize(8).fillColor('#888')
     .text('Note: This invoice is issued by the pharmacy.', 40, 730)
     .text('Godavaii acts only as a facilitator for orders and delivery.', 40, 742);
 
+  // Centered thanks and site info at bottom
   doc.fontSize(10).fillColor(primary).font('Helvetica-Bold')
     .text('Thank you for choosing GODAVAII', 40, 760, { align: 'center' });
   doc.fontSize(9).fillColor('black').font('Helvetica')
