@@ -9,7 +9,7 @@ const mongoose = require('mongoose');
 const Order = require("../models/Order");
 const User = require("../models/User");
 const { findPharmaciesNearby } = require('../utils/pharmacyGeo');
-const { extractPrescription, redactPIIFromImage } = require('../utils/prescriptionAi');
+
 const path = require('path');
 
 
@@ -422,26 +422,6 @@ router.post('/cron/auto-assign-next', async (req, res) => {
   } catch (err) {
     console.error("CRON auto-assign error:", err);
     res.status(500).json({ error: "Cron failed", details: err.message });
-  }
-});
-
-router.post('/extract', upload.single('prescription'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-
-    // 1. OCR + LLM extraction
-    const extracted = await extractPrescription(req.file.path);
-
-    // 2. Redact PII (phone/address)
-    const redactedImgPath = await redactPIIFromImage(req.file.path, extracted.pii);
-
-    // 3. Return AI extraction + redacted image path
-    res.json({
-      ...extracted, // {name, age, medicines: [{...}], ...}
-      redactedImageUrl: redactedImgPath.replace(/^.*uploads/, '/uploads')
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Extraction failed', details: err.message });
   }
 });
 
