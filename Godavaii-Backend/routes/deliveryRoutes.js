@@ -226,13 +226,13 @@ router.patch('/partner/:id/active', async (req, res) => {
     const { id } = req.params;
     if (!isValidId(id)) return res.status(400).json({ error: "Invalid ID" });
 
-    const { active, lat, lng } = req.body;           // accept desired state + optional location
+    const { active, lat, lng } = req.body; // desired state + optional location seed
     const partner = await DeliveryPartner.findById(id);
     if (!partner) return res.status(404).json({ error: 'Not found' });
 
     if (typeof active === 'boolean') partner.active = active;
 
-    // seed/refresh location when we flip to active
+    // seed/refresh location when switching to active
     if (lat && lng) {
       partner.location = { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] };
       partner.lastUpdated = new Date();
@@ -605,8 +605,8 @@ router.get("/active-partner-nearby", async (req, res) => {
   if (!lat || !lng) return res.json({ activePartnerExists: false });
 
   try {
-    const MAX_DISTANCE_M = 8000;        // 8 km
-    const FRESH_MINUTES = 15;           // only partners pinged in last 15 min
+    const MAX_DISTANCE_M = 8000;      // 8 km
+    const FRESH_MINUTES = 15;         // only partners pinged recently
     const freshSince = new Date(Date.now() - FRESH_MINUTES * 60 * 1000);
 
     const partner = await DeliveryPartner.findOne({
