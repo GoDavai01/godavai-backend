@@ -223,10 +223,21 @@ router.get("/partners", async (req, res) => {
 // PATCH: Set delivery partner active/inactive
 router.patch('/partner/:id/active', async (req, res) => {
   try {
-    if (!isValidId(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
-    const partner = await DeliveryPartner.findById(req.params.id);
+    const { id } = req.params;
+    if (!isValidId(id)) return res.status(400).json({ error: "Invalid ID" });
+
+    const { active, lat, lng } = req.body;           // accept desired state + optional location
+    const partner = await DeliveryPartner.findById(id);
     if (!partner) return res.status(404).json({ error: 'Not found' });
-    partner.active = !partner.active;
+
+    if (typeof active === 'boolean') partner.active = active;
+
+    // seed/refresh location when we flip to active
+    if (lat && lng) {
+      partner.location = { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] };
+      partner.lastUpdated = new Date();
+    }
+
     await partner.save();
     res.json({ ok: true, active: partner.active });
   } catch (err) {
@@ -592,18 +603,27 @@ router.get("/active-partner-in-city", async (req, res) => {
 router.get("/active-partner-nearby", async (req, res) => {
   const { lat, lng } = req.query;
   if (!lat || !lng) return res.json({ activePartnerExists: false });
+
   try {
+    const MAX_DISTANCE_M = 8000;        // 8 km
+    const FRESH_MINUTES = 15;           // only partners pinged in last 15 min
+    const freshSince = new Date(Date.now() - FRESH_MINUTES * 60 * 1000);
+
     const partner = await DeliveryPartner.findOne({
+      status: "approved",
       active: true,
+      lastUpdated: { $gte: freshSince },
       location: {
         $near: {
           $geometry: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
-          $maxDistance: 8000
+          $maxDistance: MAX_DISTANCE_M
         }
       }
-    });
+    }).lean();
+
     res.json({ activePartnerExists: !!partner });
-  } catch {
+  } catch (err) {
+    console.error("active-partner-nearby error:", err);
     res.json({ activePartnerExists: false });
   }
 });
