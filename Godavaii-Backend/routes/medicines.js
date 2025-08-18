@@ -36,56 +36,75 @@ function isValidId(id) {
 }
 
 // Add new medicine (support MULTIPLE images)
+// ...
 router.post("/pharmacy/medicines", upload.array("images", 5), async (req, res) => {
   try {
     const pharmacyId = req.pharmacyId || req.user?._id || req.headers["x-pharmacy-id"];
-    const { name, brand, price, mrp, stock, category, discount } = req.body;
-    if (!pharmacyId || !name || !brand || !price || !mrp || !stock || !category) {
-      return res.status(400).json({ error: "Missing fields." });
-    }
 
-    // Handle uploaded images
-    let images = [];
-    if (req.files && req.files.length) {
-      images = req.files.map(f => "/uploads/medicines/" + f.filename);
-    }
+    // include new optional fields
+    // include new optional fields
+const { name, brand, price, mrp, stock, category, discount, composition, company } = req.body;
 
-    const med = new Medicine({
-      name,
-      brand,
-      price,
-      mrp,
-      stock,
-      category,
-      discount: discount || 0,
-      pharmacy: pharmacyId,
-      img: images[0],   // for legacy single-image use
-      images           // <-- All images go here!
-    });
+// allow either name OR brand, and auto-merge
+if (!pharmacyId || (!name && !brand) || !price || !mrp || !stock || !category) {
+  return res.status(400).json({ error: "Missing fields." });
+}
 
-    const desc = await generateDescription(name);
-    if (desc) med.description = desc;
+// merged name (prefer explicit name, else brand)
+const mergedName = (name && name.trim()) || (brand && brand.trim());
 
-    await med.save();
-    res.json({ success: true, medicine: med });
+let images = [];
+if (req.files && req.files.length) {
+  images = req.files.map(f => "/uploads/medicines/" + f.filename);
+}
+
+const med = new Medicine({
+  name: mergedName,
+  brand: brand || mergedName,
+  composition: composition || "",
+  company: company || "",
+  price,
+  mrp,
+  stock,
+  category,
+  discount: discount || 0,
+  pharmacy: pharmacyId,
+  img: images[0],
+  images
+});
+
+const desc = await generateDescription(mergedName);
+if (desc) med.description = desc;
+
+await med.save();
+res.json({ success: true, medicine: med });
   } catch (err) {
     console.error("Add new medicine error:", err);
     res.status(500).json({ error: "Failed to add medicine" });
   }
 });
 
+
 // Edit a medicine (support MULTIPLE images)
-// PATCH /pharmacy/medicines/:id
 router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, res) => {
   try {
     const med = await Medicine.findById(req.params.id);
     if (!med) return res.status(404).json({ error: "Medicine not found." });
 
-    const { name, brand, price, mrp, stock, category, discount } = req.body;
+    const { name, brand, price, mrp, stock, category, discount, composition, company } = req.body;
 
-    // Handle text fields
-    if (name) med.name = name;
-    if (brand) med.brand = brand;
+if (name !== undefined) med.name = name;
+if (brand !== undefined) med.brand = brand;
+
+// keep them in sync if one side is empty after update
+if (!med.name && med.brand) med.name = med.brand;
+if (!med.brand && med.name) med.brand = med.name;
+
+
+    // NEW
+    if (composition !== undefined) med.composition = composition;
+    if (company !== undefined) med.company = company;
+
     if (price) med.price = price;
     if (mrp) med.mrp = mrp;
     if (stock) med.stock = stock;
@@ -93,12 +112,11 @@ router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, r
     if (discount !== undefined) med.discount = discount;
 
     if (req.files && req.files.length) {
-  const images = req.files.map(f => "/uploads/medicines/" + f.filename);
-  // Append to existing images, do not overwrite
-  med.images = [...(med.images || []), ...images];
-  // If there's no main image, set it to the first available
-  if (!med.img) med.img = med.images[0];
-}
+      const images = req.files.map(f => "/uploads/medicines/" + f.filename);
+      med.images = [...(med.images || []), ...images];
+      if (!med.img) med.img = med.images[0];
+    }
+
     await med.save();
     res.json({ success: true, medicine: med });
   } catch (err) {
@@ -106,6 +124,7 @@ router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, r
     res.status(500).json({ error: "Failed to update medicine" });
   }
 });
+
 
 // Remove a single image from a medicine
 router.patch("/pharmacy/medicines/:id/remove-image", async (req, res) => {
