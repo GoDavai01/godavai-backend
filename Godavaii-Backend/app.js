@@ -36,6 +36,8 @@ const { sendSmsMSG91 } = require("./utils/sms");
 const passwordResetTokens = {};
 const userRoutes = require('./routes/users');
 const ordersRouter = require('./routes/orders');
+const medicinesRouter = require("./routes/medicines");
+const pharmaciesRouter = require("./routes/pharmacies"); // optional, for consistency
 const upload = require('./utils/upload');
 const isS3 = !!process.env.AWS_BUCKET_NAME;
 const { createPaymentRecord } = require('./controllers/paymentsController');
@@ -106,10 +108,16 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 if (!isS3 && !fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
 // Routes (leave unchanged - already modular and clean)
-app.use("/api/pharmacy", require("./routes/pharmacies"));
-app.use("/api/pharmacies", require("./routes/pharmacies"));
-app.use("/api/medicines", require("./routes/medicines"));
+// Routes (shared instances so aliases work)
+app.use("/api/pharmacies", pharmaciesRouter);
+app.use("/api/pharmacy",  pharmaciesRouter);   // keep both (you already had both)
+
+// ✅ Use ONE medicines router instance and mount on both prefixes
+app.use("/api/medicines", medicinesRouter);    // plural
+app.use("/api/medicine",  medicinesRouter);    // singular alias (compat)
+
 app.use("/api/orders", require("./routes/orders"));
+
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use("/api/users", require("./routes/users"));
