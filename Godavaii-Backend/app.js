@@ -107,6 +107,9 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 if (!isS3 && !fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
+console.log("BOOT: suggestions routes should be mounted");
+app.get("/api/whoami", (req,res)=>res.json({ ok:true, tag:"whoami" }));
+
 // ---- SUGGESTIONS: mount early so nothing can swallow it ----
 // (mongoose and Medicine are already required at top of your file)
 const toObjId = (s) =>
