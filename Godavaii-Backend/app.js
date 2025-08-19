@@ -111,9 +111,9 @@ console.log("BOOT: suggestions routes should be mounted");
 app.get("/api/whoami", (req,res)=>res.json({ ok:true, tag:"whoami" }));
 
 // ---- SUGGESTIONS: mount early so nothing can swallow it ----
-// (mongoose and Medicine are already required at top of your file)
-const toObjId = (s) =>
-  mongoose.Types.ObjectId.isValid(s) ? new mongoose.Types.ObjectId(s) : null;
+// --- prove boot + mount suggestions early ---
+console.log("BOOT: mounting /api/suggestions (+aliases)");
+const toObjId = (s) => mongoose.Types.ObjectId.isValid(s) ? new mongoose.Types.ObjectId(s) : null;
 
 async function suggestionsHandler(req, res) {
   try {
@@ -121,15 +121,11 @@ async function suggestionsHandler(req, res) {
     if (!pharmacyId) return res.status(400).json({ message: "pharmacyId is required" });
 
     const lim = Math.min(parseInt(limit || 10, 10), 50);
-    const excludeIds = exclude
-      .split(",")
-      .map((s) => s.trim())
-      .map(toObjId)
-      .filter(Boolean);
+    const excludeIds = exclude.split(",").map(s => toObjId(s.trim())).filter(Boolean);
 
     const or = [];
     if (toObjId(pharmacyId)) or.push({ pharmacy: toObjId(pharmacyId) });
-    or.push({ pharmacyId }); // string fallback if present in docs
+    or.push({ pharmacyId });
 
     const filter = {
       ...(or.length ? { $or: or } : {}),
@@ -142,20 +138,16 @@ async function suggestionsHandler(req, res) {
       .limit(lim)
       .lean();
 
-    const normalized = items.map((doc) => ({
-      ...doc,
-      pharmacyId: (doc.pharmacyId || doc.pharmacy || "").toString(),
-    }));
-    res.json(normalized);
+    res.json(items.map(doc => ({ ...doc, pharmacyId: (doc.pharmacyId || doc.pharmacy || "").toString() })));
   } catch (err) {
     console.error("GET /suggestions error:", err);
     res.status(500).json({ message: "Failed to fetch suggestions" });
   }
 }
+app.get("/api/suggestions", suggestionsHandler);
+app.get("/api/medicines/suggestions", suggestionsHandler);
+app.get("/api/medicine/suggestions", suggestionsHandler);
 
-app.get("/api/suggestions", suggestionsHandler);           // extra alias
-app.get("/api/medicines/suggestions", suggestionsHandler); // plural
-app.get("/api/medicine/suggestions", suggestionsHandler);  // singular
 // ---- end suggestions ----
 
 // Routes (leave unchanged - already modular and clean)
@@ -1551,6 +1543,28 @@ app.get('/api/whoami', (req,res) => {
     if (l.route) routes.push(...Object.keys(l.route.methods).map(m => `${m.toUpperCase()} ${l.route.path}`));
   });
   res.json({ commit: process.env.RENDER_GIT_COMMIT || 'local', routes });
+});
+
+// Debug: list every registered route (helps verify in prod)
+app.get("/routes", (req, res) => {
+  const out = [];
+  const split = (thing) => {
+    if (typeof thing === "string") return thing;
+    if (thing.fast_slash) return "";
+    const m = thing.toString().replace("\\/?", "").replace("(?=\\/|$)", "$")
+      .match(/^\/\^\\\/?(.*)\\\/\?\$\//);
+    return m ? "/" + m[1].replace(/\\\//g, "/") : "";
+  };
+  const walk = (base, layer) => {
+    if (layer.route && layer.route.path) {
+      Object.keys(layer.route.methods).forEach(m => out.push(`${m.toUpperCase()} ${base}${layer.route.path}`));
+    } else if (layer.name === "router" && layer.handle && layer.handle.stack) {
+      const newBase = base + split(layer.regexp);
+      layer.handle.stack.forEach(l => walk(newBase, l));
+    }
+  };
+  app._router.stack.forEach(l => walk("", l));
+  res.json(out.sort());
 });
 
 module.exports = app;
