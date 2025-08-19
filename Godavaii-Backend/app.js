@@ -1545,4 +1545,12 @@ if (process.env.PRINT_ROUTES === "1") {
 }
 // --- end route dump ---
 
+app.get('/api/whoami', (req,res) => {
+  const routes = [];
+  app._router.stack.forEach(l => {
+    if (l.route) routes.push(...Object.keys(l.route.methods).map(m => `${m.toUpperCase()} ${l.route.path}`));
+  });
+  res.json({ commit: process.env.RENDER_GIT_COMMIT || 'local', routes });
+});
+
 module.exports = app;
