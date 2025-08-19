@@ -1451,6 +1451,14 @@ app.get('/api/place-details', async (req, res) => {
   }
 });
 
+// --- TEMP: prove routes are mounted in prod ---
+if (process.env.PRINT_ROUTES === "1") {
+  console.log("=== PRINT_ROUTES: dumping registered paths ===");
+  app._router.stack
+    .filter(r => r.route)
+    .forEach(r => console.log(Object.keys(r.route.methods).join(","), r.route.path));
+}
+
 // DO NOT add any mongoose.connect or app.listen code here!
 // This file should ONLY setup the Express app and export it:
 
