@@ -9,6 +9,7 @@ const path = require("path");
 const fs = require("fs");
 const mongoose = require("mongoose");
 const generateDescription = require("../utils/generateDescription");
+const { Types: { ObjectId } } = mongoose;
 
 const isS3 = !!process.env.AWS_BUCKET_NAME;
 
@@ -390,29 +391,23 @@ router.get("/offers", async (req, res) => {
 router.get("/suggestions", async (req, res) => {
   try {
     const { pharmacyId, exclude = "", limit = 10 } = req.query;
-
-    if (!pharmacyId) {
-      return res.status(400).json({ message: "pharmacyId is required" });
-    }
+    if (!pharmacyId) return res.status(400).json({ message: "pharmacyId is required" });
 
     const lim = Math.min(parseInt(limit || 10, 10), 50);
 
-    // exclude can be a comma-separated list of ids
-    const excludeIds = exclude
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s && mongoose.Types.ObjectId.isValid(s))
-      .map((s) => new mongoose.Types.ObjectId(s));
+    const excludeIds = exclude.split(",")
+      .map(s => s.trim())
+      .filter(s => ObjectId.isValid(s))
+      .map(s => new ObjectId(s));
 
-    // Support schemas that use either `pharmacy` (ObjectId) or `pharmacyId` (string)
-    const baseFilter = {
-      $or: [{ pharmacy: pharmacyId }, { pharmacyId }],
+    const or = [];
+    if (ObjectId.isValid(pharmacyId)) or.push({ pharmacy: new ObjectId(pharmacyId) });
+    or.push({ pharmacyId: pharmacyId }); // string field, if you have it
+
+    const filter = {
+      ...(or.length ? { $or: or } : {}),
+      ...(excludeIds.length ? { _id: { $nin: excludeIds } } : {})
     };
-
-    const filter =
-      excludeIds.length > 0
-        ? { $and: [baseFilter, { _id: { $nin: excludeIds } }] }
-        : baseFilter;
 
     const items = await Medicine.find(filter)
       .select("_id name price brand img mrp category pharmacy pharmacyId")
@@ -420,16 +415,15 @@ router.get("/suggestions", async (req, res) => {
       .limit(lim)
       .lean();
 
-    // Ensure both fields exist for the client (harmless if one is missing)
-    const normalized = items.map((doc) => ({
+    const normalized = items.map(doc => ({
       ...doc,
-      pharmacyId: doc.pharmacyId || doc.pharmacy,
+      pharmacyId: (doc.pharmacyId || doc.pharmacy || "").toString(),
     }));
 
-    return res.json(normalized);
+    res.json(normalized);
   } catch (err) {
     console.error("GET /api/medicines/suggestions error:", err);
-    return res.status(500).json({ message: "Failed to fetch suggestions" });
+    res.status(500).json({ message: "Failed to fetch suggestions" });
   }
 });
 
