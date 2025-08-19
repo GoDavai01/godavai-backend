@@ -107,6 +107,54 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 if (!isS3 && !fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
+// ---- SUGGESTIONS: mount early so nothing can swallow it ----
+// (mongoose and Medicine are already required at top of your file)
+const toObjId = (s) =>
+  mongoose.Types.ObjectId.isValid(s) ? new mongoose.Types.ObjectId(s) : null;
+
+async function suggestionsHandler(req, res) {
+  try {
+    const { pharmacyId, exclude = "", limit = 10 } = req.query;
+    if (!pharmacyId) return res.status(400).json({ message: "pharmacyId is required" });
+
+    const lim = Math.min(parseInt(limit || 10, 10), 50);
+    const excludeIds = exclude
+      .split(",")
+      .map((s) => s.trim())
+      .map(toObjId)
+      .filter(Boolean);
+
+    const or = [];
+    if (toObjId(pharmacyId)) or.push({ pharmacy: toObjId(pharmacyId) });
+    or.push({ pharmacyId }); // string fallback if present in docs
+
+    const filter = {
+      ...(or.length ? { $or: or } : {}),
+      ...(excludeIds.length ? { _id: { $nin: excludeIds } } : {}),
+    };
+
+    const items = await Medicine.find(filter)
+      .select("_id name price brand img mrp category pharmacy pharmacyId")
+      .sort({ popularity: -1, createdAt: -1 })
+      .limit(lim)
+      .lean();
+
+    const normalized = items.map((doc) => ({
+      ...doc,
+      pharmacyId: (doc.pharmacyId || doc.pharmacy || "").toString(),
+    }));
+    res.json(normalized);
+  } catch (err) {
+    console.error("GET /suggestions error:", err);
+    res.status(500).json({ message: "Failed to fetch suggestions" });
+  }
+}
+
+app.get("/api/suggestions", suggestionsHandler);           // extra alias
+app.get("/api/medicines/suggestions", suggestionsHandler); // plural
+app.get("/api/medicine/suggestions", suggestionsHandler);  // singular
+// ---- end suggestions ----
+
 // Routes (leave unchanged - already modular and clean)
 // Routes (shared instances so aliases work)
 app.use("/api/pharmacies", pharmaciesRouter);
@@ -1462,49 +1510,36 @@ if (process.env.PRINT_ROUTES === "1") {
 // DO NOT add any mongoose.connect or app.listen code here!
 // This file should ONLY setup the Express app and export it:
 
-// --- Fallback: suggestions endpoint defined directly here (prod hotfix) ---
-app.get(['/api/medicines/suggestions', '/api/medicine/suggestions'], async (req, res) => {
-  try {
-    const { pharmacyId, exclude = "", limit = 10 } = req.query;
-    if (!pharmacyId) return res.status(400).json({ message: "pharmacyId is required" });
+// --- TEMP: print every mounted route, including nested routers ---
+if (process.env.PRINT_ROUTES === "1") {
+  console.log("=== PRINT_ROUTES: dumping registered paths (incl. nested) ===");
 
-    const lim = Math.min(parseInt(limit || 10, 10), 50);
+  const split = (thing) => {
+    if (typeof thing === "string") return thing;
+    if (thing.fast_slash) return "";
+    // Turn layer.regexp into a readable path fragment
+    const m = thing
+      .toString()
+      .replace("\\/?", "")
+      .replace("(?=\\/|$)", "$")
+      .match(/^\/\^\\\/?(.*)\\\/\?\$\//);
+    return m ? "/" + m[1].replace(/\\\//g, "/") : "";
+  };
 
-    const excludeIds = exclude
-      .split(',')
-      .map(s => s.trim())
-      .filter(s => mongoose.Types.ObjectId.isValid(s))
-      .map(s => new mongoose.Types.ObjectId(s));
-
-    const or = [];
-    if (mongoose.Types.ObjectId.isValid(pharmacyId)) {
-      or.push({ pharmacy: new mongoose.Types.ObjectId(pharmacyId) });
+  const print = (base, layer) => {
+    if (layer.route && layer.route.path) {
+      const methods = Object.keys(layer.route.methods)
+        .map((m) => m.toUpperCase())
+        .join(",");
+      console.log(methods, base + layer.route.path);
+    } else if (layer.name === "router" && layer.handle && layer.handle.stack) {
+      const newBase = base + split(layer.regexp);
+      layer.handle.stack.forEach((l) => print(newBase, l));
     }
-    // harmless if you don't store a string field; keeps old data compat
-    or.push({ pharmacyId: pharmacyId });
+  };
 
-    const filter = {
-      ...(or.length ? { $or: or } : {}),
-      ...(excludeIds.length ? { _id: { $nin: excludeIds } } : {})
-    };
-
-    const items = await Medicine.find(filter)
-      .select('_id name price brand img mrp category pharmacy pharmacyId')
-      .sort({ popularity: -1, createdAt: -1 })
-      .limit(lim)
-      .lean();
-
-    const normalized = items.map(doc => ({
-      ...doc,
-      pharmacyId: (doc.pharmacyId || doc.pharmacy || '').toString(),
-    }));
-
-    res.json(normalized);
-  } catch (err) {
-    console.error("fallback /suggestions error:", err);
-    res.status(500).json({ message: "Failed to fetch suggestions" });
-  }
-});
-
+  app._router.stack.forEach((l) => print("", l));
+}
+// --- end route dump ---
 
 module.exports = app;
