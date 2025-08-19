@@ -1462,4 +1462,49 @@ if (process.env.PRINT_ROUTES === "1") {
 // DO NOT add any mongoose.connect or app.listen code here!
 // This file should ONLY setup the Express app and export it:
 
+// --- Fallback: suggestions endpoint defined directly here (prod hotfix) ---
+app.get(['/api/medicines/suggestions', '/api/medicine/suggestions'], async (req, res) => {
+  try {
+    const { pharmacyId, exclude = "", limit = 10 } = req.query;
+    if (!pharmacyId) return res.status(400).json({ message: "pharmacyId is required" });
+
+    const lim = Math.min(parseInt(limit || 10, 10), 50);
+
+    const excludeIds = exclude
+      .split(',')
+      .map(s => s.trim())
+      .filter(s => mongoose.Types.ObjectId.isValid(s))
+      .map(s => new mongoose.Types.ObjectId(s));
+
+    const or = [];
+    if (mongoose.Types.ObjectId.isValid(pharmacyId)) {
+      or.push({ pharmacy: new mongoose.Types.ObjectId(pharmacyId) });
+    }
+    // harmless if you don't store a string field; keeps old data compat
+    or.push({ pharmacyId: pharmacyId });
+
+    const filter = {
+      ...(or.length ? { $or: or } : {}),
+      ...(excludeIds.length ? { _id: { $nin: excludeIds } } : {})
+    };
+
+    const items = await Medicine.find(filter)
+      .select('_id name price brand img mrp category pharmacy pharmacyId')
+      .sort({ popularity: -1, createdAt: -1 })
+      .limit(lim)
+      .lean();
+
+    const normalized = items.map(doc => ({
+      ...doc,
+      pharmacyId: (doc.pharmacyId || doc.pharmacy || '').toString(),
+    }));
+
+    res.json(normalized);
+  } catch (err) {
+    console.error("fallback /suggestions error:", err);
+    res.status(500).json({ message: "Failed to fetch suggestions" });
+  }
+});
+
+
 module.exports = app;
