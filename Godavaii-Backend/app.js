@@ -665,46 +665,32 @@ async function generateMedicineImage(medicineName) {
 
 // ========== PHARMACY MEDICINE IMAGE UPLOAD ENDPOINTS ==========
 
-const medicineImageUpload = (() => {
-  const uploadMiddleware = isS3
-    ? upload.single('image')
-    : multer({
-        storage: multer.diskStorage({
-          destination: function (req, file, cb) {
-            const folder = path.join(UPLOADS_DIR, "medicines");
-            if (!isS3 && !fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-            cb(null, folder);
-          },
-          filename: function (req, file, cb) {
-            const ext = path.extname(file.originalname);
-            const name = req.body.name
-              ? req.body.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()
-              : "medicine";
-            cb(null, name + "_" + Date.now() + ext);
-          }
-        }),
-        limits: { fileSize: 2 * 1024 * 1024 },
-        fileFilter: (req, file, cb) => {
-          if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype)) {
-            return cb(new Error("Only JPEG, PNG, or WEBP allowed"));
-          }
-          cb(null, true);
+const pharmacyImagesUpload = isS3
+  ? upload.array("images", 5)
+  : multer({
+      storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+          const folder = path.join(UPLOADS_DIR, "medicines");
+          if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+          cb(null, folder);
+        },
+        filename: (req, file, cb) => {
+          cb(null, Date.now() + path.extname(file.originalname));
         }
-      }).single('image');
+      })
+    }).array("images", 5);
 
-  // ✅ wrap to allow optional image
-  return (req, res, next) => {
-    uploadMiddleware(req, res, function (err) {
-      if (err) {
-        console.error("Upload error:", err);
-        return res.status(400).json({ message: "Upload error", error: err.message });
-      }
-      next(); // continue even if no file
-    });
-  };
-})();
+const normalizeCategory = (input) => {
+  let cat = input;
+  try {
+    if (typeof cat === "string" && cat.trim().startsWith("[")) cat = JSON.parse(cat);
+  } catch (_) {}
 
+  if (!Array.isArray(cat)) cat = cat ? [String(cat)] : ["Miscellaneous"];
+  return cat;
+};
 
+const asTrimmedString = (v) => (v ?? "").toString().trim();
 
 app.get("/api/pharmacy/medicines", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
@@ -712,180 +698,92 @@ app.get("/api/pharmacy/medicines", auth, async (req, res) => {
   res.json(medicines);
 });
 
-app.post("/api/pharmacy/medicines", auth, medicineImageUpload, async (req, res) => {
-
-  try {
-    const stringSimilarity = require('string-similarity');
-const DEFAULT_CATEGORIES = [
-  "Pain Relief",
-  "Fever",
-  "Cough & Cold",
-  "Antibiotic",
-  "Digestive",
-  "Diabetes",
-  "Hypertension",
-  "Supplements",
-  "Other"
-];
-
-// Check for similar custom categories
-const allMedicines = await Medicine.find({ pharmacy: req.user.pharmacyId });
-const existingCustomCategories = Array.from(
-  new Set(allMedicines.flatMap(m =>
-    Array.isArray(m.category) ? m.category : (m.category ? [m.category] : [])
-  ).filter(c => !!c && !DEFAULT_CATEGORIES.includes(c)))
-);
-const allCategories = [...DEFAULT_CATEGORIES, ...existingCustomCategories];
-
-const customCategory = req.body.customCategory?.trim();
-if (customCategory) {
-  const match = stringSimilarity.findBestMatch(customCategory, allCategories);
-  if (match.bestMatch.rating > 0.75) {
-    return res.status(400).json({
-      error: `Category "${customCategory}" is too similar to existing category "${match.bestMatch.target}". Please select existing or check spelling.`
-    });
-  }
-}
-
-    let img;
-    if (req.file) {
-  img = isS3 ? req.file.location : "/uploads/medicines/" + req.file.filename;
-} else {
-      try {
-        img = await generateMedicineImage(req.body.name || "Medicine");
-      } catch {
-        img = "https://img.freepik.com/free-vector/medicine-bottle-pills-isolated_1284-42391.jpg";
-      }
-    }
-
-    const { name, price, mrp, stock, category, brand } = req.body;
-    if (!name || !price || !mrp || !stock) {
-      return res.status(400).json({ message: "Name, price, MRP, and stock are required" });
-    }
-
-    const discount = Math.max(0, Math.round(((mrp - price) / mrp) * 100));
-
-    let description = "";
+app.post("/api/pharmacy/medicines", auth, (req, res) => {
+  pharmacyImagesUpload(req, res, async (err) => {
+    if (err) return res.status(400).json({ message: "Upload error", error: err.message });
     try {
-      description = await generateMedicineDescription(name);
-      console.log("✅ OpenAI Description:", description);
-    } catch (err) {
-      console.error("❌ OpenAI Description Error:", err.message);
+      const pharmacyId = req.user?.pharmacyId;
+      const { name, brand, price, mrp, stock, category, discount, composition, company } = req.body;
+
+      if (!pharmacyId || (!name && !brand) || !price || !mrp || !stock || !category) {
+        return res.status(400).json({ error: "Missing fields." });
+      }
+
+      const mergedName = (name && name.trim()) || (brand && brand.trim());
+
+      const images = (req.files || []).map((f) =>
+        isS3 ? f.location : "/uploads/medicines/" + f.filename
+      );
+
+      const med = new Medicine({
+        name: mergedName,
+        brand: brand || mergedName,
+        composition: asTrimmedString(composition),
+        company: asTrimmedString(company),
+        price,
+        mrp,
+        stock,
+        category: normalizeCategory(category),
+        discount: discount || 0,
+        pharmacy: pharmacyId,
+        img: images[0],
+        images
+      });
+
+      try {
+        const desc = await generateMedicineDescription(mergedName);
+        if (desc) med.description = desc;
+      } catch (_) {}
+
+      await med.save();
+      res.status(201).json({ success: true, medicine: med });
+    } catch (e) {
+      console.error("Add new medicine error:", e);
+      res.status(500).json({ error: "Failed to add medicine" });
     }
-
-    const medicine = new Medicine({
-      name,
-      brand,
-      price,
-      mrp,
-      stock,
-      discount,
-      img,
-      pharmacy: req.user.pharmacyId,
-      category: category || "Miscellaneous",
-      type: type || "Tablet",
-      description: description || "No description available."
-    });
-
-    await medicine.save();
-    res.status(201).json({ message: "Medicine added!", medicine });
-  } catch (err) {
-    console.error("❌ Add medicine error:", err.message);
-    res.status(500).json({ message: "Failed to add medicine", error: err.message });
-  }
+  });
 });
 
-
-app.patch("/api/pharmacy/medicines/:id", auth, medicineImageUpload, async (req, res) => {
-  if (!req.user.pharmacyId)
-    return res.status(403).json({ message: "Not authorized" });
-  const stringSimilarity = require('string-similarity');
-const DEFAULT_CATEGORIES = [
-  "Pain Relief",
-  "Fever",
-  "Cough & Cold",
-  "Antibiotic",
-  "Digestive",
-  "Diabetes",
-  "Hypertension",
-  "Supplements",
-  "Other"
-];
-
-const allMedicines = await Medicine.find({ pharmacy: req.user.pharmacyId });
-const existingCustomCategories = Array.from(
-  new Set(allMedicines.flatMap(m =>
-    Array.isArray(m.category) ? m.category : (m.category ? [m.category] : [])
-  ).filter(c => !!c && !DEFAULT_CATEGORIES.includes(c)))
-);
-const allCategories = [...DEFAULT_CATEGORIES, ...existingCustomCategories];
-
-const customCategory = req.body.customCategory?.trim();
-if (customCategory) {
-  const match = stringSimilarity.findBestMatch(customCategory, allCategories);
-  if (match.bestMatch.rating > 0.75) {
-    return res.status(400).json({
-      error: `Category "${customCategory}" is too similar to existing category "${match.bestMatch.target}". Please select existing or check spelling.`
-    });
-  }
-}
-
-  let { name, price, mrp, stock, category, brand, type, customType } = req.body;
-
-  if (!name || !price || !stock) {
-    return res.status(400).json({ message: "Name, price, stock required" });
-  }
-
-  // Handle category as array always
-  let categories;
-  if (category !== undefined) {
+app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
+  pharmacyImagesUpload(req, res, async (err) => {
+    if (err) return res.status(400).json({ message: "Upload error", error: err.message });
     try {
-      // Category may be sent as JSON string from FormData
-      if (typeof category === "string" && category.startsWith("[")) {
-        categories = JSON.parse(category);
-      } else if (Array.isArray(category)) {
-        categories = category.length ? category : ["Miscellaneous"];
-      } else if (typeof category === "string" && category) {
-        categories = [category];
-      } else {
-        categories = ["Miscellaneous"];
+      const med = await Medicine.findOne({ _id: req.params.id, pharmacy: req.user.pharmacyId });
+      if (!med) return res.status(404).json({ message: "Medicine not found" });
+
+      const b = req.body;
+
+      // Allow explicit empty-string updates by checking !== undefined
+      if (b.name !== undefined)  med.name  = b.name;
+      if (b.brand !== undefined) med.brand = b.brand;
+
+      // Keep name/brand in sync if one is missing
+      if (!med.name && med.brand) med.name = med.brand;
+      if (!med.brand && med.name) med.brand = med.name;
+
+      if (b.composition !== undefined) med.composition = asTrimmedString(b.composition);
+      if (b.company !== undefined)     med.company     = asTrimmedString(b.company);
+
+      if (b.price !== undefined)    med.price    = b.price;
+      if (b.mrp !== undefined)      med.mrp      = b.mrp;
+      if (b.stock !== undefined)    med.stock    = b.stock;
+      if (b.category !== undefined) med.category = normalizeCategory(b.category);
+      if (b.discount !== undefined) med.discount = b.discount;
+      if (b.type !== undefined)     med.type     = b.type === "Other" ? b.customType : b.type;
+
+      if (req.files && req.files.length) {
+        const more = req.files.map((f) => (isS3 ? f.location : "/uploads/medicines/" + f.filename));
+        med.images = [...(med.images || []), ...more];
+        if (!med.img) med.img = med.images[0];
       }
-    } catch {
-      categories = [category];
+
+      await med.save();
+      res.json(med);
+    } catch (e) {
+      console.error("Edit medicine error:", e);
+      res.status(500).json({ message: "Failed to update medicine" });
     }
-  }
-
-  let updateFields = {
-    name,
-    brand,
-    price,
-    mrp,
-    stock,
-    ...(categories && { category: categories }),
-    ...(type && { type: type === "Other" ? customType : type }),
-  };
-
-  // If a new image was uploaded
-  if (req.file) {
-    updateFields.img = isS3 ? req.file.location : "/uploads/medicines/" + req.file.filename;
-  }
-
-  // Optionally: regenerate description if name changed
-  if (name) {
-    try {
-      const description = await generateMedicineDescription(name);
-      updateFields.description = description;
-    } catch { /* Ignore error */ }
-  }
-
-  const med = await Medicine.findOneAndUpdate(
-    { _id: req.params.id, pharmacy: req.user.pharmacyId },
-    updateFields,
-    { new: true }
-  );
-
-  if (!med) return res.status(404).json({ message: "Medicine not found" });
-  res.json(med);
+  });
 });
 
 app.delete("/api/pharmacy/medicines/:id", auth, async (req, res) => {
@@ -893,6 +791,7 @@ app.delete("/api/pharmacy/medicines/:id", auth, async (req, res) => {
   await Medicine.deleteOne({ _id: req.params.id, pharmacy: req.user.pharmacyId });
   res.json({ message: "Medicine deleted" });
 });
+
 
 // ================= USER AUTH APIs =================
 app.post("/api/register", async (req, res) => {
