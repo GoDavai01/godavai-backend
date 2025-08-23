@@ -1,12 +1,12 @@
+// models/Medicine.js
 const mongoose = require("mongoose");
 
 const MedicineSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   brand: { type: String, default: "", trim: true },
 
-  // NEW
-  composition: { type: String, default: "", trim: true }, // e.g., "Paracetamol 650 mg"
-  company: { type: String, default: "", trim: true },     // e.g., "Micro Labs"
+  composition: { type: String, default: "", trim: true },
+  company: { type: String, default: "", trim: true },
 
   price: { type: Number, required: true, min: 0 },
   mrp: { type: Number, required: true, min: 0 },
@@ -19,7 +19,6 @@ const MedicineSchema = new mongoose.Schema({
   trending: { type: Boolean, default: false },
   pharmacy: { type: mongoose.Schema.Types.ObjectId, ref: "Pharmacy" },
   description: { type: String, trim: true },
-  createdAt: { type: Date, default: Date.now }
 }, { timestamps: true });
 
 module.exports = mongoose.model("Medicine", MedicineSchema);

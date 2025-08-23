@@ -677,6 +677,9 @@ const pharmacyImagesUpload = isS3
         filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
       })
     }).array("images", 5); // Local path (keep same)
+    // helper: detect multipart/form-data
+const isMultipart = req =>
+  (req.headers['content-type'] || '').toLowerCase().includes('multipart/form-data');
 
 /** keep existing helpers — no behavioral change */
 const normalizeCategory = (input) => {
@@ -698,22 +701,12 @@ app.get("/api/pharmacy/medicines", auth, async (req, res) => {
 
 /** POST: add medicine — now always writes composition & company */
 app.post("/api/pharmacy/medicines", auth, (req, res) => {
-  pharmacyImagesUpload(req, res, async (err) => {
-    if (err) return res.status(400).json({ message: "Upload error", error: err.message });
+  const handle = async () => {
     try {
       const pharmacyId = req.user?.pharmacyId;
       const {
-        name,
-        brand,
-        price,
-        mrp,
-        stock,
-        category,
-        discount,
-        composition, // NEW: persisted
-        company,     // NEW: persisted
-        type,
-        customType
+        name, brand, price, mrp, stock, category, discount,
+        composition, company, type, customType
       } = req.body;
 
       if (!pharmacyId || (!name && !brand) || !price || !mrp || !stock || !category) {
@@ -722,31 +715,30 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
 
       const mergedName = (name && name.trim()) || (brand && brand.trim());
 
-      const images = (req.files || []).map((f) =>
+      const images = (req.files || []).map(f =>
         isS3 ? f.location : "/uploads/medicines/" + f.filename
       );
 
       const med = new Medicine({
         name: mergedName,
         brand: brand || mergedName,
-        composition: asTrimmedString(composition), // ✅ save
-        company: asTrimmedString(company),         // ✅ save
-        price,
-        mrp,
-        stock,
+        composition: asTrimmedString(composition),
+        company: asTrimmedString(company),
+        price: Number(price),
+        mrp: Number(mrp),
+        stock: Number(stock),
         category: normalizeCategory(category),
-        discount: discount || 0,
+        discount: Number(discount) || 0,
         pharmacy: pharmacyId,
         img: images[0],
         images,
         type: type === "Other" ? (customType || "Other") : (type || "Tablet")
       });
 
-      // keep your auto description
       try {
         const desc = await generateMedicineDescription(mergedName);
         if (desc) med.description = desc;
-      } catch (_) {}
+      } catch {}
 
       await med.save();
       res.status(201).json({ success: true, medicine: med });
@@ -754,55 +746,70 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
       console.error("Add new medicine error:", e);
       res.status(500).json({ error: "Failed to add medicine" });
     }
-  });
+  };
+
+  if (isMultipart(req)) {
+    pharmacyImagesUpload(req, res, err => {
+      if (err) return res.status(400).json({ message: "Upload error", error: err.message });
+      handle();
+    });
+  } else {
+    handle();
+  }
 });
+
 
 /** PATCH: edit medicine — now updates composition & company too */
 app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
-  pharmacyImagesUpload(req, res, async (err) => {
-    if (err) return res.status(400).json({ message: "Upload error", error: err.message });
+  const handle = async () => {
     try {
       const med = await Medicine.findOne({ _id: req.params.id, pharmacy: req.user.pharmacyId });
       if (!med) return res.status(404).json({ message: "Medicine not found" });
 
-      const b = req.body;
+      const b = req.body || {};
+      const S = v => (v ?? "").toString().trim();
 
       // strings
-      if (b.name !== undefined)  med.name  = b.name;
-      if (b.brand !== undefined) med.brand = b.brand;
+      if (b.name !== undefined)        med.name        = S(b.name);
+      if (b.brand !== undefined)       med.brand       = S(b.brand);
+      if (b.composition !== undefined) med.composition = S(b.composition);
+      if (b.company !== undefined)     med.company     = S(b.company);
 
       // keep in sync
       if (!med.name && med.brand) med.name = med.brand;
       if (!med.brand && med.name) med.brand = med.name;
 
-      // ✅ ensure these fields update (this was the missing part)
-      if (b.composition !== undefined) med.composition = asTrimmedString(b.composition);
-      if (b.company !== undefined)     med.company     = asTrimmedString(b.company);
-
-      // numbers/arrays
-      if (b.price !== undefined)    med.price    = b.price;
-      if (b.mrp !== undefined)      med.mrp      = b.mrp;
-      if (b.stock !== undefined)    med.stock    = b.stock;
+      // numbers / arrays
+      if (b.price !== undefined)    med.price    = Number(b.price);
+      if (b.mrp !== undefined)      med.mrp      = Number(b.mrp);
+      if (b.stock !== undefined)    med.stock    = Number(b.stock);
+      if (b.discount !== undefined) med.discount = Number(b.discount);
       if (b.category !== undefined) med.category = normalizeCategory(b.category);
-      if (b.discount !== undefined) med.discount = b.discount;
-      if (b.type !== undefined)     med.type     = b.type === "Other" ? b.customType : b.type;
+      if (b.type !== undefined)     med.type     = b.type === "Other" ? (S(b.customType) || "Other") : S(b.type);
 
-      // images: append
-      if (req.files && req.files.length) {
-        const more = req.files.map((f) =>
-          isS3 ? f.location : "/uploads/medicines/" + f.filename
-        );
+      // images (append)
+      if (req.files?.length) {
+        const more = req.files.map(f => isS3 ? f.location : "/uploads/medicines/" + f.filename);
         med.images = [...(med.images || []), ...more];
         if (!med.img) med.img = med.images[0];
       }
 
       await med.save();
-      res.json(med);
+      res.json({ success: true, medicine: med });
     } catch (e) {
       console.error("Edit medicine error:", e);
       res.status(500).json({ message: "Failed to update medicine" });
     }
-  });
+  };
+
+  if (isMultipart(req)) {
+    pharmacyImagesUpload(req, res, err => {
+      if (err) return res.status(400).json({ message: "Upload error", error: err.message });
+      handle();
+    });
+  } else {
+    handle();
+  }
 });
 
 /** DELETE (unchanged) */
