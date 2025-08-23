@@ -666,7 +666,7 @@ async function generateMedicineImage(medicineName) {
 // ========== PHARMACY MEDICINE IMAGE UPLOAD ENDPOINTS ==========
 
 const pharmacyImagesUpload = isS3
-  ? upload.array("images", 5)
+  ? upload.array("images", 5) // S3 path (keep same)
   : multer({
       storage: multer.diskStorage({
         destination: (req, file, cb) => {
@@ -674,36 +674,47 @@ const pharmacyImagesUpload = isS3
           if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
           cb(null, folder);
         },
-        filename: (req, file, cb) => {
-          cb(null, Date.now() + path.extname(file.originalname));
-        }
+        filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
       })
-    }).array("images", 5);
+    }).array("images", 5); // Local path (keep same)
 
+/** keep existing helpers — no behavioral change */
 const normalizeCategory = (input) => {
   let cat = input;
   try {
     if (typeof cat === "string" && cat.trim().startsWith("[")) cat = JSON.parse(cat);
   } catch (_) {}
-
   if (!Array.isArray(cat)) cat = cat ? [String(cat)] : ["Miscellaneous"];
   return cat;
 };
-
 const asTrimmedString = (v) => (v ?? "").toString().trim();
 
+/** GET: dashboard list (unchanged) */
 app.get("/api/pharmacy/medicines", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   const medicines = await Medicine.find({ pharmacy: req.user.pharmacyId });
   res.json(medicines);
 });
 
+/** POST: add medicine — now always writes composition & company */
 app.post("/api/pharmacy/medicines", auth, (req, res) => {
   pharmacyImagesUpload(req, res, async (err) => {
     if (err) return res.status(400).json({ message: "Upload error", error: err.message });
     try {
       const pharmacyId = req.user?.pharmacyId;
-      const { name, brand, price, mrp, stock, category, discount, composition, company } = req.body;
+      const {
+        name,
+        brand,
+        price,
+        mrp,
+        stock,
+        category,
+        discount,
+        composition, // NEW: persisted
+        company,     // NEW: persisted
+        type,
+        customType
+      } = req.body;
 
       if (!pharmacyId || (!name && !brand) || !price || !mrp || !stock || !category) {
         return res.status(400).json({ error: "Missing fields." });
@@ -718,8 +729,8 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
       const med = new Medicine({
         name: mergedName,
         brand: brand || mergedName,
-        composition: asTrimmedString(composition),
-        company: asTrimmedString(company),
+        composition: asTrimmedString(composition), // ✅ save
+        company: asTrimmedString(company),         // ✅ save
         price,
         mrp,
         stock,
@@ -727,9 +738,11 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
         discount: discount || 0,
         pharmacy: pharmacyId,
         img: images[0],
-        images
+        images,
+        type: type === "Other" ? (customType || "Other") : (type || "Tablet")
       });
 
+      // keep your auto description
       try {
         const desc = await generateMedicineDescription(mergedName);
         if (desc) med.description = desc;
@@ -744,6 +757,7 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
   });
 });
 
+/** PATCH: edit medicine — now updates composition & company too */
 app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
   pharmacyImagesUpload(req, res, async (err) => {
     if (err) return res.status(400).json({ message: "Upload error", error: err.message });
@@ -753,17 +767,19 @@ app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
 
       const b = req.body;
 
-      // Allow explicit empty-string updates by checking !== undefined
+      // strings
       if (b.name !== undefined)  med.name  = b.name;
       if (b.brand !== undefined) med.brand = b.brand;
 
-      // Keep name/brand in sync if one is missing
+      // keep in sync
       if (!med.name && med.brand) med.name = med.brand;
       if (!med.brand && med.name) med.brand = med.name;
 
+      // ✅ ensure these fields update (this was the missing part)
       if (b.composition !== undefined) med.composition = asTrimmedString(b.composition);
       if (b.company !== undefined)     med.company     = asTrimmedString(b.company);
 
+      // numbers/arrays
       if (b.price !== undefined)    med.price    = b.price;
       if (b.mrp !== undefined)      med.mrp      = b.mrp;
       if (b.stock !== undefined)    med.stock    = b.stock;
@@ -771,8 +787,11 @@ app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
       if (b.discount !== undefined) med.discount = b.discount;
       if (b.type !== undefined)     med.type     = b.type === "Other" ? b.customType : b.type;
 
+      // images: append
       if (req.files && req.files.length) {
-        const more = req.files.map((f) => (isS3 ? f.location : "/uploads/medicines/" + f.filename));
+        const more = req.files.map((f) =>
+          isS3 ? f.location : "/uploads/medicines/" + f.filename
+        );
         med.images = [...(med.images || []), ...more];
         if (!med.img) med.img = med.images[0];
       }
@@ -786,12 +805,12 @@ app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
   });
 });
 
+/** DELETE (unchanged) */
 app.delete("/api/pharmacy/medicines/:id", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   await Medicine.deleteOne({ _id: req.params.id, pharmacy: req.user.pharmacyId });
   res.json({ message: "Medicine deleted" });
 });
-
 
 // ================= USER AUTH APIs =================
 app.post("/api/register", async (req, res) => {
