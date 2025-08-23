@@ -13,6 +13,9 @@ const {
   Types: { ObjectId },
 } = mongoose;
 
+// Add this near the top with the other requires
+const auth = require("../middleware/auth");
+
 const isS3 = !!process.env.AWS_BUCKET_NAME;
 
 let upload;
@@ -51,71 +54,95 @@ function normalizeCategory(input) {
 }
 const asTrimmedString = (v) => (v ?? "").toString().trim();
 
-// Add new medicine (support MULTIPLE images)
-router.post("/pharmacy/medicines", upload.array("images", 5), async (req, res) => {
-  try {
-    const pharmacyId =
-      req.pharmacyId ||
-      req.user?.pharmacyId || // include pharmacyId if auth middleware set it
-      req.user?._id ||
-      req.headers["x-pharmacy-id"];
+// --- Add new medicine (support MULTIPLE images) ---
+// NOTE: we REQUIRE auth so req.user.pharmacyId is guaranteed
+router.post(
+  "/pharmacy/medicines",
+  auth,
+  upload.array("images", 5),
+  async (req, res) => {
+    try {
+      // Resolve pharmacyId safely
+      const pharmacyId =
+        req.user?.pharmacyId ||
+        req.headers["x-pharmacy-id"];
 
-    // include new optional fields
-    const {
-      name,
-      brand,
-      price,
-      mrp,
-      stock,
-      category,
-      discount,
-      composition,
-      company,
-    } = req.body;
+      // read fields
+      const {
+        name,
+        brand,
+        price,
+        mrp,
+        stock,
+        category,
+        discount,
+        composition,
+        company,
+        type,
+        customType,
+      } = req.body;
 
-    // allow either name OR brand, and auto-merge
-    if (!pharmacyId || (!name && !brand) || !price || !mrp || !stock || !category) {
-      return res.status(400).json({ error: "Missing fields." });
+      // validate basics (allow name OR brand, and a category)
+      if (!pharmacyId || (!name && !brand) || price === undefined || mrp === undefined || stock === undefined || !category) {
+        return res.status(400).json({ error: "Missing fields." });
+      }
+
+      // Normalize numeric fields (avoid strings sneaking into schema)
+      const priceNum = Number(price);
+      const mrpNum   = Number(mrp);
+      const stockNum = Number(stock);
+      const discNum  = discount !== undefined && discount !== "" ? Number(discount) : 0;
+
+      if ([priceNum, mrpNum, stockNum].some(n => Number.isNaN(n))) {
+        return res.status(400).json({ error: "price/mrp/stock must be numbers" });
+      }
+
+      // Normalize category (handles JSON string from multipart)
+      const cat = normalizeCategory(category);
+
+      // Merge name/brand
+      const mergedName = (name && name.trim()) || (brand && brand.trim());
+
+      // Collect images if any
+      let images = [];
+      if (req.files && req.files.length) {
+        images = req.files.map(f => "/uploads/medicines/" + f.filename);
+      }
+
+      // Build doc
+      const med = new Medicine({
+        name: mergedName,
+        brand: brand || mergedName,
+        composition: asTrimmedString(composition),
+        company: asTrimmedString(company),
+        price: priceNum,
+        mrp: mrpNum,
+        stock: stockNum,
+        discount: discNum,
+        category: cat,
+        type: customType && type === "Other" ? customType : (type || "Tablet"),
+        pharmacy: pharmacyId,
+        img: images[0],
+        images,
+      });
+
+      // Make AI description BEST-EFFORT (never block save)
+      try {
+        const desc = await generateDescription(mergedName);
+        if (desc) med.description = desc;
+      } catch (e) {
+        console.warn("generateDescription failed:", e.message || e);
+      }
+
+      await med.save();
+      return res.json({ success: true, medicine: med });
+    } catch (err) {
+      console.error("Add new medicine error:", err);
+      // expose a little more detail to help you debug in prod
+      return res.status(500).json({ error: "Failed to add medicine", detail: String(err?.message || err) });
     }
-
-    // merged name (prefer explicit name, else brand)
-    const mergedName = (name && name.trim()) || (brand && brand.trim());
-
-    let images = [];
-    if (req.files && req.files.length) {
-      images = req.files.map((f) => "/uploads/medicines/" + f.filename);
-    }
-
-    // ✅ normalize fields that can arrive as strings from multipart
-    const cat = normalizeCategory(category);
-    const comp = asTrimmedString(composition);
-    const compny = asTrimmedString(company);
-
-    const med = new Medicine({
-      name: mergedName,
-      brand: brand || mergedName,
-      composition: comp, // ✅ always persisted
-      company: compny, // ✅ always persisted
-      price,
-      mrp,
-      stock,
-      category: cat,
-      discount: discount || 0,
-      pharmacy: pharmacyId,
-      img: images[0],
-      images,
-    });
-
-    const desc = await generateDescription(mergedName);
-    if (desc) med.description = desc;
-
-    await med.save();
-    res.json({ success: true, medicine: med });
-  } catch (err) {
-    console.error("Add new medicine error:", err);
-    res.status(500).json({ error: "Failed to add medicine" });
   }
-});
+);
 
 // Edit a medicine (support MULTIPLE images)
 router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, res) => {
