@@ -99,9 +99,12 @@ app.use(cors({
     "x-access-token"
   ].join(","),
 }));
-
+app.options("*", cors()); // answer all preflights (OPTIONS)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+if (!isS3) {
+  app.use("/uploads", express.static(UPLOADS_DIR));
+}
 
 // Upload folders
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
@@ -151,13 +154,9 @@ app.get("/api/medicine/suggestions", suggestionsHandler);
 // ---- end suggestions ----
 
 // Routes (leave unchanged - already modular and clean)
-// Routes (shared instances so aliases work)
-app.use("/api/pharmacies", pharmaciesRouter);
-app.use("/api/pharmacy",  pharmaciesRouter);   // keep both (you already had both)
-
-// ✅ Use ONE medicines router instance and mount on both prefixes
-app.use("/api/medicines", medicinesRouter);    // plural
-app.use("/api/medicine",  medicinesRouter);    // singular alias (compat)
+// replace the four lines above with just these two:
+app.use("/api", pharmaciesRouter);
+app.use("/api", medicinesRouter);
 
 app.use("/api/orders", require("./routes/orders"));
 

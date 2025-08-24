@@ -191,12 +191,12 @@ router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, r
     }
     if (body.discount !== undefined) med.discount = body.discount;
 
-    // images (append)
-    if (req.files && req.files.length) {
-      const images = req.files.map((f) => "/uploads/medicines/" + f.filename);
-      med.images = [...(med.images || []), ...images];
-      if (!med.img) med.img = med.images[0];
-    }
+   // images (append)
+if (req.files && req.files.length) {
+  const images = req.files.map((f) => isS3 ? f.location : ("/uploads/medicines/" + f.filename));
+  med.images = [...(med.images || []), ...images];
+  if (!med.img) med.img = med.images[0];
+}
 
     await med.save();
     res.json({ success: true, medicine: med });
