@@ -39,7 +39,18 @@ const ordersRouter = require('./routes/orders');
 const medicinesRouter = require("./routes/medicines");
 const pharmaciesRouter = require("./routes/pharmacies"); // optional, for consistency
 const upload = require('./utils/upload');
-const isS3 = !!process.env.AWS_BUCKET_NAME;
+
+// ---- S3 guard (put near your other env reads) ----
+const haveS3Creds =
+  !!process.env.AWS_BUCKET_NAME &&
+  !!process.env.AWS_ACCESS_KEY_ID &&
+  !!process.env.AWS_SECRET_ACCESS_KEY;
+
+const useS3 = process.env.USE_S3 === '1' && haveS3Creds;  // opt-in
+// ---------------------------------------------------
+
+const isS3 = !!process.env.AWS_BUCKET_NAME; // keep for legacy uses elsewhere
+
 const { createPaymentRecord } = require('./controllers/paymentsController');
 const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000").split(",").map(url => url.trim());
 
@@ -140,12 +151,16 @@ async function suggestionsHandler(req, res) {
       .limit(lim)
       .lean();
 
+    // ✅ Debug log *inside* handler
+    console.log("Suggestions query:", { pharmacyId, exclude, count: items.length });
+
     res.json(items.map(doc => ({ ...doc, pharmacyId: (doc.pharmacyId || doc.pharmacy || "").toString() })));
   } catch (err) {
     console.error("GET /suggestions error:", err);
     res.status(500).json({ message: "Failed to fetch suggestions" });
   }
 }
+
 app.get("/api/suggestions", suggestionsHandler);
 app.get("/api/medicines/suggestions", suggestionsHandler);
 app.get("/api/medicine/suggestions", suggestionsHandler);
@@ -666,12 +681,12 @@ async function generateMedicineImage(medicineName) {
 // --- accept common field names for images and avoid "Unexpected field"
 const imageFields = [
   { name: "images", maxCount: 8 },
-  { name: "image",  maxCount: 1 },
+  { name: "image",  maxCount: 8 },   // changed from 1 -> 8
   { name: "photo",  maxCount: 8 },
   { name: "file",   maxCount: 8 },
 ];
 
-const pharmacyImagesUpload = isS3
+const pharmacyImagesUpload = useS3
   ? upload.fields(imageFields)              // S3 wrapper respects field names
   : multer({
       storage: multer.diskStorage({
@@ -682,7 +697,8 @@ const pharmacyImagesUpload = isS3
         },
         filename: (req, file, cb) =>
           cb(null, Date.now() + path.extname(file.originalname))
-      })
+      }),
+      limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
     }).fields(imageFields);
 
 // helper: detect multipart/form-data
@@ -763,7 +779,7 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
 
       // files from either shape
       const imgs = collectImageFiles(req).map(f =>
-        isS3
+        useS3
           ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
           : "/uploads/medicines/" + (f.filename || f.key)
       );
@@ -806,16 +822,19 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
   };
 
   if (isMultipart(req)) {
-    return pharmacyImagesUpload(req, res, (err) => {
-      if (err) {
-        return res.status(400).json({ error: "Upload error", detail: err.message });
-      }
-      run();
-    });
-  }
-  run(); // JSON path (no files)
+  return pharmacyImagesUpload(req, res, (err) => {
+    if (err) {
+      console.error("Multer upload error:", err);
+      const msg = err.code === "LIMIT_FILE_SIZE" ? "Image too large" :
+                  err.code === "LIMIT_UNEXPECTED_FILE" ? "Unexpected field" :
+                  err.message || "Upload error";
+      return res.status(400).json({ error: msg });
+    }
+    run();
+  });
+}
+run(); // JSON path (no files)
 });
-
 
 /** PATCH: edit medicine — now updates composition & company too */
 app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
@@ -852,8 +871,8 @@ app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
 
       // append any newly uploaded images
       const imgs = collectImageFiles(req).map(f =>
-        isS3 ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
-             : "/uploads/medicines/" + (f.filename || f.key)
+        useS3 ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
+              : "/uploads/medicines/" + (f.filename || f.key)
       );
       if (imgs.length) {
         med.images = [...(med.images || []), ...imgs];

@@ -316,47 +316,4 @@ router.get("/offers", async (req, res) => {
   }
 });
 
-// GET /api/medicines/suggestions?pharmacyId=...&exclude=a,b,c&limit=10
-router.get("/suggestions", async (req, res) => {
-  try {
-    const { pharmacyId, exclude = "", limit = 10 } = req.query;
-    if (!pharmacyId)
-      return res.status(400).json({ message: "pharmacyId is required" });
-
-    const lim = Math.min(parseInt(limit || 10, 10), 50);
-
-    const excludeIds = exclude
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => ObjectId.isValid(s))
-      .map((s) => new ObjectId(s));
-
-    const or = [];
-    if (ObjectId.isValid(pharmacyId))
-      or.push({ pharmacy: new ObjectId(pharmacyId) });
-    or.push({ pharmacyId: pharmacyId }); // string field, if you have it
-
-    const filter = {
-      ...(or.length ? { $or: or } : {}),
-      ...(excludeIds.length ? { _id: { $nin: excludeIds } } : {}),
-    };
-
-    const items = await Medicine.find(filter)
-      .select("_id name price brand img mrp category pharmacy pharmacyId")
-      .sort({ popularity: -1, createdAt: -1 })
-      .limit(lim)
-      .lean();
-
-    const normalized = items.map((doc) => ({
-      ...doc,
-      pharmacyId: (doc.pharmacyId || doc.pharmacy || "").toString(),
-    }));
-
-    res.json(normalized);
-  } catch (err) {
-    console.error("GET /api/medicines/suggestions error:", err);
-    res.status(500).json({ message: "Failed to fetch suggestions" });
-  }
-});
-
 module.exports = router;
