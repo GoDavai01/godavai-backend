@@ -13,29 +13,34 @@ const {
   Types: { ObjectId },
 } = mongoose;
 
-// Add this near the top with the other requires
 const auth = require("../middleware/auth");
 
 const isS3 = !!process.env.AWS_BUCKET_NAME;
 
-let upload;
-if (isS3) {
-  // Use your existing S3 upload middleware (from utils/upload.js or similar)
-  upload = require("../utils/upload"); // Make sure this points to your S3 multer config
-} else {
-  // Only set up diskStorage if NOT using S3
-  const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-      const dir = "uploads/medicines"; // relative, not absolute!
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); // Ensure parent folders!
-      cb(null, dir);
-    },
-    filename: function (req, file, cb) {
-      cb(null, Date.now() + path.extname(file.originalname));
-    },
-  });
-  upload = multer({ storage });
-}
+/* ---------- tolerant upload helper (accept any image field) ---------- */
+const makeUploadAny = () => {
+  if (isS3) {
+    const s3Upload = require("../utils/upload"); // your S3 multer config
+    return s3Upload.any ? s3Upload.any() : s3Upload;
+  } else {
+    const storage = multer.diskStorage({
+      destination: (req, file, cb) => {
+        const dir = "uploads/medicines";
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (req, file, cb) =>
+        cb(null, Date.now() + path.extname(file.originalname)),
+    });
+    return multer({ storage }).any();
+  }
+};
+const uploadAny = makeUploadAny();
+const isMultipart = (req) =>
+  (req.headers["content-type"] || "")
+    .toLowerCase()
+    .includes("multipart/form-data");
+/* -------------------------------------------------------------------- */
 
 function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
@@ -54,20 +59,11 @@ function normalizeCategory(input) {
 }
 const asTrimmedString = (v) => (v ?? "").toString().trim();
 
-// --- Add new medicine (support MULTIPLE images) ---
-// NOTE: we REQUIRE auth so req.user.pharmacyId is guaranteed
-router.post(
-  "/pharmacy/medicines",
-  auth,
-  upload.array("images", 5),
-  async (req, res) => {
+/* ===================== ADD MEDICINE (JSON or multipart) ===================== */
+router.post("/pharmacy/medicines", auth, (req, res) => {
+  const run = async () => {
     try {
-      // Resolve pharmacyId safely
-      const pharmacyId =
-        req.user?.pharmacyId ||
-        req.headers["x-pharmacy-id"];
-
-      // read fields
+      const pharmacyId = req.user?.pharmacyId || req.headers["x-pharmacy-id"];
       const {
         name,
         brand,
@@ -82,50 +78,74 @@ router.post(
         customType,
       } = req.body;
 
-      // validate basics (allow name OR brand)
-      if (!pharmacyId || (!name && !brand) || price === undefined || mrp === undefined || stock === undefined) {
+      if (
+        !pharmacyId ||
+        (!name && !brand) ||
+        price === undefined ||
+        mrp === undefined ||
+        stock === undefined
+      ) {
         return res.status(400).json({ error: "Missing fields." });
       }
 
-      // Normalize numeric fields (avoid strings sneaking into schema)
-      const priceNum = Number(price);
-      const mrpNum   = Number(mrp);
-      const stockNum = Number(stock);
-      const discNum  = discount !== undefined && discount !== "" ? Number(discount) : 0;
-
-      if ([priceNum, mrpNum, stockNum].some(n => Number.isNaN(n))) {
-        return res.status(400).json({ error: "price/mrp/stock must be numbers" });
+      // numeric coercion + validation
+      const num = (v) =>
+        v === "" || v === null || v === undefined ? NaN : Number(v);
+      const priceNum = num(price);
+      const mrpNum = num(mrp);
+      const stockNum = num(stock);
+      const discNum = isNaN(num(discount)) ? 0 : num(discount);
+      if ([priceNum, mrpNum, stockNum].some(Number.isNaN)) {
+        return res
+          .status(400)
+          .json({ error: "price/mrp/stock must be numbers" });
       }
 
-      // === Schema-aware coercion for category & type (NEW) ===
-      const catList = normalizeCategory(category);
-      const catIsArrayInSchema =
-        (Medicine.schema.paths.category?.instance || "").toLowerCase() === "array";
-      const categoryValue = catIsArrayInSchema
-        ? (catList.length ? catList : ["Miscellaneous"])
-        : (Array.isArray(catList) ? catList[0] : catList || "Miscellaneous");
+      // normalize category / type to match schema at runtime
+      const normalizeList = (x) => {
+        try {
+          if (typeof x === "string" && x.trim().startsWith("[")) {
+            return JSON.parse(x);
+          }
+        } catch {}
+        return Array.isArray(x) ? x : x ? [String(x)] : [];
+      };
 
-      const typeList = Array.isArray(type) ? type : (type ? [type] : []);
+      const catList = normalizeList(category);
+      const catIsArrayInSchema =
+        (Medicine.schema.paths.category?.instance || "").toLowerCase() ===
+        "array";
+      const categoryValue = catIsArrayInSchema
+        ? catList.length
+          ? catList
+          : ["Miscellaneous"]
+        : catList[0] || "Miscellaneous";
+
+      const typeList = normalizeList(type);
       const typeIsArrayInSchema =
         (Medicine.schema.paths.type?.instance || "").toLowerCase() === "array";
       const typeValue =
-        (type === "Other")
-          ? (customType || "Other")
-          : (typeIsArrayInSchema
-              ? (typeList.length ? typeList : ["Tablet"])
-              : (typeList[0] || "Tablet"));
-      // === end schema-aware coercion ===
+        type === "Other"
+          ? customType || "Other"
+          : typeIsArrayInSchema
+          ? typeList.length
+            ? typeList
+            : ["Tablet"]
+          : typeList[0] || "Tablet";
 
-      // Merge name/brand
-      const mergedName = (name && name.trim()) || (brand && brand.trim());
+      // collect images (filter to image/*)
+      const fileBag = (req.files || []).filter((f) =>
+        /^image\//i.test(f.mimetype || "")
+      );
+      const images = fileBag.map((f) =>
+        isS3
+          ? f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`
+          : "/uploads/medicines/" + (f.filename || f.key)
+      );
 
-      // Collect images if any
-      let images = [];
-      if (req.files && req.files.length) {
-        images = req.files.map(f => isS3 ? f.location : ("/uploads/medicines/" + f.filename));
-      }
+      const mergedName =
+        (name && name.trim()) || (brand && brand.trim()) || "";
 
-      // Build doc
       const med = new Medicine({
         name: mergedName,
         brand: brand || mergedName,
@@ -135,78 +155,118 @@ router.post(
         mrp: mrpNum,
         stock: stockNum,
         discount: discNum,
-        category: categoryValue,  // <-- use coerced value
-        type: typeValue,          // <-- use coerced value
+        category: categoryValue,
+        type: typeValue,
         pharmacy: pharmacyId,
         img: images[0],
         images,
       });
 
-      // Make AI description BEST-EFFORT (never block save)
+      // best-effort AI description
       try {
         const desc = await generateDescription(mergedName);
         if (desc) med.description = desc;
-      } catch (e) {
-        console.warn("generateDescription failed:", e.message || e);
+      } catch {}
+
+      await med.save();
+      return res.status(201).json({ success: true, medicine: med });
+    } catch (err) {
+      console.error("Add new medicine error:", err);
+      if (err.name === "ValidationError" || err.name === "CastError") {
+        return res
+          .status(400)
+          .json({ error: "Invalid data", detail: err.message });
+      }
+      if (err.code === 11000) {
+        return res
+          .status(409)
+          .json({ error: "Duplicate", detail: err.message });
+      }
+      return res
+        .status(500)
+        .json({ error: "Failed to add medicine", detail: err.message || String(err) });
+    }
+  };
+
+  return isMultipart(req)
+    ? uploadAny(req, res, (err) =>
+        err
+          ? res
+              .status(400)
+              .json({ message: "Upload error", error: err.message })
+          : run()
+      )
+    : run();
+});
+/* ========================================================================== */
+
+/* ===================== EDIT MEDICINE (JSON or multipart) =================== */
+router.patch("/pharmacy/medicines/:id", auth, (req, res) => {
+  const run = async () => {
+    try {
+      const med = await Medicine.findOne({
+        _id: req.params.id,
+        pharmacy: req.user.pharmacyId,
+      });
+      if (!med) return res.status(404).json({ error: "Medicine not found." });
+
+      const b = req.body || {};
+      const S = (v) => (v ?? "").toString().trim();
+
+      // strings
+      if (b.name !== undefined) med.name = S(b.name);
+      if (b.brand !== undefined) med.brand = S(b.brand);
+      if (b.composition !== undefined) med.composition = S(b.composition);
+      if (b.company !== undefined) med.company = S(b.company);
+
+      // keep name/brand in sync
+      if (!med.name && med.brand) med.name = med.brand;
+      if (!med.brand && med.name) med.brand = med.name;
+
+      // numbers / arrays
+      if (b.price !== undefined) med.price = Number(b.price);
+      if (b.mrp !== undefined) med.mrp = Number(b.mrp);
+      if (b.stock !== undefined) med.stock = Number(b.stock);
+      if (b.discount !== undefined) med.discount = Number(b.discount);
+      if (b.category !== undefined) med.category = normalizeCategory(b.category);
+      if (b.type !== undefined)
+        med.type = b.type === "Other" ? S(b.customType) || "Other" : S(b.type);
+
+      // images (append)
+      if (req.files?.length) {
+        const more = req.files
+          .filter((f) => /^image\//i.test(f.mimetype || ""))
+          .map((f) =>
+            isS3
+              ? f.location ||
+                `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`
+              : "/uploads/medicines/" + (f.filename || f.key)
+          );
+        med.images = [...(med.images || []), ...more];
+        if (!med.img) med.img = med.images[0];
       }
 
       await med.save();
-      return res.json({ success: true, medicine: med });
+      res.json({ success: true, medicine: med });
     } catch (err) {
-      console.error("Add new medicine error:", err);
-      return res.status(500).json({ error: "Failed to add medicine", detail: String(err?.message || err) });
+      console.error("Edit medicine error:", err);
+      res.status(500).json({ error: "Failed to update medicine" });
     }
-  }
-);
+  };
 
-// Edit a medicine (support MULTIPLE images)
-router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, res) => {
-  try {
-    const med = await Medicine.findById(req.params.id);
-    if (!med) return res.status(404).json({ error: "Medicine not found." });
-
-    // Avoid destructuring; read from req.body so we can test for undefined precisely
-    // and not accidentally skip empty-string updates.
-    const body = req.body;
-
-    // name/brand
-    if (body.name !== undefined) med.name = body.name;
-    if (body.brand !== undefined) med.brand = body.brand;
-
-    // keep them in sync if one side is empty after update
-    if (!med.name && med.brand) med.name = med.brand;
-    if (!med.brand && med.name) med.brand = med.name;
-
-    // ✅ make sure these always write through (normalize to string)
-    if (body.composition !== undefined) med.composition = asTrimmedString(body.composition);
-    if (body.company !== undefined) med.company = asTrimmedString(body.company);
-
-    // numbers / arrays — do not gate on truthiness
-    if (body.price !== undefined) med.price = body.price;
-    if (body.mrp !== undefined) med.mrp = body.mrp;
-    if (body.stock !== undefined) med.stock = body.stock;
-
-    if (body.category !== undefined) {
-      med.category = normalizeCategory(body.category);
-    }
-    if (body.discount !== undefined) med.discount = body.discount;
-
-   // images (append)
-if (req.files && req.files.length) {
-  const images = req.files.map((f) => isS3 ? f.location : ("/uploads/medicines/" + f.filename));
-  med.images = [...(med.images || []), ...images];
-  if (!med.img) med.img = med.images[0];
-}
-
-    await med.save();
-    res.json({ success: true, medicine: med });
-  } catch (err) {
-    console.error("Edit medicine error:", err);
-    res.status(500).json({ error: "Failed to update medicine" });
-  }
+  return isMultipart(req)
+    ? uploadAny(req, res, (err) =>
+        err
+          ? res
+              .status(400)
+              .json({ message: "Upload error", error: err.message })
+          : run()
+      )
+    : run();
 });
+/* ========================================================================== */
 
-// Remove a single image from a medicine
+// Remove a single image from a medicine (kept as-is)
 router.patch("/pharmacy/medicines/:id/remove-image", async (req, res) => {
   const { image } = req.body; // pass the image URL/path to remove
   if (!image) return res.status(400).json({ error: "Image path required." });
@@ -220,9 +280,6 @@ router.patch("/pharmacy/medicines/:id/remove-image", async (req, res) => {
     if (med.img === image) med.img = med.images[0] || "";
 
     await med.save();
-
-    // Optionally: delete file from disk if local storage
-
     res.json({ success: true, images: med.images, img: med.img });
   } catch (err) {
     console.error("Remove medicine image error:", err);
@@ -261,9 +318,9 @@ router.get("/find", async (req, res) => {
   const { name } = req.query;
   if (!name) return res.json([]);
   try {
-    const meds = await Medicine.find({ name: { $regex: `^${name}$`, $options: "i" } }).populate(
-      "pharmacy"
-    );
+    const meds = await Medicine.find({
+      name: { $regex: `^${name}$`, $options: "i" },
+    }).populate("pharmacy");
     const output = meds.map((med) => ({
       pharmacyName: med.pharmacy?.name || "Unknown",
       pharmacyId: med.pharmacy?._id,
@@ -295,7 +352,7 @@ router.get("/by-name", async (req, res) => {
               coordinates: [parseFloat(lng), parseFloat(lat)],
             },
             distanceField: "distance",
-            maxDistance: parseInt(maxDistance), // meters
+            maxDistance: parseInt(maxDistance),
             spherical: true,
             query: { active: true, status: "approved" },
           },
@@ -303,34 +360,31 @@ router.get("/by-name", async (req, res) => {
         { $limit: 25 },
       ]);
     } else {
-      // Fallback to city/area if no location
       let pharmacyFilter = { active: true, status: "approved" };
-      if (req.query.city) pharmacyFilter.city = { $regex: req.query.city, $options: "i" };
-      if (req.query.area) pharmacyFilter.area = { $regex: req.query.area, $options: "i" };
+      if (req.query.city)
+        pharmacyFilter.city = { $regex: req.query.city, $options: "i" };
+      if (req.query.area)
+        pharmacyFilter.area = { $regex: req.query.area, $options: "i" };
       pharmacies = await Pharmacy.find(pharmacyFilter);
     }
 
     const pharmacyIds = pharmacies.map((p) => p._id);
 
-    // Get all medicines with this name from these pharmacies
     const meds = await Medicine.find({
       name: { $regex: `^${name}$`, $options: "i" },
       pharmacy: { $in: pharmacyIds },
       stock: { $gt: 0 },
     }).populate("pharmacy");
 
-    // Map pharmacyId -> distance
     const distMap = {};
     pharmacies.forEach((p) => (distMap[p._id.toString()] = p.distance));
 
-    // Sort medicines by distance
     meds.sort(
       (a, b) =>
         (distMap[a.pharmacy._id.toString()] || 1e9) -
         (distMap[b.pharmacy._id.toString()] || 1e9)
     );
 
-    // Optionally: include the pharmacy distance in response for UI
     const output = meds.map((med) => ({
       pharmacy: med.pharmacy,
       pharmacyName: med.pharmacy?.name || "Unknown",
@@ -360,7 +414,10 @@ router.get("/all", async (req, res) => {
       const pharmacyIds = pharmacies.map((p) => p._id);
       filter.pharmacy = { $in: pharmacyIds };
     }
-    const medicines = await Medicine.find(filter).populate("pharmacy", "name area city");
+    const medicines = await Medicine.find(filter).populate(
+      "pharmacy",
+      "name area city"
+    );
     res.json(medicines);
   } catch (err) {
     console.error("All medicines in city error:", err);
@@ -394,7 +451,9 @@ async function getMostOrderedMedicines(req, res) {
     let results = [];
     if (topMeds.length > 0) {
       const ids = topMeds.map((m) => m._id);
-      const medicines = await Medicine.find({ _id: { $in: ids } }).populate("pharmacy");
+      const medicines = await Medicine.find({ _id: { $in: ids } }).populate(
+        "pharmacy"
+      );
       const idToMed = {};
       medicines.forEach((med) => {
         idToMed[med._id.toString()] = med;
@@ -479,7 +538,8 @@ router.get("/offers", async (req, res) => {
 router.get("/suggestions", async (req, res) => {
   try {
     const { pharmacyId, exclude = "", limit = 10 } = req.query;
-    if (!pharmacyId) return res.status(400).json({ message: "pharmacyId is required" });
+    if (!pharmacyId)
+      return res.status(400).json({ message: "pharmacyId is required" });
 
     const lim = Math.min(parseInt(limit || 10, 10), 50);
 
@@ -490,7 +550,8 @@ router.get("/suggestions", async (req, res) => {
       .map((s) => new ObjectId(s));
 
     const or = [];
-    if (ObjectId.isValid(pharmacyId)) or.push({ pharmacy: new ObjectId(pharmacyId) });
+    if (ObjectId.isValid(pharmacyId))
+      or.push({ pharmacy: new ObjectId(pharmacyId) });
     or.push({ pharmacyId: pharmacyId }); // string field, if you have it
 
     const filter = {
@@ -516,4 +577,4 @@ router.get("/suggestions", async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;
