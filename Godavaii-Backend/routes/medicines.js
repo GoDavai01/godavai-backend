@@ -56,11 +56,7 @@ const asTrimmedString = (v) => (v ?? "").toString().trim();
 
 // --- Add new medicine (support MULTIPLE images) ---
 // NOTE: we REQUIRE auth so req.user.pharmacyId is guaranteed
-router.post(
-  "/pharmacy/medicines",
-  auth,
-  upload.array("images", 5),
-  async (req, res) => {
+router.post("/medicines", auth, upload.array("images", 5), async (req, res) => {
     try {
       // Resolve pharmacyId safely
       const pharmacyId =
@@ -145,7 +141,7 @@ router.post(
 );
 
 // Edit a medicine (support MULTIPLE images)
-router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, res) => {
+router.patch("/medicines/:id", upload.array("images", 5), async (req, res) => {
   try {
     const med = await Medicine.findById(req.params.id);
     if (!med) return res.status(404).json({ error: "Medicine not found." });
@@ -192,7 +188,7 @@ router.patch("/pharmacy/medicines/:id", upload.array("images", 5), async (req, r
 });
 
 // Remove a single image from a medicine
-router.patch("/pharmacy/medicines/:id/remove-image", async (req, res) => {
+router.patch("/medicines/:id/remove-image", async (req, res) => {
   const { image } = req.body; // pass the image URL/path to remove
   if (!image) return res.status(400).json({ error: "Image path required." });
   try {
