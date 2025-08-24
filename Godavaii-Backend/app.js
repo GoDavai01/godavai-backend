@@ -100,15 +100,14 @@ app.use(cors({
   ].join(","),
 }));
 app.options("*", cors()); // answer all preflights (OPTIONS)
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
-if (!isS3) {
-  app.use("/uploads", express.static(UPLOADS_DIR));
-}
 
 // Upload folders
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
 if (!isS3 && !fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+if (!isS3) app.use("/uploads", express.static(UPLOADS_DIR));
 
 console.log("BOOT: suggestions routes should be mounted");
 app.get("/api/whoami", (req,res)=>res.json({ ok:true, tag:"whoami" }));
@@ -665,17 +664,17 @@ async function generateMedicineImage(medicineName) {
 // ========== PHARMACY MEDICINE IMAGE UPLOAD ENDPOINTS ==========
 
 const pharmacyImagesUpload = isS3
-  ? upload.array("images", 5) // S3 path (keep same)
+  ? upload.any()
   : multer({
       storage: multer.diskStorage({
-        destination: (req, file, cb) => {
-          const folder = path.join(UPLOADS_DIR, "medicines");
-          if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-          cb(null, folder);
-        },
-        filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+         destination: (req, file, cb) => {
+           const folder = path.join(UPLOADS_DIR, "medicines");
+           if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+           cb(null, folder);
+         },
+         filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
       })
-    }).array("images", 5); // Local path (keep same)
+    }).any();
     // helper: detect multipart/form-data
 const isMultipart = req =>
   (req.headers['content-type'] || '').toLowerCase().includes('multipart/form-data');
@@ -747,10 +746,12 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
         ? (customType || "Other")
         : (typeIsArrayInSchema ? (typeList.length ? typeList : ["Tablet"]) : (typeList[0] || "Tablet"));
 
-      // images (S3 or local)
-      const images = (req.files || []).map(f =>
-        isS3 ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
-             : "/uploads/medicines/" + (f.filename || f.key)
+      // keep only image/* files & support images|image|file|photo field names
+      const fileBag = (req.files || []).filter(f => /^image\//i.test(f.mimetype));
+      const images = fileBag.map(f =>
+      isS3
+      ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
+      : "/uploads/medicines/" + (f.filename || f.key)
       );
 
       const mergedName = (name && name.trim()) || (brand && brand.trim());
