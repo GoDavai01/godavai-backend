@@ -156,7 +156,8 @@ app.use("/api/pharmacies", pharmaciesRouter);
 app.use("/api/pharmacy",  pharmaciesRouter);   // keep both (you already had both)
 
 // ✅ Use ONE medicines router instance and mount on both prefixes
-app.use("/api/pharmacy", medicinesRouter);
+app.use("/api/medicines", medicinesRouter);    // plural
+app.use("/api/medicine",  medicinesRouter);    // singular alias (compat)
 
 app.use("/api/orders", require("./routes/orders"));
 
@@ -661,6 +662,191 @@ async function generateMedicineImage(medicineName) {
   await new Promise(res => out.on('finish', res));
   return "/uploads/" + fileName;
 }
+
+// ========== PHARMACY MEDICINE IMAGE UPLOAD ENDPOINTS ==========
+
+const pharmacyImagesUpload = isS3
+  ? upload.array("images", 5) // S3 path (keep same)
+  : multer({
+      storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+          const folder = path.join(UPLOADS_DIR, "medicines");
+          if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+          cb(null, folder);
+        },
+        filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+      })
+    }).array("images", 5); // Local path (keep same)
+    // helper: detect multipart/form-data
+const isMultipart = req =>
+  (req.headers['content-type'] || '').toLowerCase().includes('multipart/form-data');
+
+/** keep existing helpers — no behavioral change */
+const normalizeCategory = (input) => {
+  let cat = input;
+  try {
+    if (typeof cat === "string" && cat.trim().startsWith("[")) cat = JSON.parse(cat);
+  } catch (_) {}
+  if (!Array.isArray(cat)) cat = cat ? [String(cat)] : ["Miscellaneous"];
+  return cat;
+};
+const asTrimmedString = (v) => (v ?? "").toString().trim();
+
+/** GET: dashboard list (unchanged) */
+app.get("/api/pharmacy/medicines", auth, async (req, res) => {
+  if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
+  const medicines = await Medicine.find({ pharmacy: req.user.pharmacyId });
+  res.json(medicines);
+});
+
+/** POST: add medicine — now always writes composition & company */
+app.post("/api/pharmacy/medicines", auth, (req, res) => {
+  const isMultipart = (req.headers['content-type'] || '').toLowerCase().includes('multipart/form-data');
+
+  // use the same uploader you already defined above
+  const runUpload = cb => {
+    if (isMultipart) {
+      return pharmacyImagesUpload(req, res, err => {
+        if (err) return res.status(400).json({ error: "Upload error", detail: err.message });
+        cb();
+      });
+    }
+    cb();
+  };
+
+  runUpload(async () => {
+    try {
+      const pharmacyId = req.user?.pharmacyId;
+      const {
+        name, brand, price, mrp, stock,
+        category, discount, composition, company, type, customType
+      } = req.body;
+
+      if (!pharmacyId || (!name && !brand) || price === undefined || mrp === undefined || stock === undefined || !category) {
+        return res.status(400).json({ error: "Missing fields." });
+      }
+
+      // numeric coercion with validation
+      const num = v => (v === "" || v === null || v === undefined) ? NaN : Number(v);
+      const priceNum = num(price), mrpNum = num(mrp), stockNum = num(stock), discNum = isNaN(num(discount)) ? 0 : num(discount);
+      if ([priceNum, mrpNum, stockNum].some(Number.isNaN)) {
+        return res.status(400).json({ error: "price/mrp/stock must be numbers" });
+      }
+
+      // normalize category/type to whatever the schema expects at runtime
+      const normalizeList = (x) => {
+        try { if (typeof x === "string" && x.trim().startsWith("[")) return JSON.parse(x); } catch {}
+        return Array.isArray(x) ? x : (x ? [String(x)] : []);
+      };
+      const catList = normalizeList(category);
+      const catIsArrayInSchema = (Medicine.schema.paths.category?.instance || "").toLowerCase() === "array";
+      const categoryValue = catIsArrayInSchema ? (catList.length ? catList : ["Miscellaneous"]) : (catList[0] || "Miscellaneous");
+
+      const typeList = normalizeList(type);
+      const typeIsArrayInSchema = (Medicine.schema.paths.type?.instance || "").toLowerCase() === "array";
+      const typeValue = (type === "Other")
+        ? (customType || "Other")
+        : (typeIsArrayInSchema ? (typeList.length ? typeList : ["Tablet"]) : (typeList[0] || "Tablet"));
+
+      // images (S3 or local)
+      const images = (req.files || []).map(f =>
+        isS3 ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
+             : "/uploads/medicines/" + (f.filename || f.key)
+      );
+
+      const mergedName = (name && name.trim()) || (brand && brand.trim());
+
+      const med = new Medicine({
+        name: mergedName,
+        brand: brand || mergedName,
+        composition: (composition ?? "").toString().trim(),
+        company: (company ?? "").toString().trim(),
+        price: priceNum,
+        mrp: mrpNum,
+        stock: stockNum,
+        discount: discNum,
+        category: categoryValue,
+        type: typeValue,
+        pharmacy: pharmacyId,
+        img: images[0],
+        images
+      });
+
+      // non-blocking description
+      try {
+        const desc = await generateMedicineDescription(mergedName);
+        if (desc) med.description = desc;
+      } catch {}
+
+      await med.save();
+      return res.status(201).json({ success: true, medicine: med });
+    } catch (e) {
+      // return helpful error (validation/cast) instead of a blind 500
+      console.error("Add new medicine error:", e);
+      if (e.name === "ValidationError" || e.name === "CastError") {
+        return res.status(400).json({ error: "Invalid data", detail: e.message });
+      }
+      if (e.code === 11000) {
+        return res.status(409).json({ error: "Duplicate", detail: e.message });
+      }
+      return res.status(500).json({ error: "Failed to add medicine", detail: e.message || String(e) });
+    }
+  });
+});
+
+
+/** PATCH: edit medicine — now updates composition & company too */
+app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
+  const handle = async () => {
+    try {
+      const med = await Medicine.findOne({ _id: req.params.id, pharmacy: req.user.pharmacyId });
+      if (!med) return res.status(404).json({ message: "Medicine not found" });
+
+      const b = req.body || {};
+      const S = v => (v ?? "").toString().trim();
+
+      // strings
+      if (b.name !== undefined)        med.name        = S(b.name);
+      if (b.brand !== undefined)       med.brand       = S(b.brand);
+      if (b.composition !== undefined) med.composition = S(b.composition);
+      if (b.company !== undefined)     med.company     = S(b.company);
+
+      // keep in sync
+      if (!med.name && med.brand) med.name = med.brand;
+      if (!med.brand && med.name) med.brand = med.name;
+
+      // numbers / arrays
+      if (b.price !== undefined)    med.price    = Number(b.price);
+      if (b.mrp !== undefined)      med.mrp      = Number(b.mrp);
+      if (b.stock !== undefined)    med.stock    = Number(b.stock);
+      if (b.discount !== undefined) med.discount = Number(b.discount);
+      if (b.category !== undefined) med.category = normalizeCategory(b.category);
+      if (b.type !== undefined)     med.type     = b.type === "Other" ? (S(b.customType) || "Other") : S(b.type);
+
+      // images (append)
+      if (req.files?.length) {
+        const more = req.files.map(f => isS3 ? f.location : "/uploads/medicines/" + f.filename);
+        med.images = [...(med.images || []), ...more];
+        if (!med.img) med.img = med.images[0];
+      }
+
+      await med.save();
+      res.json({ success: true, medicine: med });
+    } catch (e) {
+      console.error("Edit medicine error:", e);
+      res.status(500).json({ message: "Failed to update medicine" });
+    }
+  };
+
+  if (isMultipart(req)) {
+    pharmacyImagesUpload(req, res, err => {
+      if (err) return res.status(400).json({ message: "Upload error", error: err.message });
+      handle();
+    });
+  } else {
+    handle();
+  }
+});
 
 /** DELETE (unchanged) */
 app.delete("/api/pharmacy/medicines/:id", auth, async (req, res) => {
@@ -1343,3 +1529,4 @@ app.get("/routes", (req, res) => {
 });
 
 module.exports = app;
+ 
