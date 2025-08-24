@@ -126,7 +126,7 @@ app.get("/api/whoami", (req,res)=>res.json({ ok:true, tag:"whoami" }));
 // ---- SUGGESTIONS: mount early so nothing can swallow it ----
 // --- prove boot + mount suggestions early ---
 console.log("BOOT: mounting /api/suggestions (+aliases)");
-const toObjId = (s) => mongoose.Types.ObjectId.isValid(s) ? new mongoose.Types.ObjectId(s) : null;
+const toObjId = s => mongoose.Types.ObjectId.isValid(s) ? new mongoose.Types.ObjectId(s) : null;
 
 async function suggestionsHandler(req, res) {
   try {
@@ -137,8 +137,8 @@ async function suggestionsHandler(req, res) {
     const excludeIds = exclude.split(",").map(s => toObjId(s.trim())).filter(Boolean);
 
     const or = [];
-    if (toObjId(pharmacyId)) or.push({ pharmacy: toObjId(pharmacyId) });
-    or.push({ pharmacyId });
+    if (toObjId(pharmacyId)) or.push({ pharmacy: toObjId(pharmacyId) }); // when stored as ObjectId
+    or.push({ pharmacyId });                                             // when stored as string
 
     const filter = {
       ...(or.length ? { $or: or } : {}),
@@ -151,16 +151,25 @@ async function suggestionsHandler(req, res) {
       .limit(lim)
       .lean();
 
-    // ✅ Debug log *inside* handler
-    console.log("Suggestions query:", { pharmacyId, exclude, count: items.length });
+    // Debug log INSIDE handler only — never at top level
+    console.log("Suggestions query:", {
+      pharmacyId,
+      excludeCount: excludeIds.length,
+      returned: items.length
+    });
 
-    res.json(items.map(doc => ({ ...doc, pharmacyId: (doc.pharmacyId || doc.pharmacy || "").toString() })));
+    // Ensure frontend always has a pharmacyId string
+    res.json(items.map(doc => ({
+      ...doc,
+      pharmacyId: (doc.pharmacyId || doc.pharmacy || "").toString()
+    })));
   } catch (err) {
     console.error("GET /suggestions error:", err);
     res.status(500).json({ message: "Failed to fetch suggestions" });
   }
 }
 
+// One handler, three aliases:
 app.get("/api/suggestions", suggestionsHandler);
 app.get("/api/medicines/suggestions", suggestionsHandler);
 app.get("/api/medicine/suggestions", suggestionsHandler);
@@ -734,16 +743,18 @@ app.options("/api/pharmacy/medicines", cors());
 app.options("/api/pharmacy/medicines/:id", cors());
 
 /** POST: add medicine — now always writes composition & company */
+// app.js  — replace the whole POST /api/pharmacy/medicines with this
+
 app.post("/api/pharmacy/medicines", auth, (req, res) => {
   const run = async () => {
     try {
       const pharmacyId = req.user?.pharmacyId;
 
-      // tolerate name OR brand – you set name from brand in the UI anyway
+      // tolerate brand-only (UI sets name from brand)
       const {
         name, brand, price, mrp, stock,
         category, discount, composition, company, type, customType
-      } = req.body;
+      } = req.body || {};
 
       if (!pharmacyId || (!name && !brand) || price === undefined || mrp === undefined || stock === undefined || !category) {
         return res.status(400).json({ error: "Missing fields." });
@@ -759,30 +770,36 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
         return res.status(400).json({ error: "price/mrp/stock must be numbers" });
       }
 
-      // normalize list fields coming from JSON or multipart
+      // handle category/type from JSON or multipart
       const toList = (x) => {
         try { if (typeof x === "string" && x.trim().startsWith("[")) return JSON.parse(x); } catch {}
         return Array.isArray(x) ? x : (x ? [String(x)] : []);
       };
 
       const catList = toList(category);
-      const catIsArrayInSchema = (Medicine.schema.paths.category?.instance || "").toLowerCase() === "array";
-      const categoryValue = catIsArrayInSchema
-        ? (catList.length ? catList : ["Miscellaneous"])
-        : (catList[0] || "Miscellaneous");
+      const categoryIsArray = (Medicine.schema.paths.category?.instance || "").toLowerCase() === "array";
+      const categoryValue = categoryIsArray ? (catList.length ? catList : ["Miscellaneous"])
+                                            : (catList[0] || "Miscellaneous");
 
       const typeList = toList(type);
-      const typeIsArrayInSchema = (Medicine.schema.paths.type?.instance || "").toLowerCase() === "array";
+      const typeIsArray = (Medicine.schema.paths.type?.instance || "").toLowerCase() === "array";
       const typeValue = (type === "Other")
         ? ((customType || "Other").toString().trim())
-        : (typeIsArrayInSchema ? (typeList.length ? typeList : ["Tablet"]) : (typeList[0] || "Tablet"));
+        : (typeIsArray ? (typeList.length ? typeList : ["Tablet"])
+                       : (typeList[0] || "Tablet"));
 
-      // files from either shape
-      const imgs = collectImageFiles(req).map(f =>
-        useS3
-          ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
-          : "/uploads/medicines/" + (f.filename || f.key)
-      );
+      // gather images regardless of multer shape
+      const filesArray = Array.isArray(req.files)
+        ? req.files
+        : Object.values(req.files || {}).flat();
+
+      const imgs = (filesArray || [])
+        .filter(f => /^image\//i.test(f.mimetype))
+        .map(f =>
+          useS3
+            ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
+            : "/uploads/medicines/" + (f.filename || f.key)
+        );
 
       const mergedName = (name && name.toString().trim()) || (brand && brand.toString().trim());
 
@@ -805,35 +822,42 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
       try {
         const desc = await generateMedicineDescription(mergedName);
         if (desc) med.description = desc;
-      } catch {}
+      } catch { /* ignore description failure */ }
 
       await med.save();
       return res.status(201).json({ success: true, medicine: med });
     } catch (e) {
       console.error("Add new medicine error:", e);
-      if (e.name === "ValidationError" || e.name === "CastError") {
+      if (e?.name === "ValidationError" || e?.name === "CastError") {
         return res.status(400).json({ error: "Invalid data", detail: e.message });
       }
-      if (e.code === 11000) {
+      if (e?.code === 11000) {
         return res.status(409).json({ error: "Duplicate", detail: e.message });
       }
-      return res.status(500).json({ error: "Failed to add medicine", detail: e.message || String(e) });
+      return res.status(500).json({ error: "Failed to add medicine", detail: e?.message || String(e) });
     }
   };
 
-  if (isMultipart(req)) {
-  return pharmacyImagesUpload(req, res, (err) => {
-    if (err) {
-      console.error("Multer upload error:", err);
-      const msg = err.code === "LIMIT_FILE_SIZE" ? "Image too large" :
-                  err.code === "LIMIT_UNEXPECTED_FILE" ? "Unexpected field" :
-                  err.message || "Upload error";
-      return res.status(400).json({ error: msg });
-    }
-    run();
-  });
-}
-run(); // JSON path (no files)
+  // IMPORTANT: only parse files first when multipart, then run()
+  const contentType = (req.headers["content-type"] || "").toLowerCase();
+  const multipart = contentType.includes("multipart/form-data");
+
+  if (multipart) {
+    return pharmacyImagesUpload(req, res, (err) => {
+      if (err) {
+        console.error("Multer upload error:", err);
+        const msg = err.code === "LIMIT_FILE_SIZE" ? "Image too large" :
+                    err.code === "LIMIT_UNEXPECTED_FILE" ? "Unexpected field" :
+                    err.message || "Upload error";
+        return res.status(400).json({ error: msg });
+      }
+      // now safely run your logic
+      return run();
+    });
+  }
+
+  // JSON path (no files)
+  return run();
 });
 
 /** PATCH: edit medicine — now updates composition & company too */
