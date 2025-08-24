@@ -1,2 +1,4 @@
-.env
-node_modules/
+
+# ignore temp nested repos
+New folder/Godavaii-App/
+New folder (2)/Godavaii-App/
