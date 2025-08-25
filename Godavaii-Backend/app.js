@@ -11,6 +11,29 @@ const express = require("express");
 const axios = require('axios');
 const MSG91_AUTHKEY = process.env.MSG91_AUTHKEY;
 const app = express();
+app.get("/__up", (req, res) => res.json({ ok: true, env: process.env.NODE_ENV }));
+app.get("/__routes", (req, res) => {
+  const out = [];
+  const split = (thing) => {
+    if (typeof thing === "string") return thing;
+    if (thing.fast_slash) return "";
+    const m = thing.toString().replace("\\/?", "").replace("(?=\\/|$)", "$")
+      .match(/^\/\^\\\/?(.*)\\\/\?\$\//);
+    return m ? "/" + m[1].replace(/\\\//g, "/") : "";
+  };
+  const walk = (base, layer) => {
+    if (layer.route && layer.route.path) {
+      Object.keys(layer.route.methods).forEach(m =>
+        out.push(`${m.toUpperCase()} ${base}${layer.route.path}`));
+    } else if (layer.name === "router" && layer.handle && layer.handle.stack) {
+      const newBase = base + split(layer.regexp);
+      layer.handle.stack.forEach(l => walk(newBase, l));
+    }
+  };
+  app._router.stack.forEach(l => walk("", l));
+  res.json(out.sort());
+});
+
 const cors = require("cors");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
@@ -287,6 +310,34 @@ const pharmacyDocsUpload = isS3
         cb(null, true);
       }
     }).fields(pharmacyDocFields);
+
+    app.get("/api/pharmacies/nearby", async (req, res) => {
+  try {
+    const lat = Number(req.query.lat);
+    const lng = Number(req.query.lng);
+    const maxDistance = Number(req.query.maxDistance || 8000);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ message: "lat/lng required numbers" });
+    }
+    const Pharmacy = require("./models/Pharmacy");
+    const docs = await Pharmacy.aggregate([
+      {
+        $geoNear: {
+          near: { type: "Point", coordinates: [lng, lat] },
+          distanceField: "dist.calculated",
+          maxDistance,
+          spherical: true,
+          query: { active: true, status: "approved" }
+        }
+      },
+      { $limit: 25 }
+    ]);
+    res.json(docs);
+  } catch (e) {
+    console.error("nearby error", e);
+    res.status(500).json({ message: "Geo query failed", error: e.message });
+  }
+});
 
 
 // ========== PHARMACY REGISTRATION (Multer comes BEFORE body parser!) ==========
