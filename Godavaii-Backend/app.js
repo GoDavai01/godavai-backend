@@ -188,7 +188,7 @@ app.use('/api/notifications', require('./routes/notifications'));
 app.use("/api/users", require("./routes/users"));
 app.use("/api/delivery", require("./routes/deliveryRoutes"));
 app.use("/api/prescriptions", require("./routes/prescriptions"));
-app.use("/api", require("./routes/search"));
+app.use("/api/search", require("./routes/search"));
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/support-chat", require("./routes/supportChat"));
