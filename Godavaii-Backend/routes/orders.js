@@ -1,6 +1,6 @@
 // routes/orders.js
 const express = require("express");
-const axios = require('axios');
+const axios = require("axios");
 const router = express.Router();
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
@@ -8,24 +8,35 @@ const Pharmacy = require("../models/Pharmacy");
 const User = require("../models/User");
 const auth = require("../middleware/auth");
 const { notifyUser, saveInAppNotification } = require("../utils/notify");
-const { createPaymentRecord } = require('../controllers/paymentsController');
+const { createPaymentRecord } = require("../controllers/paymentsController");
 const Payment = require("../models/Payment");
-const { markOrderDelivered } = require('../controllers/orderController');
+const { markOrderDelivered } = require("../controllers/orderController");
 const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY; // or process.env.GOOGLE_MAPS_API_KEY
 
 // 1. Create a new order
 router.post("/", auth, async (req, res) => {
   try {
     const {
-      items, address, dosage, paymentMethod, pharmacyId, total,
-      prescription, instructions, coupon, tip, donate,
-      deliveryInstructions, paymentStatus, paymentDetails,
+      items,
+      address,
+      dosage,
+      paymentMethod,
+      pharmacyId,
+      total,
+      prescription,
+      instructions,
+      coupon,
+      tip,
+      donate,
+      deliveryInstructions,
+      paymentStatus,
+      paymentDetails,
     } = req.body;
 
     if (!items || !address || !pharmacyId || !total) {
       return res.status(400).json({ error: "Missing required fields" });
     }
-    if (!address || typeof address.lat !== 'number' || typeof address.lng !== 'number') {
+    if (!address || typeof address.lat !== "number" || typeof address.lng !== "number") {
       return res.status(400).json({ error: "Address must include lat and lng (map pin)." });
     }
 
@@ -88,12 +99,41 @@ router.post("/", auth, async (req, res) => {
     }
 
     res.status(201).json(order);
-
   } catch (err) {
     console.error("Error placing order:", err);
     res.status(500).json({ error: "Order creation failed" });
   }
 });
+
+// --------------- EXACT ROUTES FIRST (before any /:orderId*) ---------------
+
+// Get all orders for logged-in user (JWT protected)
+router.get("/myorders", auth, async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user._id;
+    if (!userId) return res.status(401).json({ error: "User ID missing from token" });
+    const orders = await Order.find({ userId }).populate("pharmacy");
+    res.json(orders);
+  } catch (err) {
+    console.error("Fetch myorders failed:", err?.message || err);
+    res.status(500).json({ error: "Fetch order failed" });
+  }
+});
+
+// Debug/status/utility routes
+router.get("/debug", (req, res) => res.json({ ok: true }));
+router.get("/test", (req, res) => res.json({ ok: true }));
+router.get("/alive", (req, res) => res.json({ status: "orders route alive" }));
+router.get("/allorders", async (req, res) => {
+  try {
+    const orders = await Order.find().limit(5);
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: "Fetch all orders failed" });
+  }
+});
+
+// --------------------------------------------------------------------------
 
 // 2. Pharmacy submits quote
 router.put("/:orderId/quote", async (req, res) => {
@@ -101,16 +141,20 @@ router.put("/:orderId/quote", async (req, res) => {
     const { orderId } = req.params;
     const { quoteItems, unavailableItems, price, message } = req.body;
 
-    const order = await Order.findByIdAndUpdate(orderId, {
-      quote: {
-        items: quoteItems,
-        unavailable: unavailableItems,
-        price,
-        message,
-        quotedAt: new Date(),
+    const order = await Order.findByIdAndUpdate(
+      orderId,
+      {
+        quote: {
+          items: quoteItems,
+          unavailable: unavailableItems,
+          price,
+          message,
+          quotedAt: new Date(),
+        },
+        status: "quoted",
       },
-      status: "quoted"
-    }, { new: true });
+      { new: true }
+    );
 
     if (!order) return res.status(404).json({ error: "Order not found" });
 
@@ -125,12 +169,11 @@ router.put("/:orderId/quote", async (req, res) => {
       await saveInAppNotification({
         userId: user._id,
         title: "Quote Ready",
-        message: `Order #${order._id} has a quote.`
+        message: `Order #${order._id} has a quote.`,
       });
     }
 
     res.json(order);
-
   } catch (err) {
     console.error("Error quoting order:", err);
     res.status(500).json({ error: "Quote submission failed" });
@@ -164,9 +207,13 @@ router.put("/:orderId/accept", async (req, res) => {
       updateObj.pharmacyAcceptedAt = new Date();
     }
 
-    const order = await Order.findByIdAndUpdate(orderId, {
-      ...updateObj,
-    }, { new: true });
+    const order = await Order.findByIdAndUpdate(
+      orderId,
+      {
+        ...updateObj,
+      },
+      { new: true }
+    );
 
     if (!order) return res.status(404).json({ error: "Order not found" });
 
@@ -183,7 +230,7 @@ router.put("/:orderId/accept", async (req, res) => {
       await saveInAppNotification({
         userId: pharmacy._id,
         title: "Order Confirmed",
-        message: `Order #${order._id} is now confirmed and ready to process.`
+        message: `Order #${order._id} is now confirmed and ready to process.`,
       });
     }
 
@@ -197,12 +244,11 @@ router.put("/:orderId/accept", async (req, res) => {
       await saveInAppNotification({
         userId: user._id,
         title: "Order Confirmed",
-        message: `Order #${order._id} has been confirmed and payment is successful.`
+        message: `Order #${order._id} has been confirmed and payment is successful.`,
       });
     }
 
     res.json(order);
-
   } catch (err) {
     console.error("Error accepting order:", err);
     res.status(500).json({ error: "Order accept failed" });
@@ -224,7 +270,7 @@ router.put("/:orderId/status", async (req, res) => {
       orderBefore.assignmentHistory = orderBefore.assignmentHistory || [];
       orderBefore.assignmentHistory.push({
         status: "pharmacy_accepted",
-        at: updateObj.pharmacyAcceptedAt
+        at: updateObj.pharmacyAcceptedAt,
       });
       await orderBefore.save();
     }
@@ -233,10 +279,7 @@ router.put("/:orderId/status", async (req, res) => {
       updateObj.assignedAt = new Date();
     }
 
-    if (
-      (status === "accepted" || status === "out_for_delivery") &&
-      !orderBefore.partnerAcceptedAt
-    ) {
+    if ((status === "accepted" || status === "out_for_delivery") && !orderBefore.partnerAcceptedAt) {
       updateObj.partnerAcceptedAt = new Date();
     }
 
@@ -251,9 +294,8 @@ router.put("/:orderId/status", async (req, res) => {
     const order = await Order.findByIdAndUpdate(orderId, updateObj, { new: true });
     if (!order) return res.status(404).json({ error: "Order not found" });
 
-    // === ADD THIS BLOCK ===
+    // If delivered, call controller (also generates invoice) and return
     if (status.toLowerCase() === "delivered") {
-      // Call your invoice logic (controller)
       await markOrderDelivered({ params: { id: orderId } }, res);
       return; // Prevent sending response twice!
     }
@@ -271,7 +313,7 @@ router.put("/:orderId/status", async (req, res) => {
       await saveInAppNotification({
         userId: user._id,
         title: "Order Status Updated",
-        message: `Order #${order._id} is now "${statusText || status}".`
+        message: `Order #${order._id} is now "${statusText || status}".`,
       });
     }
 
@@ -285,22 +327,24 @@ router.put("/:orderId/status", async (req, res) => {
       await saveInAppNotification({
         userId: pharmacy._id,
         title: "Order Status Updated",
-        message: `Order #${order._id} is now "${statusText || status}".`
+        message: `Order #${order._id} is now "${statusText || status}".`,
       });
     }
 
     res.json(order);
-
   } catch (err) {
     console.error("Error updating order status:", err);
     res.status(500).json({ error: "Order status update failed" });
   }
 });
 
-// Get order by id
+// Get order by id (hardened with ObjectId validation)
 router.get("/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ error: "Invalid order id" });
+    }
     const order = await Order.findById(orderId).populate("pharmacy");
     if (!order) return res.status(404).json({ error: "Order not found" });
     res.json(order);
@@ -313,40 +357,19 @@ router.get("/:orderId", async (req, res) => {
 router.put("/:orderId/reject", async (req, res) => {
   try {
     const { orderId } = req.params;
-    const order = await Order.findByIdAndUpdate(orderId, {
-      status: "rejected",
-      "quote.rejectedAt": new Date()
-    }, { new: true });
+    const order = await Order.findByIdAndUpdate(
+      orderId,
+      {
+        status: "rejected",
+        "quote.rejectedAt": new Date(),
+      },
+      { new: true }
+    );
     if (!order) return res.status(404).json({ error: "Order not found" });
 
     res.json(order);
   } catch (err) {
     res.status(500).json({ error: "Quote rejection failed" });
-  }
-});
-
-// Get all orders for logged-in user (JWT protected)
-router.get("/myorders", auth, async (req, res) => {
-  try {
-    const userId = req.user.userId || req.user._id;
-    if (!userId) return res.status(401).json({ error: "User ID missing from token" });
-    const orders = await Order.find({ userId }).populate("pharmacy");
-    res.json(orders);
-  } catch (err) {
-    res.status(500).json({ error: "Fetch order failed" });
-  }
-});
-
-// Debug/status/utility routes
-router.get('/debug', (req, res) => res.json({ ok: true }));
-router.get('/test', (req, res) => res.json({ ok: true }));
-router.get('/alive', (req, res) => res.json({ status: 'orders route alive' }));
-router.get('/allorders', async (req, res) => {
-  try {
-    const orders = await Order.find().limit(5);
-    res.json(orders);
-  } catch (err) {
-    res.status(500).json({ error: "Fetch all orders failed" });
   }
 });
 
@@ -379,12 +402,14 @@ router.patch("/:orderId/assign-delivery-partner", async (req, res) => {
     if (!order) return res.status(404).json({ error: "Order not found" });
 
     if (
-      (order.paymentStatus === "COD" || order.paymentStatus === "PAID" || order.paymentStatus === "PARTIAL_PAID") &&
+      (order.paymentStatus === "COD" ||
+        order.paymentStatus === "PAID" ||
+        order.paymentStatus === "PARTIAL_PAID") &&
       !order.pharmacyAcceptedAt
     ) {
       order.pharmacyAcceptedAt = order.confirmedAt || order.createdAt || new Date();
       order.assignmentHistory = order.assignmentHistory || [];
-      if (!order.assignmentHistory.find(h => h.status === "pharmacy_accepted")) {
+      if (!order.assignmentHistory.find((h) => h.status === "pharmacy_accepted")) {
         order.assignmentHistory.push({ status: "pharmacy_accepted", at: order.pharmacyAcceptedAt });
       }
       if (order.status === "pending" || order.status === "quoted") {
@@ -400,17 +425,14 @@ router.patch("/:orderId/assign-delivery-partner", async (req, res) => {
     order.assignmentHistory.push({
       deliveryPartner: deliveryPartnerId,
       status: "assigned",
-      at: new Date()
+      at: new Date(),
     });
     if (!order.assignedAt) {
       order.assignedAt = new Date();
     }
     await order.save();
 
-    await Payment.updateOne(
-      { orderId: order._id },
-      { $set: { deliveryPartnerId: deliveryPartnerId } }
-    );
+    await Payment.updateOne({ orderId: order._id }, { $set: { deliveryPartnerId: deliveryPartnerId } });
     res.json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: "Failed to assign delivery partner", details: err.message });
@@ -432,13 +454,13 @@ router.get("/", async (req, res) => {
 });
 
 // Ratings submission route
-router.post('/:orderId/ratings', async (req, res) => {
+router.post("/:orderId/ratings", async (req, res) => {
   try {
     const { pharmacyRating, deliveryRating, deliveryBehavior } = req.body;
     const orderId = req.params.orderId;
     const order = await Order.findById(orderId);
     if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
+      return res.status(404).json({ error: "Order not found" });
     }
 
     order.pharmacyRating = pharmacyRating;
@@ -448,10 +470,10 @@ router.post('/:orderId/ratings', async (req, res) => {
     await order.save();
     res.json({ message: "Ratings submitted successfully!" });
   } catch (e) {
-    res.status(500).json({ error: 'Failed to submit ratings.' });
+    res.status(500).json({ error: "Failed to submit ratings." });
   }
 });
 
-router.post('/:id/deliver', markOrderDelivered);
+router.post("/:id/deliver", markOrderDelivered);
 
 module.exports = router;
