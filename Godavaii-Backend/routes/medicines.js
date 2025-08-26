@@ -1,4 +1,4 @@
-// routes/medicines.js
+// routes/medicines.js 
 const express = require("express");
 const router = express.Router();
 const Medicine = require("../models/Medicine");
@@ -64,31 +64,92 @@ router.patch("/pharmacy/medicines/:id/remove-image", async (req, res) => {
   }
 });
 
-// --- Autocomplete: Search for unique medicine names ---
+/* ========================= REPLACED: /search ========================= */
+// Escape user input used in RegExp
+const escapeRegex = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 router.get("/search", async (req, res) => {
-  const q = req.query.q || "";
-  const city = req.query.city || "";
-  const area = req.query.area || "";
+  let {
+    q = "",
+    lat,
+    lng,
+    city = "",
+    area = "",
+    maxDistance = 8000,
+    limit = 80,
+    dedupe = "true",
+  } = req.query;
+
+  q = String(q || "").trim();
   if (!q) return res.json([]);
+
   try {
-    let pharmacyFilter = { active: true };
-    if (city) pharmacyFilter.city = new RegExp(city, "i");
-    if (area) pharmacyFilter.area = new RegExp(area, "i");
-    const pharmacies = await Pharmacy.find(pharmacyFilter).select("_id");
-    const pharmacyIds = pharmacies.map((p) => p._id);
+    const rx = new RegExp(escapeRegex(q), "i");
 
-    const medicines = await Medicine.find({
-      name: { $regex: q, $options: "i" },
-      ...(pharmacyIds.length > 0 ? { pharmacy: { $in: pharmacyIds } } : {}),
-    });
+    // collect eligible pharmacies (nearby or by city/area)
+    let pharmacyIds = [];
+    const pharmacyBase = { active: true, status: "approved" };
 
-    const uniqueNames = [...new Set(medicines.map((m) => m.name))];
-    res.json(uniqueNames.map((name) => ({ name })));
+    if (lat && lng) {
+      const nearby = await Pharmacy.aggregate([
+        {
+          $geoNear: {
+            near: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
+            distanceField: "distance",
+            maxDistance: parseInt(maxDistance, 10) || 8000,
+            spherical: true,
+            query: pharmacyBase,
+          },
+        },
+        { $project: { _id: 1 } },
+        { $limit: 100 },
+      ]);
+      pharmacyIds = nearby.map((p) => p._id);
+    } else {
+      const pf = { ...pharmacyBase };
+      if (city) pf.city = { $regex: city, $options: "i" };
+      if (area) pf.area = { $regex: area, $options: "i" };
+      const phs = await Pharmacy.find(pf).select("_id");
+      pharmacyIds = phs.map((p) => p._id);
+    }
+
+    // match any of these fields
+    const or = [
+      { name: rx },
+      { brand: rx },
+      { company: rx },
+      { composition: rx },
+      { category: rx },
+      { type: rx },
+    ];
+
+    const meds = await Medicine.find({
+      $or: or,
+      ...(pharmacyIds.length ? { pharmacy: { $in: pharmacyIds } } : {}),
+    })
+      .select("name brand company composition category type img images mrp price pharmacy")
+      .limit(parseInt(limit, 10) || 80)
+      .lean();
+
+    // dedupe by (brand||name + composition)
+    let out = meds;
+    if (dedupe !== "false") {
+      const seen = new Set();
+      out = meds.filter((m) => {
+        const key = `${(m.brand || m.name || "").toLowerCase()}|${(m.composition || "").toLowerCase()}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    res.json(out);
   } catch (err) {
     console.error("Medicine search error:", err);
-    res.status(500).json({ error: "Failed to search names" });
+    res.status(500).json({ error: "Failed to search medicines" });
   }
 });
+/* ==================================================================== */
 
 // --- Find all pharmacies (and price) that have a medicine ---
 router.get("/find", async (req, res) => {
@@ -113,7 +174,13 @@ router.get("/find", async (req, res) => {
   }
 });
 
-// --- Get all offers for a medicine by name (for SearchResults table) ---
+/* ======= UPDATED: /by-name tolerant of partial queries ======= */
+const nameToRegexes = (name) => [
+  new RegExp(`^${escapeRegex(name)}$`, "i"), // exact
+  new RegExp(`^${escapeRegex(name)}`, "i"),  // prefix
+  new RegExp(escapeRegex(name), "i"),        // contains
+];
+
 router.get("/by-name", async (req, res) => {
   let { name, lat, lng, maxDistance = 8000 } = req.query;
   if (!name) return res.json([]);
@@ -129,7 +196,7 @@ router.get("/by-name", async (req, res) => {
               coordinates: [parseFloat(lng), parseFloat(lat)],
             },
             distanceField: "distance",
-            maxDistance: parseInt(maxDistance), // meters
+            maxDistance: parseInt(maxDistance, 10),
             spherical: true,
             query: { active: true, status: "approved" },
           },
@@ -147,26 +214,24 @@ router.get("/by-name", async (req, res) => {
     }
 
     const pharmacyIds = pharmacies.map((p) => p._id);
+    const distMap = Object.fromEntries(pharmacies.map((p) => [String(p._id), p.distance]));
 
-    // Get all medicines with this name from these pharmacies
-    const meds = await Medicine.find({
-      name: { $regex: `^${name}$`, $options: "i" },
-      pharmacy: { $in: pharmacyIds },
-      stock: { $gt: 0 },
-    }).populate("pharmacy");
+    let meds = [];
+    for (const rx of nameToRegexes(name)) {
+      meds = await Medicine.find({
+        name: { $regex: rx },
+        pharmacy: { $in: pharmacyIds },
+        stock: { $gt: 0 },
+      }).populate("pharmacy");
+      if (meds.length) break;
+    }
 
-    // Map pharmacyId -> distance
-    const distMap = {};
-    pharmacies.forEach((p) => (distMap[p._id.toString()] = p.distance));
-
-    // Sort medicines by distance
     meds.sort(
       (a, b) =>
-        (distMap[a.pharmacy._id.toString()] || 1e9) -
-        (distMap[b.pharmacy._id.toString()] || 1e9)
+        (distMap[String(a.pharmacy?._id)] ?? 1e9) -
+        (distMap[String(b.pharmacy?._id)] ?? 1e9)
     );
 
-    // Optionally: include the pharmacy distance in response for UI
     const output = meds.map((med) => ({
       pharmacy: med.pharmacy,
       pharmacyName: med.pharmacy?.name || "Unknown",
@@ -175,7 +240,7 @@ router.get("/by-name", async (req, res) => {
       medId: med._id,
       name: med.name,
       brand: med.brand,
-      distance: distMap[med.pharmacy._id.toString()] || null,
+      distance: distMap[String(med.pharmacy?._id)] ?? null,
     }));
 
     res.json(output);
@@ -184,6 +249,7 @@ router.get("/by-name", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch medicine listings" });
   }
 });
+/* ============================================================ */
 
 // --- All medicines in a city (for /all-medicines page) ---
 router.get("/all", async (req, res) => {
