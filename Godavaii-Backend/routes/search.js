@@ -11,7 +11,7 @@ function escapeRegex(str) {
 }
 
 // Autocomplete API for search suggestions
-router.get("/search-autocomplete", async (req, res) => {
+async function autocompleteHandler(req, res) {
   let { q = "", type = "all", city = "" } = req.query;
   q = q.trim();
   city = city.trim();
@@ -53,6 +53,9 @@ router.get("/search-autocomplete", async (req, res) => {
     console.error("Autocomplete error:", err);
     res.status(500).json({ error: "Server error" });
   }
-});
+}
+router.get("/search-autocomplete", autocompleteHandler);
+// alias so `/api/search/autocomplete` (your fallback) also works
+router.get("/autocomplete", autocompleteHandler);
 
 module.exports = router;
