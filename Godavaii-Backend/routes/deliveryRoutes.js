@@ -13,6 +13,7 @@ const upload = require("../utils/upload"); // replaces multer config
 const fs = require("fs");
 const Payment = require("../models/Payment");
 const { markOrderDelivered } = require("../controllers/orderController");
+const { sendSmsMSG91 } = require("../utils/sms");
 
 // Multer config for document uploads
 const isS3 = !!process.env.AWS_BUCKET_NAME;
@@ -294,12 +295,27 @@ router.post("/assign", async (req, res) => {
 router.post("/forgot-password", async (req, res) => {
   try {
     const { mobile } = req.body;
+    if (!mobile) return res.status(400).json({ error: "Mobile is required" });
+
     const delivery = await DeliveryPartner.findOne({ mobile });
     if (!delivery) return res.status(404).json({ error: "Mobile not found" });
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otpMap.set(mobile, otp);
-    // In production: send SMS here!
-    // console.log(`OTP for ${mobile}: ${otp}`); // REMOVE/disable in production
+
+    // store with expiry (10 minutes)
+    const expires = Date.now() + 10 * 60 * 1000;
+    otpMap.set(mobile, { otp, expires });
+
+    // IMPORTANT: The message must match your DLT template text (except the OTP variable spot)
+    const message = `Your GoDavaii Delivery OTP is ${otp}.`;
+
+    try {
+      await sendSmsMSG91(mobile, message);
+    } catch (err) {
+      console.error("MSG91 send failed:", err?.response?.data || err.message);
+      return res.status(500).json({ error: "Failed to send OTP SMS" });
+    }
+
     res.json({ msg: "OTP sent!" });
   } catch (err) {
     console.error("Forgot password error:", err);
@@ -311,8 +327,15 @@ router.post("/forgot-password", async (req, res) => {
 router.post("/reset-password", async (req, res) => {
   try {
     const { mobile, otp, newPassword } = req.body;
-    if (!otpMap.has(mobile) || otpMap.get(mobile) !== otp)
-      return res.status(400).json({ error: "Invalid OTP" });
+    const entry = otpMap.get(mobile);
+
+    if (!entry) return res.status(400).json({ error: "OTP not requested" });
+    if (entry.expires < Date.now()) {
+      otpMap.delete(mobile);
+      return res.status(400).json({ error: "OTP expired" });
+    }
+    if (entry.otp !== otp) return res.status(400).json({ error: "Invalid OTP" });
+
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await DeliveryPartner.findOneAndUpdate({ mobile }, { password: hashedPassword });
     otpMap.delete(mobile);
