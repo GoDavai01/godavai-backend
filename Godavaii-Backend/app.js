@@ -782,6 +782,12 @@ const normalizeCategory = (input) => {
   return cat;
 };
 const asTrimmedString = (v) => (v ?? "").toString().trim();
+// ---- bool helper for yes/true/1/on strings ----
+const toBool = (v) => {
+  if (typeof v === "boolean") return v;
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "on";
+};
 
 /** GET: dashboard list (unchanged) */
 app.get("/api/pharmacy/medicines", auth, async (req, res) => {
@@ -804,7 +810,7 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
       // tolerate brand-only (UI sets name from brand)
       const {
         name, brand, price, mrp, stock,
-        category, discount, composition, company, type, customType
+        category, discount, composition, company, type, customType, prescriptionRequired
       } = req.body || {};
 
       if (!pharmacyId || (!name && !brand) || price === undefined || mrp === undefined || stock === undefined || !category) {
@@ -865,6 +871,7 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
         discount: discNum,
         category: categoryValue,
         type: typeValue,
+        prescriptionRequired: toBool(prescriptionRequired),
         pharmacy: pharmacyId,
         img: imgs[0],
         images: imgs
@@ -925,6 +932,7 @@ app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
       if (b.brand !== undefined)       med.brand       = S(b.brand);
       if (b.composition !== undefined) med.composition = S(b.composition);
       if (b.company !== undefined)     med.company     = S(b.company);
+      if (b.prescriptionRequired !== undefined) med.prescriptionRequired = toBool(b.prescriptionRequired);
 
       if (!med.name && med.brand) med.name = med.brand;
       if (!med.brand && med.name) med.brand = med.name;

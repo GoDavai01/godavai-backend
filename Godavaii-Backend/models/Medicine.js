@@ -19,6 +19,8 @@ const MedicineSchema = new mongoose.Schema(
     category: { type: [String], default: ["Miscellaneous"] },
     type: { type: String, default: "Tablet" },
 
+    prescriptionRequired: { type: Boolean, default: false },
+
     trending: { type: Boolean, default: false },
 
     pharmacy: { type: mongoose.Schema.Types.ObjectId, ref: "Pharmacy" },

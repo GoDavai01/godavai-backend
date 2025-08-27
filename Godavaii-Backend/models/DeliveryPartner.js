@@ -32,9 +32,11 @@ const DeliveryPartnerSchema = new mongoose.Schema({
     lastUpdated: { type: Date }
   },
   status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
-  active: { type: Boolean, default: false }
+  active: { type: Boolean, default: false },
+  autoAccept: { type: Boolean, default: false }  // <-- partner opt-in for instant auto-accept
 }, { timestamps: true });
 
 DeliveryPartnerSchema.index({ location: "2dsphere" });
+DeliveryPartnerSchema.index({ active: 1, status: 1, autoAccept: 1 });
 
 module.exports = mongoose.model("DeliveryPartner", DeliveryPartnerSchema);

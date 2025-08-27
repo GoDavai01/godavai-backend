@@ -5,6 +5,7 @@ const router = express.Router();
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
 const Pharmacy = require("../models/Pharmacy");
+const DeliveryPartner = require("../models/DeliveryPartner");
 const User = require("../models/User");
 const auth = require("../middleware/auth");
 const { notifyUser, saveInAppNotification } = require("../utils/notify");
@@ -12,6 +13,71 @@ const { createPaymentRecord } = require("../controllers/paymentsController");
 const Payment = require("../models/Payment");
 const { markOrderDelivered } = require("../controllers/orderController");
 const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY; // or process.env.GOOGLE_MAPS_API_KEY
+
+// ---- Auto-assign constants (tunable) ----
+const AUTOASSIGN_FRESH_MINUTES = 15;     // partner pinged within last 15 mins
+const WAVES = [
+  { delayMs: 0,       km: 4.5, k: 8 },  // Wave 1: 0–30s
+  { delayMs: 30_000,  km: 6.0, k: 6 },  // Wave 2: 30–60s
+  { delayMs: 60_000,  km: 8.0, k: 6 },  // Wave 3: 60–90s
+];
+
+async function findCandidateNear(lng, lat, km, k) {
+  const freshSince = new Date(Date.now() - AUTOASSIGN_FRESH_MINUTES * 60 * 1000);
+  // Nearest active & approved partners inside radius
+  const nearby = await DeliveryPartner.find({
+    status: "approved",
+    active: true,
+    lastUpdated: { $gte: freshSince },
+    location: {
+      $near: {
+        $geometry: { type: "Point", coordinates: [lng, lat] },
+        $maxDistance: km * 1000
+      }
+    }
+  }).limit(Math.max(30, k)).lean();
+
+  // Prefer those with autoAccept and with no active order
+  for (const p of nearby) {
+    // capacity check: skip if already busy on an active order
+    const busy = await Order.exists({
+      deliveryPartner: p._id,
+      status: { $in: ["assigned", "accepted", "out_for_delivery"] }
+    });
+    if (!busy) return p; // pick first free (already distance-sorted by $near)
+  }
+  return null;
+}
+
+async function assignOrderToPartner(order, partner) {
+  order.deliveryPartner = partner._id;
+  order.assignmentHistory = order.assignmentHistory || [];
+  const acceptedNow = !!partner.autoAccept;
+  order.deliveryAssignmentStatus = acceptedNow ? "accepted" : "assigned";
+  order.status = acceptedNow ? "accepted" : "assigned";
+  if (!order.assignedAt) order.assignedAt = new Date();
+  if (acceptedNow && !order.partnerAcceptedAt) order.partnerAcceptedAt = new Date();
+  await order.save();
+  try { await Payment.updateOne({ orderId: order._id }, { $set: { deliveryPartnerId: partner._id } }); } catch {}
+  return acceptedNow;
+}
+
+function scheduleAutoAssign(orderId, baseLng, baseLat) {
+  // Fire three waves; each checks if still unassigned before acting
+  WAVES.forEach(({ delayMs, km, k }) => {
+    setTimeout(async () => {
+      try {
+        const order = await Order.findById(orderId);
+        if (!order) return;
+        if (order.deliveryPartner || order.deliveryAssignmentStatus !== "unassigned" || order.status !== "processing") return;
+        const partner = await findCandidateNear(baseLng, baseLat, km, k);
+        if (partner) await assignOrderToPartner(order, partner);
+      } catch (e) {
+        console.error("auto-assign wave error:", e?.message || e);
+      }
+    }, delayMs);
+  });
+}
 
 // 1. Create a new order
 router.post("/", auth, async (req, res) => {
@@ -249,6 +315,19 @@ router.put("/:orderId/accept", async (req, res) => {
     }
 
     res.json(order);
+
+    // ---- Auto-assign start (non-blocking) ----
+    try {
+      const full = await Order.findById(order._id).populate("pharmacy");
+      // Prefer pharmacy location; fallback to user address
+      const baseLng = full?.pharmacy?.location?.coordinates?.[0] ?? full?.address?.lng;
+      const baseLat = full?.pharmacy?.location?.coordinates?.[1] ?? full?.address?.lat;
+      if (typeof baseLng === "number" && typeof baseLat === "number") {
+        if (!full.deliveryPartner && full.deliveryAssignmentStatus === "unassigned" && full.status === "processing") {
+          scheduleAutoAssign(full._id, baseLng, baseLat);
+        }
+      }
+    } catch (e) { console.error("auto-assign schedule (accept) failed:", e?.message || e); }
   } catch (err) {
     console.error("Error accepting order:", err);
     res.status(500).json({ error: "Order accept failed" });
@@ -293,6 +372,18 @@ router.put("/:orderId/status", async (req, res) => {
 
     const order = await Order.findByIdAndUpdate(orderId, updateObj, { new: true });
     if (!order) return res.status(404).json({ error: "Order not found" });
+
+    // If we just moved to processing and it's still unassigned, schedule auto-assign
+    if ((status === "processing") && !order.deliveryPartner && order.deliveryAssignmentStatus === "unassigned") {
+      try {
+        const withPharmacy = await Order.findById(order._id).populate("pharmacy");
+        const baseLng = withPharmacy?.pharmacy?.location?.coordinates?.[0] ?? withPharmacy?.address?.lng;
+        const baseLat = withPharmacy?.pharmacy?.location?.coordinates?.[1] ?? withPharmacy?.address?.lat;
+        if (typeof baseLng === "number" && typeof baseLat === "number") {
+          scheduleAutoAssign(withPharmacy._id, baseLng, baseLat);
+        }
+      } catch (e) { console.error("auto-assign schedule (status=processing) failed:", e?.message || e); }
+    }
 
     // If delivered, call controller (also generates invoice) and return
     if (status.toLowerCase() === "delivered") {
@@ -436,6 +527,24 @@ router.patch("/:orderId/assign-delivery-partner", async (req, res) => {
     res.json({ success: true, order });
   } catch (err) {
     res.status(500).json({ error: "Failed to assign delivery partner", details: err.message });
+  }
+});
+
+// Admin/API: retry auto-assign waves immediately
+router.post("/:orderId/auto-assign", async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.orderId).populate("pharmacy");
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    if (order.deliveryPartner) return res.json({ ok: true, message: "Already assigned" });
+
+    const lng = order?.pharmacy?.location?.coordinates?.[0] ?? order?.address?.lng;
+    const lat = order?.pharmacy?.location?.coordinates?.[1] ?? order?.address?.lat;
+    if (typeof lng !== "number" || typeof lat !== "number") return res.status(400).json({ error: "Missing base coordinates" });
+
+    scheduleAutoAssign(order._id, lng, lat);
+    res.json({ ok: true, message: "Auto-assign scheduled" });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

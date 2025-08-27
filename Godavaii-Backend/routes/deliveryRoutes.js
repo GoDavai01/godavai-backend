@@ -227,11 +227,12 @@ router.patch('/partner/:id/active', async (req, res) => {
     const { id } = req.params;
     if (!isValidId(id)) return res.status(400).json({ error: "Invalid ID" });
 
-    const { active, lat, lng } = req.body; // desired state + optional location seed
+    const { active, lat, lng, autoAccept } = req.body; // desired state + optional location + autoAccept
     const partner = await DeliveryPartner.findById(id);
     if (!partner) return res.status(404).json({ error: 'Not found' });
 
     if (typeof active === 'boolean') partner.active = active;
+    if (typeof autoAccept === 'boolean') partner.autoAccept = autoAccept;
 
     // seed/refresh location when switching to active
     if (lat && lng) {
@@ -240,7 +241,7 @@ router.patch('/partner/:id/active', async (req, res) => {
     }
 
     await partner.save();
-    res.json({ ok: true, active: partner.active });
+    res.json({ ok: true, active: partner.active, autoAccept: partner.autoAccept });
   } catch (err) {
     console.error("Set partner active error:", err);
     res.status(500).json({ error: "Failed to update active status" });
