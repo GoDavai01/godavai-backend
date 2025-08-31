@@ -1,10 +1,10 @@
 // utils/ocr.js
 
-// Prefer Node's built-in fetch (Node 18+). Fallback to node-fetch only if installed.
+// Prefer Node 18+ fetch; fallback to node-fetch if present.
 const fetchFn =
   (globalThis.fetch && globalThis.fetch.bind(globalThis)) ||
   (async (...args) => {
-    const { default: f } = await import('node-fetch'); // used only if you install node-fetch
+    const { default: f } = await import('node-fetch');
     return f(...args);
   });
 
@@ -34,14 +34,13 @@ async function loadBuffer(urlOrPath) {
     if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   }
-  // local /uploads path served by your server
   const path = require("path");
   const fs = require("fs");
   return fs.promises.readFile(path.resolve(process.cwd(), urlOrPath.replace(/^\//, "")));
 }
 
 async function preprocess(buf) {
-  // Mild denoise/contrast helps OCR a lot.
+  // Light denoise/normalize helps handwriting.
   return await sharp(buf)
     .ensureAlpha()
     .jpeg({ quality: 92 })
@@ -55,6 +54,39 @@ async function ocrGoogle(buf) {
   const [result] = await visionClient.textDetection({ image: { content: buf } });
   const text = result?.fullTextAnnotation?.text || result?.textAnnotations?.[0]?.description;
   return text || null;
+}
+
+/** Azure Vision Read OCR (REST, v3.2) */
+async function ocrAzure(buf) {
+  const ep = (process.env.AZURE_VISION_ENDPOINT || "").replace(/\/+$/, "");
+  const key = process.env.AZURE_VISION_KEY;
+  if (!ep || !key) return null;
+
+  // 1) submit
+  const submit = await fetchFn(`${ep}/vision/v3.2/read/analyze?language=en`, {
+    method: "POST",
+    headers: { "Ocp-Apim-Subscription-Key": key, "Content-Type": "application/octet-stream" },
+    body: buf
+  });
+  if (submit.status !== 202) return null;
+
+  const op = submit.headers.get("operation-location");
+  if (!op) return null;
+
+  // 2) poll
+  for (let i = 0; i < 12; i++) {
+    await new Promise(r => setTimeout(r, 800));
+    const res = await fetchFn(op, { headers: { "Ocp-Apim-Subscription-Key": key } });
+    const j = await res.json();
+    if (j.status === "succeeded") {
+      const lines =
+        j?.analyzeResult?.readResults?.flatMap(p => (p.lines || []).map(l => l.text)) ??
+        j?.analyzeResult?.pages?.flatMap(p => (p.lines || []).map(l => l.content)) ?? [];
+      return lines && lines.length ? lines.join("\n") : null;
+    }
+    if (j.status === "failed") return null;
+  }
+  return null;
 }
 
 /** AWS Textract OCR (simple lines) */
@@ -83,16 +115,31 @@ async function ocrTesseract(buf) {
   }
 }
 
-async function extractText(urlOrPath) {
+/** New: returns { text, engine } */
+async function extractTextPlus(urlOrPath) {
   const raw = await loadBuffer(urlOrPath);
   const buf = await preprocess(raw);
 
-  // Prefer cloud OCRs if configured
+  // Order: Google → Azure → Textract → Tesseract
   let text = await ocrGoogle(buf);
-  if (!text) text = await ocrTextract(buf);
-  if (!text) text = await ocrTesseract(buf);
+  if (text) return { text: text.trim(), engine: "google-vision" };
 
-  return (text || "").trim();
+  text = await ocrAzure(buf);
+  if (text) return { text: text.trim(), engine: "azure-vision-read" };
+
+  text = await ocrTextract(buf);
+  if (text) return { text: text.trim(), engine: "aws-textract" };
+
+  text = await ocrTesseract(buf);
+  if (text) return { text: text.trim(), engine: "tesseract" };
+
+  return { text: "", engine: "none" };
 }
 
-module.exports = { extractText };
+/** Back-compat: old callers that expect just the string */
+async function extractText(urlOrPath) {
+  const { text } = await extractTextPlus(urlOrPath);
+  return text;
+}
+
+module.exports = { extractText, extractTextPlus };

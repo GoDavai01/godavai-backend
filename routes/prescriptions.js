@@ -13,7 +13,7 @@ const { findPharmaciesNearby } = require('../utils/pharmacyGeo');
 const path = require('path');
 
 // === A) AI imports ===
-const { extractText } = require('../utils/ocr');
+const { extractTextPlus } = require('../utils/ocr');
 const { parse: parseMeds } = require('../utils/ai/medParser');
 
 // CRON: Prevent double schedule in dev
@@ -46,11 +46,10 @@ async function runAiParseForOrder(order) {
       ? `${process.env.SERVER_BASE_URL || "http://localhost:5000"}${order.prescriptionUrl}`
       : order.prescriptionUrl;
 
-    const text = await extractText(url);
+    const { text, engine } = await extractTextPlus(url);
     const items = parseMeds(text || "");
     order.ai = {
-      parser: (process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GCV_CREDENTIALS_JSON) ? "google-vision"
-            : (process.env.AWS_REGION ? "aws-textract" : "tesseract"),
+      parser: engine,
       parsedAt: new Date(),
       rawText: (text || "").slice(0, 100000),
       items

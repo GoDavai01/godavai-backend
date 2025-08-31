@@ -8,6 +8,10 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@aws-sdk/client-textract": "^3.879.0",
+    "@azure/cognitiveservices-computervision": "^8.2.0",
+    "@azure/ms-rest-js": "^2.7.0",
+    "@google-cloud/vision": "^5.3.3",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.10.0",
     "bcryptjs": "^2.4.3",
