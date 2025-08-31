@@ -339,7 +339,13 @@ router.get('/pharmacy-orders', auth, async (req, res) => {
     const orders = await PrescriptionOrder.find({
       pharmacyCandidates: req.user.pharmacyId
     }).sort({ createdAt: -1 });
-    res.json(orders); // E) includes ai block automatically
+// Fire-and-forget OCR for any order that doesn't have AI yet
+orders.forEach(o => {
+  if (!o.ai && o.prescriptionUrl) {
+    Promise.resolve().then(() => runAiParseForOrder(o)).catch(() => {});
+  }
+});
+    res.json(orders);
   } catch (err) {
     console.error("Pharmacy orders fetch error:", err);
     res.status(500).json({ error: 'Failed to get pharmacy orders.', details: err.message });

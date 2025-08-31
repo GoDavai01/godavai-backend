@@ -1,9 +1,9 @@
 // utils/ai/medParser.js
 
 /**
- * Very practical parser: turns OCR’d text into "probable medicines" with qty.
- * It’s deliberately conservative and attaches confidence.
- * Pharmacies still confirm brand/price, so no flow changes.
+ * Practical parser: turns OCR’d text into probable medicines with qty.
+ * Conservative by design; attaches a confidence score.
+ * Pharmacists must still verify brand/price.
  */
 
 const FORM_WORDS = [
@@ -24,7 +24,7 @@ function score(line, item) {
   if (item.strength) c += 0.2;
   if (item.form) c += 0.2;
   if (item.quantity) c += 0.2;
-  if (/^\d+\./.test(line)) c += 0.15; // numbered list
+  if (/^\d+\./.test(line)) c += 0.15;              // numbered list
   if (/[A-Za-z]/.test(item.name)) c += 0.1;
   if (item.name && item.name.split(" ").length <= 4) c += 0.05;
   return Math.max(0.15, Math.min(0.95, c));
@@ -52,22 +52,24 @@ function parseForm(line) {
 
 function parseStrength(line) {
   const m = line.match(/\b(\d{1,4}\s?(?:mg|mcg|g|ml|iu))\b/i);
-  return m ? m[1].toLowerCase().replace(/\s+/g,"") : null;
+  return m ? m[1].toLowerCase().replace(/\s+/g, "") : null;
 }
 
 function parseComposition(line) {
-  // pick “Paracetamol 650 mg” OR “Azithromycin 500 mg” etc.
+  // e.g., “Paracetamol 650 mg”, “Azithromycin 500 mg”
   const m = line.match(/\b([A-Za-z][A-Za-z\- ]{2,})\s+(\d{1,4}\s?(?:mg|mcg|g|ml|iu))\b/i);
   if (!m) return null;
-  return `${m[1].trim()} ${m[2].toLowerCase().replace(/\s+/g,"")}`;
+  return `${m[1].trim()} ${m[2].toLowerCase().replace(/\s+/g, "")}`;
 }
 
 function parseName(line) {
-  // Heuristic: take first 1–3 tokens before strength/form mention
+  // take the first 1–3 tokens before a strength/form token
   const blocks = line.split(/[,;]| - /);
   const first = blocks[0].trim();
   const tokens = first.split(/\s+/);
-  const stopIdx = tokens.findIndex(t => /\d+(mg|ml|mcg|g|iu)/i.test(t) || FORM_WORDS.includes(t.toLowerCase()));
+  const stopIdx = tokens.findIndex(
+    (t) => /\d+(mg|ml|mcg|g|iu)/i.test(t) || FORM_WORDS.includes(t.toLowerCase())
+  );
   const slice = stopIdx > 0 ? tokens.slice(0, stopIdx) : tokens.slice(0, Math.min(3, tokens.length));
   return slice.join(" ");
 }
@@ -78,45 +80,54 @@ function parse(text) {
   const items = [];
   for (const line of lines) {
     if (line.length < 3) continue;
-    // de-noise: ignore pure admin instructions
-    if (/^(sig|rx|diagnosis|patient|dr\.|doc|age|date|review|refill|morning|evening|night)\b/i.test(line))
+
+    // de-noise: ignore admin/instruction lines
+    if (/^(sig|rx|diagnosis|patient|dr\.|doc|age|date|review|refill|morning|evening|night)\b/i.test(line)) {
       continue;
+    }
 
-    const quantity = parseQty(line);
-    const strength = parseStrength(line);
-    const form = parseForm(line);
+    const quantity    = parseQty(line);
+    const strength    = parseStrength(line);
+    const form        = parseForm(line);
     const composition = parseComposition(line);
-    let name = parseName(line);
+    const nameRaw     = parseName(line);
 
-    // skip if name is garbage
-    if (!/[A-Za-z]/.test(name)) continue;
+    // skip if name looks like garbage
+    if (!/[A-Za-z]/.test(nameRaw)) continue;
 
     const item = {
-      name: name.trim(),
+      name: nameRaw.trim(),
       composition: composition || null,
       strength: strength || null,
       form: form || null,
-      quantity: quantity || 1
+      quantity: quantity || 1,
     };
 
     const conf = score(line, item);
-    // accept only if signal present
+
+    // Primary acceptance: has some hard signal
     if (composition || strength || form || quantity || /\d/.test(line)) {
       items.push({ ...item, confidence: conf });
+    } else {
+      // Fallback: accept short name-only candidates with tiny confidence
+      if (item.name.length >= 3 && item.name.split(" ").length <= 3) {
+        items.push({ ...item, quantity: 1, confidence: 0.18 });
+      }
     }
   }
 
-  // dedupe by (name+strength), keep highest confidence, sum qty
-  const key = (it) => [it.name.toLowerCase(), it.strength || "", it.form || ""].join("|");
+  // Dedupe by name+strength+form; keep highest-confidence, sum quantities
+  const keyOf = (it) => [it.name.toLowerCase(), it.strength || "", it.form || ""].join("|");
   const map = new Map();
   for (const it of items) {
-    const k = key(it);
+    const k = keyOf(it);
     const prev = map.get(k);
-    if (!prev) map.set(k, it);
-    else {
+    if (!prev) {
+      map.set(k, it);
+    } else {
       map.set(k, {
         ...((prev.confidence >= it.confidence) ? prev : it),
-        quantity: (prev.quantity || 1) + (it.quantity || 1)
+        quantity: (prev.quantity || 1) + (it.quantity || 1),
       });
     }
   }
