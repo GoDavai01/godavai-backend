@@ -8,6 +8,15 @@ const fetchFn =
     return f(...args);
   });
 
+// small helper to always send a UA (some CDNs block no-UA requests)
+async function fetchWithUA(url, opts = {}) {
+  const headers = Object.assign(
+    { "User-Agent": "Godavaii-OCR/1.0" },
+    opts.headers || {}
+  );
+  return fetchFn(url, { ...opts, headers });
+}
+
 const sharp = require("sharp");
 
 /* ----------------------- Clients (lazy / optional) ----------------------- */
@@ -38,20 +47,28 @@ try {
 
 async function loadBuffer(urlOrPath) {
   if (/^https?:\/\//i.test(urlOrPath)) {
-    const res = await fetchFn(urlOrPath);
-    if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
+    const res = await fetchWithUA(urlOrPath);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(
+        `Failed to fetch image: ${res.status} ${res.statusText} ${body?.slice(0, 120)}`
+      );
+    }
     return Buffer.from(await res.arrayBuffer());
   }
   const path = require("path");
   const fs = require("fs");
-  return fs.promises.readFile(path.resolve(process.cwd(), urlOrPath.replace(/^\//, "")));
+  return fs.promises.readFile(
+    path.resolve(process.cwd(), urlOrPath.replace(/^\//, ""))
+  );
 }
 
 // Light MIME sniffing so we don't push PDFs/TIFFs through sharp.
 function sniffMime(buf) {
   const a = buf;
   // %PDF
-  if (a[0] === 0x25 && a[1] === 0x50 && a[2] === 0x44 && a[3] === 0x46) return "application/pdf";
+  if (a[0] === 0x25 && a[1] === 0x50 && a[2] === 0x44 && a[3] === 0x46)
+    return "application/pdf";
   // TIFF (II*\0 | MM\0*)
   if (
     (a[0] === 0x49 && a[1] === 0x49 && a[2] === 0x2a && a[3] === 0x00) ||
@@ -68,7 +85,8 @@ async function preprocess(buf) {
   try {
     return await sharp(buf).rotate().jpeg({ quality: 92 }).normalize().toBuffer();
   } catch (e) {
-    if (process.env.DEBUG_OCR) console.warn("[OCR] preprocess skipped:", e.message);
+    if (process.env.DEBUG_OCR)
+      console.warn("[OCR] preprocess skipped:", e.message);
     return buf; // never fail preprocessing
   }
 }
@@ -80,12 +98,19 @@ async function ocrGoogle(buf) {
   if (!visionClient) return null;
   for (let i = 0; i < 2; i++) {
     try {
-      const [result] = await visionClient.documentTextDetection({ image: { content: buf } });
+      const [result] = await visionClient.documentTextDetection({
+        image: { content: buf },
+      });
       const text =
-        result?.fullTextAnnotation?.text || result?.textAnnotations?.[0]?.description;
+        result?.fullTextAnnotation?.text ||
+        result?.textAnnotations?.[0]?.description;
       if (text) return text;
     } catch (err) {
-      if (process.env.DEBUG_OCR) console.warn("[OCR] google-vision attempt failed:", err?.message || err);
+      if (process.env.DEBUG_OCR)
+        console.warn(
+          "[OCR] google-vision attempt failed:",
+          err?.message || err
+        );
     }
   }
   return null;
@@ -98,7 +123,7 @@ async function ocrAzure(buf) {
   if (!ep || !key) return null;
 
   // 1) submit
-  const submit = await fetchFn(`${ep}/vision/v3.2/read/analyze?language=unk`, {
+  const submit = await fetchWithUA(`${ep}/vision/v3.2/read/analyze?language=unk`, {
     method: "POST",
     headers: {
       "Ocp-Apim-Subscription-Key": key,
@@ -114,12 +139,18 @@ async function ocrAzure(buf) {
   // 2) poll (wait ~22s max: 28 * 800ms)
   for (let i = 0; i < 28; i++) {
     await new Promise((r) => setTimeout(r, 800));
-    const res = await fetchFn(op, { headers: { "Ocp-Apim-Subscription-Key": key } });
+    const res = await fetchWithUA(op, {
+      headers: { "Ocp-Apim-Subscription-Key": key },
+    });
     const j = await res.json();
     if (j.status === "succeeded") {
       const lines =
-        j?.analyzeResult?.readResults?.flatMap((p) => (p.lines || []).map((l) => l.text)) ??
-        j?.analyzeResult?.pages?.flatMap((p) => (p.lines || []).map((l) => l.content)) ??
+        j?.analyzeResult?.readResults?.flatMap((p) =>
+          (p.lines || []).map((l) => l.text)
+        ) ??
+        j?.analyzeResult?.pages?.flatMap((p) =>
+          (p.lines || []).map((l) => l.content)
+        ) ??
         [];
       return lines && lines.length ? lines.join("\n") : null;
     }
@@ -142,17 +173,31 @@ async function ocrTextract(buf) {
   return lines.length ? lines.join("\n") : null;
 }
 
-/** Local Tesseract OCR (fallback) */
+/** Local Tesseract OCR (fallback, optional & safe) */
 async function ocrTesseract(buf) {
-  const { createWorker } = require("tesseract.js");
+  let createWorker;
+  try {
+    ({ createWorker } = require("tesseract.js"));
+  } catch (e) {
+    if (process.env.DEBUG_OCR)
+      console.warn("[OCR] tesseract.js not installed:", e.message);
+    return null;
+  }
+
   const worker = await createWorker({ logger: () => {} });
   try {
     await worker.loadLanguage("eng");
     await worker.initialize("eng");
     const { data } = await worker.recognize(buf);
     return data?.text || null;
+  } catch (e) {
+    if (process.env.DEBUG_OCR)
+      console.warn("[OCR] tesseract run failed:", e.message);
+    return null;
   } finally {
-    await worker.terminate();
+    try {
+      await worker.terminate();
+    } catch {}
   }
 }
 
@@ -176,7 +221,8 @@ async function extractTextPlus(urlOrPath) {
   const t = await ocrTesseract(buf);
   if (t) return { text: t.trim(), engine: "tesseract" };
 
-  if (process.env.DEBUG_OCR) console.warn("[OCR] all engines returned null/empty");
+  if (process.env.DEBUG_OCR)
+    console.warn("[OCR] all engines returned null/empty");
   return { text: "", engine: "none" };
 }
 

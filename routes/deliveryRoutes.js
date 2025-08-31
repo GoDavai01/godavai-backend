@@ -6,14 +6,17 @@ const path = require("path");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const mongoose = require("mongoose");
+const fs = require("fs");
+
 const DeliveryPartner = require("../models/DeliveryPartner");
 const Order = require("../models/Order");
-const otpMap = new Map();
-const upload = require("../utils/upload"); // replaces multer config
-const fs = require("fs");
 const Payment = require("../models/Payment");
+
+const upload = require("../utils/upload"); // replaces multer config
 const { markOrderDelivered } = require("../controllers/orderController");
 const { sendSmsMSG91 } = require("../utils/sms");
+
+const otpMap = new Map();
 
 // Multer config for document uploads
 const isS3 = !!process.env.AWS_BUCKET_NAME;
@@ -21,50 +24,69 @@ if (!isS3) {
   fs.mkdirSync("uploads/delivery-docs", { recursive: true });
 }
 
-
 function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
 
-// 1. Register Delivery Partner (pending)
+/* ============================================================================
+   1) Register Delivery Partner (pending)
+============================================================================ */
 router.post(
   "/register",
   upload.fields([
     { name: "aadhaarDoc", maxCount: 1 },
-    { name: "panDoc", maxCount: 1 }
+    { name: "panDoc", maxCount: 1 },
   ]),
   async (req, res) => {
     try {
       const {
-        name, mobile, email, password, vehicle, city, area,
-        aadhaarNumber, panNumber, bankAccount, ifsc, accountHolder
+        name,
+        mobile,
+        email,
+        password,
+        vehicle,
+        city,
+        area,
+        aadhaarNumber,
+        panNumber,
+        bankAccount,
+        ifsc,
+        accountHolder,
       } = req.body;
+
       const aadhaarDocUrl = req.files?.aadhaarDoc?.[0]?.location || "";
       const panDocUrl = req.files?.panDoc?.[0]?.location || "";
+
       // Block registration if either doc is missing
-if (!req.files?.aadhaarDoc || !req.files?.aadhaarDoc[0]) {
-  return res.status(400).json({ error: "Aadhaar document is required" });
-}
-if (!req.files?.panDoc || !req.files?.panDoc[0]) {
-  return res.status(400).json({ error: "PAN document is required" });
-}
+      if (!req.files?.aadhaarDoc || !req.files?.aadhaarDoc[0]) {
+        return res.status(400).json({ error: "Aadhaar document is required" });
+      }
+      if (!req.files?.panDoc || !req.files?.panDoc[0]) {
+        return res.status(400).json({ error: "PAN document is required" });
+      }
 
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const delivery = await DeliveryPartner.create({
-        name, mobile, email,
+        name,
+        mobile,
+        email,
         password: hashedPassword,
-        vehicle, city, area,
-        aadhaarNumber, panNumber,
+        vehicle,
+        city,
+        area,
+        aadhaarNumber,
+        panNumber,
         bankDetails: { bankAccount, ifsc, accountHolder },
-        aadhaarDocUrl, panDocUrl,
-        status: "pending"
+        aadhaarDocUrl,
+        panDocUrl,
+        status: "pending",
       });
 
       // --- SEND WELCOME + REGISTRATION RECEIVED EMAIL ---
       const nodemailer = require("nodemailer");
       const transporter = nodemailer.createTransport({
-        host: "smtp.hostinger.com", // Or your SMTP provider
+        host: "smtp.hostinger.com",
         port: 465,
         secure: true,
         auth: {
@@ -124,7 +146,9 @@ if (!req.files?.panDoc || !req.files?.panDoc[0]) {
   }
 );
 
-// 2. List all pending delivery partners (for admin approval)
+/* ============================================================================
+   2) List all pending delivery partners (for admin approval)
+============================================================================ */
 router.get("/pending", async (req, res) => {
   try {
     const pending = await DeliveryPartner.find({ status: "pending" });
@@ -135,13 +159,14 @@ router.get("/pending", async (req, res) => {
   }
 });
 
-// 3. Approve a delivery partner (admin) + send approval email
+/* ============================================================================
+   3) Approve a delivery partner (admin) + send approval email
+============================================================================ */
 router.post("/approve", async (req, res) => {
   try {
     const { id } = req.body;
     if (!isValidId(id)) return res.status(400).json({ error: "Invalid ID" });
 
-    // Update status
     const deliveryPartner = await DeliveryPartner.findByIdAndUpdate(
       id,
       { status: "approved" },
@@ -149,10 +174,9 @@ router.post("/approve", async (req, res) => {
     );
     if (!deliveryPartner) return res.status(404).json({ error: "Partner not found" });
 
-    // --- Nodemailer send approval email ---
     const nodemailer = require("nodemailer");
     const transporter = nodemailer.createTransport({
-      host: "smtp.hostinger.com", // Or your SMTP provider
+      host: "smtp.hostinger.com",
       port: 465,
       secure: true,
       auth: {
@@ -198,7 +222,9 @@ router.post("/approve", async (req, res) => {
   }
 });
 
-// 4. Delete/reject a delivery partner (admin)
+/* ============================================================================
+   4) Delete/reject a delivery partner (admin)
+============================================================================ */
 router.delete("/delete/:id", async (req, res) => {
   try {
     if (!isValidId(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
@@ -210,7 +236,9 @@ router.delete("/delete/:id", async (req, res) => {
   }
 });
 
-// 5. Get all approved delivery partners
+/* ============================================================================
+   5) Get all approved delivery partners
+============================================================================ */
 router.get("/partners", async (req, res) => {
   try {
     const all = await DeliveryPartner.find({ status: "approved" });
@@ -221,23 +249,31 @@ router.get("/partners", async (req, res) => {
   }
 });
 
-// PATCH: Set delivery partner active/inactive
-router.patch('/partner/:id/active', async (req, res) => {
+/* ============================================================================
+   6) Set delivery partner active/inactive
+   - When going active with lat/lng, seed BOTH timestamps:
+     location.lastUpdated AND root lastSeenAt
+============================================================================ */
+router.patch("/partner/:id/active", async (req, res) => {
   try {
     const { id } = req.params;
     if (!isValidId(id)) return res.status(400).json({ error: "Invalid ID" });
 
     const { active, lat, lng, autoAccept } = req.body; // desired state + optional location + autoAccept
     const partner = await DeliveryPartner.findById(id);
-    if (!partner) return res.status(404).json({ error: 'Not found' });
+    if (!partner) return res.status(404).json({ error: "Not found" });
 
-    if (typeof active === 'boolean') partner.active = active;
-    if (typeof autoAccept === 'boolean') partner.autoAccept = autoAccept;
+    if (typeof active === "boolean") partner.active = active;
+    if (typeof autoAccept === "boolean") partner.autoAccept = autoAccept;
 
-    // seed/refresh location when switching to active
+    // Seed/refresh location when switching to active, and set freshness on both fields
     if (lat && lng) {
-      partner.location = { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] };
-      partner.lastUpdated = new Date();
+      partner.location = {
+        type: "Point",
+        coordinates: [parseFloat(lng), parseFloat(lat)],
+        lastUpdated: new Date(), // <-- nested freshness
+      };
+      partner.lastSeenAt = new Date(); // <-- root freshness
     }
 
     await partner.save();
@@ -248,7 +284,9 @@ router.patch('/partner/:id/active', async (req, res) => {
   }
 });
 
-// 6. Get one delivery partner's info, current and past orders
+/* ============================================================================
+   7) Get one delivery partner's info, current and past orders
+============================================================================ */
 router.get("/partner/:id", async (req, res) => {
   try {
     if (!isValidId(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
@@ -257,12 +295,15 @@ router.get("/partner/:id", async (req, res) => {
 
     const activeOrder = await Order.findOne({
       deliveryPartner: req.params.id,
-      status: { $in: ["processing", "out_for_delivery"] }
+      status: { $in: ["processing", "out_for_delivery"] },
     }).populate("pharmacy");
+
     const pastOrders = await Order.find({
       deliveryPartner: req.params.id,
-      status: "delivered"
-    }).sort({ createdAt: -1 }).limit(20);
+      status: "delivered",
+    })
+      .sort({ createdAt: -1 })
+      .limit(20);
 
     res.json({ partner, activeOrder, pastOrders });
   } catch (err) {
@@ -271,7 +312,9 @@ router.get("/partner/:id", async (req, res) => {
   }
 });
 
-// 7. Assign delivery partner to an order (after pharmacy accepts)
+/* ============================================================================
+   8) Assign delivery partner to an order (after pharmacy accepts)
+============================================================================ */
 router.post("/assign", async (req, res) => {
   try {
     const { orderId, deliveryPartnerId } = req.body;
@@ -292,7 +335,9 @@ router.post("/assign", async (req, res) => {
   }
 });
 
-// 8. Forgot password (request OTP)
+/* ============================================================================
+   9) Forgot password (request OTP)
+============================================================================ */
 router.post("/forgot-password", async (req, res) => {
   try {
     const { mobile } = req.body;
@@ -307,7 +352,7 @@ router.post("/forgot-password", async (req, res) => {
     const expires = Date.now() + 10 * 60 * 1000;
     otpMap.set(mobile, { otp, expires });
 
-    // IMPORTANT: The message must match your DLT template text (except the OTP variable spot)
+    // IMPORTANT: Must match your DLT template
     const message = `Your GoDavaii Delivery OTP is ${otp}.`;
 
     try {
@@ -324,7 +369,9 @@ router.post("/forgot-password", async (req, res) => {
   }
 });
 
-// 9. Reset password
+/* ============================================================================
+   10) Reset password
+============================================================================ */
 router.post("/reset-password", async (req, res) => {
   try {
     const { mobile, otp, newPassword } = req.body;
@@ -347,19 +394,31 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
-// 10. Update current location (called by delivery dashboard)
+/* ============================================================================
+   11) Update current location (called by delivery dashboard)
+   - Write BOTH: location.lastUpdated + root lastSeenAt
+============================================================================ */
 router.post("/update-location", async (req, res) => {
   try {
     const { partnerId, orderId, lat, lng } = req.body;
-    if (partnerId && !isValidId(partnerId)) return res.status(400).json({ error: "Invalid partnerId" });
-    if (orderId && !isValidId(orderId)) return res.status(400).json({ error: "Invalid orderId" });
+    if (partnerId && !isValidId(partnerId))
+      return res.status(400).json({ error: "Invalid partnerId" });
+    if (orderId && !isValidId(orderId))
+      return res.status(400).json({ error: "Invalid orderId" });
+
     await DeliveryPartner.findByIdAndUpdate(partnerId, {
-  location: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
-  lastUpdated: new Date()
-});
+      location: {
+        type: "Point",
+        coordinates: [parseFloat(lng), parseFloat(lat)],
+        lastUpdated: new Date(), // keep nested freshness
+      },
+      lastSeenAt: new Date(), // <-- root freshness for easy queries
+    });
 
     if (orderId) {
-      await Order.findByIdAndUpdate(orderId, { driverLocation: { lat, lng, lastUpdated: new Date() } });
+      await Order.findByIdAndUpdate(orderId, {
+        driverLocation: { lat, lng, lastUpdated: new Date() },
+      });
     }
     res.json({ ok: true });
   } catch (err) {
@@ -368,7 +427,9 @@ router.post("/update-location", async (req, res) => {
   }
 });
 
-// 11. Delivery Partner Login (with bcrypt and JWT!)
+/* ============================================================================
+   12) Delivery Partner Login (with bcrypt and JWT)
+============================================================================ */
 router.post("/login", async (req, res) => {
   const { mobile, password } = req.body;
   try {
@@ -383,7 +444,7 @@ router.post("/login", async (req, res) => {
         deliveryPartnerId: partner._id,
         type: "delivery",
         name: partner.name,
-        mobile: partner.mobile
+        mobile: partner.mobile,
       },
       process.env.JWT_SECRET,
       { expiresIn: "30d" }
@@ -397,8 +458,8 @@ router.post("/login", async (req, res) => {
         mobile: partner.mobile,
         city: partner.city,
         area: partner.area,
-        active: partner.active
-      }
+        active: partner.active,
+      },
     });
   } catch (err) {
     console.error("Delivery login error:", err);
@@ -406,10 +467,13 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// ...rest of your unchanged routes (accept/reject/status update/get assigned orders)...
+/* ============================================================================
+   13) Accept / Reject / Status for orders (delivery side)
+============================================================================ */
 router.patch("/orders/:orderId/accept", async (req, res) => {
   try {
-    if (!isValidId(req.params.orderId)) return res.status(400).json({ error: "Invalid orderId" });
+    if (!isValidId(req.params.orderId))
+      return res.status(400).json({ error: "Invalid orderId" });
     const { orderId } = req.params;
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ error: "Order not found" });
@@ -421,7 +485,7 @@ router.patch("/orders/:orderId/accept", async (req, res) => {
     order.assignmentHistory.push({
       deliveryPartner: order.deliveryPartner,
       status: "accepted",
-      at: new Date()
+      at: new Date(),
     });
     await order.save();
     res.json({ success: true, order });
@@ -433,7 +497,8 @@ router.patch("/orders/:orderId/accept", async (req, res) => {
 
 router.patch("/orders/:orderId/reject", async (req, res) => {
   try {
-    if (!isValidId(req.params.orderId)) return res.status(400).json({ error: "Invalid orderId" });
+    if (!isValidId(req.params.orderId))
+      return res.status(400).json({ error: "Invalid orderId" });
     const { orderId } = req.params;
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ error: "Order not found" });
@@ -445,7 +510,7 @@ router.patch("/orders/:orderId/reject", async (req, res) => {
     order.assignmentHistory.push({
       deliveryPartner: order.deliveryPartner,
       status: "rejected",
-      at: new Date()
+      at: new Date(),
     });
     order.deliveryPartner = null;
     await order.save();
@@ -458,7 +523,8 @@ router.patch("/orders/:orderId/reject", async (req, res) => {
 
 router.patch("/orders/:orderId/status", async (req, res) => {
   try {
-    if (!isValidId(req.params.orderId)) return res.status(400).json({ error: "Invalid orderId" });
+    if (!isValidId(req.params.orderId))
+      return res.status(400).json({ error: "Invalid orderId" });
     const { orderId } = req.params;
     const { status } = req.body;
     const order = await Order.findById(orderId).populate("pharmacy").populate("userId");
@@ -470,52 +536,40 @@ router.patch("/orders/:orderId/status", async (req, res) => {
     order.assignmentHistory.push({
       deliveryPartner: order.deliveryPartner,
       status: status,
-      at: new Date()
+      at: new Date(),
     });
     await order.save();
 
-    // --- Mark Payment as PAID for COD orders when delivered ---
-    if (
-      status === "delivered" &&
-      (order.paymentMethod === "cod" || order.paymentMethod === "cash")
-    ) {
+    // Mark Payment as PAID for COD orders when delivered
+    if (status === "delivered" && (order.paymentMethod === "cod" || order.paymentMethod === "cash")) {
       await Payment.updateOne({ orderId: order._id }, { status: "paid" });
     }
 
-    // === SEND ORDER DELIVERED EMAIL TO CUSTOMER ===
+    // On delivered: fire-and-forget invoice + email
     if (status === "delivered") {
-      // 1. Generate/Upload Invoice (fire-and-forget; don’t block response)
-  try {
-    // Add at the TOP of your file if not already:
-    // const { markOrderDelivered } = require("../controllers/orderController");
-    // (If you already require this controller, don't duplicate.)
+      try {
+        require("../controllers/orderController").markOrderDelivered(
+          { params: { id: orderId } },
+          { json: () => {}, status: () => ({ json: () => {} }) }
+        );
+        console.log("🧾 Invoice generation/upload triggered for order", orderId);
+      } catch (invErr) {
+        console.error("❌ Failed to trigger invoice generation/upload:", invErr);
+      }
 
-    // Fire and forget – don't await so response is fast:
-    require("../controllers/orderController")
-      .markOrderDelivered(
-        { params: { id: orderId } }, 
-        { 
-          json: () => {}, 
-          status: () => ({ json: () => {} }) 
-        }
-      );
-    console.log("🧾 Invoice generation/upload triggered for order", orderId);
-  } catch (invErr) {
-    console.error("❌ Failed to trigger invoice generation/upload:", invErr);
-  }
-
-  // 2. Email to Customer (your code)
+      // Email to customer
       try {
         const user = order.userId;
         const orderItems = order.items
           .map(
-            (item) =>
-              `<tr>
+            (item) => `
+              <tr>
                 <td style="padding: 8px 0;">${item.name} <span style="color:#777;font-size:13px">x${item.quantity}</span></td>
                 <td style="text-align:right;padding: 8px 0;">₹${item.price * item.quantity}</td>
               </tr>`
           )
           .join("");
+
         const transporter = require("nodemailer").createTransport({
           host: "smtp.hostinger.com",
           port: 465,
@@ -574,18 +628,22 @@ router.patch("/orders/:orderId/status", async (req, res) => {
   }
 });
 
-// 12. Get assigned orders for logged-in delivery partner
-// 12. Get assigned orders for logged-in delivery partner
+/* ============================================================================
+   14) Get assigned orders for logged-in delivery partner
+============================================================================ */
 router.get("/orders", async (req, res) => {
-  const deliveryPartnerId = req.headers['deliverypartnerid'] || req.query.deliveryPartnerId;
-  if (!deliveryPartnerId || !isValidId(deliveryPartnerId)) return res.status(400).json({ error: "Invalid deliveryPartnerId" });
+  const deliveryPartnerId =
+    req.headers["deliverypartnerid"] || req.query.deliveryPartnerId;
+  if (!deliveryPartnerId || !isValidId(deliveryPartnerId))
+    return res.status(400).json({ error: "Invalid deliveryPartnerId" });
   try {
     const orders = await Order.find({
       deliveryPartner: deliveryPartnerId,
-      status: { $in: ["assigned", "accepted", "out_for_delivery"] }
+      status: { $in: ["assigned", "accepted", "out_for_delivery"] },
     }).populate("pharmacy");
+
     // PATCH: Add .lat/.lng for pharmacy.location (for dashboard/frontend)
-    const patchedOrders = orders.map(order => {
+    const patchedOrders = orders.map((order) => {
       if (
         order.pharmacy &&
         order.pharmacy.location &&
@@ -606,43 +664,62 @@ router.get("/orders", async (req, res) => {
   }
 });
 
-// Check if at least one delivery partner is active in city
+/* ============================================================================
+   15) Check if at least one delivery partner is active in city
+   - Freshness via OR on lastSeenAt OR location.lastUpdated
+============================================================================ */
 router.get("/active-partner-in-city", async (req, res) => {
   try {
     const city = req.query.city;
     if (!city) return res.status(400).json({ error: "city required" });
 
+    const freshSince = new Date(Date.now() - 15 * 60 * 1000);
     const active = await DeliveryPartner.findOne({
       city: new RegExp(city, "i"),
       active: true,
-      status: "approved"
+      status: "approved",
+      $or: [
+        { lastSeenAt: { $gte: freshSince } },
+        { "location.lastUpdated": { $gte: freshSince } },
+      ],
     });
+
     res.json({ activePartnerExists: !!active });
   } catch (err) {
+    console.error("active-partner-in-city error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-// GET /api/delivery/active-partner-nearby?lat=...&lng=...
+/* ============================================================================
+   16) Find an active partner nearby a given lat/lng
+   - Freshness via OR on lastSeenAt OR location.lastUpdated
+   - Radius up to 8km (tunable)
+============================================================================ */
 router.get("/active-partner-nearby", async (req, res) => {
   const { lat, lng } = req.query;
   if (!lat || !lng) return res.json({ activePartnerExists: false });
 
   try {
-    const MAX_DISTANCE_M = 8000;      // 8 km
-    const FRESH_MINUTES = 15;         // only partners pinged recently
-    const freshSince = new Date(Date.now() - FRESH_MINUTES * 60 * 1000);
+    const MAX_DISTANCE_M = 8000; // 8 km
+    const freshSince = new Date(Date.now() - 15 * 60 * 1000);
 
     const partner = await DeliveryPartner.findOne({
       status: "approved",
       active: true,
-      lastUpdated: { $gte: freshSince },
+      $or: [
+        { lastSeenAt: { $gte: freshSince } },
+        { "location.lastUpdated": { $gte: freshSince } },
+      ],
       location: {
         $near: {
-          $geometry: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
-          $maxDistance: MAX_DISTANCE_M
-        }
-      }
+          $geometry: {
+            type: "Point",
+            coordinates: [parseFloat(lng), parseFloat(lat)],
+          },
+          $maxDistance: MAX_DISTANCE_M,
+        },
+      },
     }).lean();
 
     res.json({ activePartnerExists: !!partner });
@@ -651,6 +728,5 @@ router.get("/active-partner-nearby", async (req, res) => {
     res.json({ activePartnerExists: false });
   }
 });
-
 
 module.exports = router;

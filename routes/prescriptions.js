@@ -46,6 +46,9 @@ async function runAiParseForOrder(order) {
       ? `${process.env.SERVER_BASE_URL || "http://localhost:5000"}${order.prescriptionUrl}`
       : order.prescriptionUrl;
 
+    // ⬇️ NEW: show exactly what the server is trying to fetch (only when DEBUG_OCR is truthy)
+    if (process.env.DEBUG_OCR) console.log("[AI parse] fetching:", url);
+
     const { text, engine } = await extractTextPlus(url);
     if (process.env.DEBUG_OCR) {
       console.log(`[AI parse] engine=${engine}, chars=${(text||"").length}, order=${order._id}`);
@@ -57,7 +60,7 @@ async function runAiParseForOrder(order) {
       rawText: (text || "").slice(0, 100000),
       items
     };
-    // Optional legacy field (won't persist if not in schema, but harmless)
+    // Optional legacy field
     order.medicinesRequested = items.map(i => ({
       name: i.name,
       quantity: i.quantity || 1,
