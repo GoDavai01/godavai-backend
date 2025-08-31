@@ -47,6 +47,9 @@ async function runAiParseForOrder(order) {
       : order.prescriptionUrl;
 
     const { text, engine } = await extractTextPlus(url);
+    if (process.env.DEBUG_OCR) {
+      console.log(`[AI parse] engine=${engine}, chars=${(text||"").length}, order=${order._id}`);
+    }
     const items = parseMeds(text || "");
     order.ai = {
       parser: engine,
@@ -219,10 +222,8 @@ router.post('/order', auth, async (req, res) => {
       timeline: [{ status: 'waiting_for_quotes', date: new Date() }]
     });
 
-    // === C) Trigger AI parse non-blocking ===
-    setTimeout(() => {
-      runAiParseForOrder(order).catch(()=>{});
-    }, 10);
+    // Non-blocking but not at the mercy of timers
+    Promise.resolve().then(() => runAiParseForOrder(order)).catch(() => {});
 
     res.json(order);
   } catch (err) {
