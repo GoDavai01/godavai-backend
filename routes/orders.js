@@ -289,7 +289,7 @@ router.put("/:orderId/quote", async (req, res) => {
         `Quote for order #${order._id} is ready. Review and confirm!`,
         `/orders/${order._id}`
       );
-        await saveInAppNotification({
+      await saveInAppNotification({
         userId: user._id,
         title: "Quote Ready",
         message: `Order #${order._id} has a quote.`,
@@ -506,6 +506,38 @@ router.get("/:orderId", async (req, res) => {
     res.json(order);
   } catch (err) {
     res.status(500).json({ error: "Fetch order failed" });
+  }
+});
+
+// ✅ Moved from app.js: Update driver location
+router.post("/:orderId/location", auth, async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+    await Order.findByIdAndUpdate(req.params.orderId, { driverLocation: { lat, lng } });
+    res.json({ message: "Location updated" });
+  } catch {
+    res.status(500).json({ message: "Failed to update location" });
+  }
+});
+
+// ✅ Moved from app.js: Update dosage/note + notify user
+router.patch("/:orderId/dosage", auth, async (req, res) => {
+  try {
+    const { dosage, note } = req.body;
+    const order = await Order.findById(req.params.orderId);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+    if (dosage) order.dosage = dosage;
+    if (note) order.note = note;
+    await order.save();
+    await notifyUser(
+      order.userId.toString(),
+      "Dosage Updated",
+      "Pharmacy updated your dosage instructions. Check your order details.",
+      `${process.env.FRONTEND_URL || "http://localhost:3000"}/order/${order._id}`
+    );
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ message: "Could not update dosage/note" });
   }
 });
 

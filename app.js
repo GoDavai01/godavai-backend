@@ -200,11 +200,11 @@ app.get("/api/medicine/suggestions", suggestionsHandler);
 // ---- end suggestions ----
 
 // Routes (leave unchanged - already modular and clean)
-// replace the four lines above with just these two:
 app.use("/api/pharmacies", pharmaciesRouter);
 app.use("/api/medicines", medicinesRouter);
 
-app.use("/api/orders", require("./routes/orders"));
+// ✅ Mount orders router ONCE (no duplicates) so auto-assign runs from routes/orders.js
+app.use('/api/orders', ordersRouter);
 
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/notifications', require('./routes/notifications'));
@@ -216,7 +216,6 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/support-chat", require("./routes/supportChat"));
 app.use('/api/admin', require('./routes/admin'));
-app.use('/api/orders', ordersRouter);
 app.use("/api/allorders", require("./routes/allorders"));
 app.use("/api/pharmacy", require("./routes/pharmacyAuth"));
 app.use(express.json());
@@ -260,6 +259,7 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // -------- PHARMACY ORDERS FOR DASHBOARD --------
+// (Keep a single definition to avoid duplicates)
 app.get("/api/pharmacy/orders", auth, async (req, res) => {
   try {
     if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
@@ -311,7 +311,7 @@ const pharmacyDocsUpload = isS3
       }
     }).fields(pharmacyDocFields);
 
-    app.get("/api/pharmacies/nearby", async (req, res) => {
+app.get("/api/pharmacies/nearby", async (req, res) => {
   try {
     const lat = Number(req.query.lat);
     const lng = Number(req.query.lng);
@@ -375,64 +375,63 @@ app.post("/api/pharmacy/register", (req, res) => {
       return res.status(400).json({ message: "Invalid or missing timings" });
     }
     const requiredFields = [
-  "name","ownerName","city","area","address","contact","email","password","qualification",
-  "stateCouncilReg","drugLicenseRetail","gstin","bankAccount","ifsc","declarationAccepted"
-];
-console.log("Incoming registration:", req.body);
-console.log("Incoming files:", req.files);
-const missingFields = requiredFields.filter(f => !req.body[f]);
-if (missingFields.length) {
-  return res.status(400).json({ 
-    message: "Missing required fields",
-    fieldsMissing: missingFields 
-  });
-}
-
+      "name","ownerName","city","area","address","contact","email","password","qualification",
+      "stateCouncilReg","drugLicenseRetail","gstin","bankAccount","ifsc","declarationAccepted"
+    ];
+    console.log("Incoming registration:", req.body);
+    console.log("Incoming files:", req.files);
+    const missingFields = requiredFields.filter(f => !req.body[f]);
+    if (missingFields.length) {
+      return res.status(400).json({
+        message: "Missing required fields",
+        fieldsMissing: missingFields
+      });
+    }
 
     const hashed = await bcrypt.hash(password, 10);
     function filePath(field) {
-  if (req.files && req.files[field]) {
-    // S3: use file.location, local: use /uploads/...
-    return isS3
-      ? req.files[field][0].location
-      : (() => {
-          const p = req.files[field][0].path.replace(/\\/g, "/");
-          const idx = p.indexOf("/uploads/");
-          return idx !== -1 ? p.substring(idx) : p;
-        })();
-  }
-  return undefined;
-}
+      if (req.files && req.files[field]) {
+        // S3: use file.location, local: use /uploads/...
+        return isS3
+          ? req.files[field][0].location
+          : (() => {
+              const p = req.files[field][0].path.replace(/\\/g, "/");
+              const idx = p.indexOf("/uploads/");
+              return idx !== -1 ? p.substring(idx) : p;
+            })();
+      }
+      return undefined;
+    }
 
     try {
       // --- PIN VALIDATION LOGIC ---
-const { pin, contact } = req.body;
-if (!/^\d{4}$/.test(pin)) {
-  return res.status(400).json({ message: "PIN must be 4 digits." });
-}
-if (pin === contact.substring(0, 4)) {
-  return res.status(400).json({ message: "PIN cannot be first 4 digits of mobile." });
-}
-const pinHash = crypto.createHash("sha256").update(pin).digest("hex");
-const existingPin = await Pharmacy.findOne({ pin: pinHash });
-if (existingPin) {
-  return res.status(409).json({ message: "PIN already in use. Choose another." });
-}
+      const { pin, contact } = req.body;
+      if (!/^\d{4}$/.test(pin)) {
+        return res.status(400).json({ message: "PIN must be 4 digits." });
+      }
+      if (pin === contact.substring(0, 4)) {
+        return res.status(400).json({ message: "PIN cannot be first 4 digits of mobile." });
+      }
+      const pinHash = crypto.createHash("sha256").update(pin).digest("hex");
+      const existingPin = await Pharmacy.findOne({ pin: pinHash });
+      if (existingPin) {
+        return res.status(409).json({ message: "PIN already in use. Choose another." });
+      }
 
-const lat = req.body.lat ? parseFloat(req.body.lat) : null;
-const lng = req.body.lng ? parseFloat(req.body.lng) : null;
+      const lat = req.body.lat ? parseFloat(req.body.lat) : null;
+      const lng = req.body.lng ? parseFloat(req.body.lng) : null;
 
-let location = undefined;
-if (lat && lng) {
-  location = {
-    type: "Point",
-    coordinates: [lng, lat],
-    formatted: req.body.locationFormatted || "",
-  };
-}
+      let location = undefined;
+      if (lat && lng) {
+        location = {
+          type: "Point",
+          coordinates: [lng, lat],
+          formatted: req.body.locationFormatted || "",
+        };
+      }
 
       const pharmacy = new Pharmacy({
-        name, ownerName, city, area, address, contact, email, password: hashed,pin: pinHash,
+        name, ownerName, city, area, address, contact, email, password: hashed, pin: pinHash,
         qualification, stateCouncilReg, drugLicenseRetail, drugLicenseWholesale,
         gstin, bankAccount, ifsc, bankName, accountHolder,
         businessContact, businessContactName, emergencyContact,
@@ -449,57 +448,56 @@ if (lat && lng) {
         addressProof: filePath("addressProof"),
         photo: filePath("photo"),
         digitalSignature: filePath("digitalSignature"),
-        location, 
+        location,
       });
       // After collecting city, area, address:
-const fullAddress = `${address}, ${area}, ${city}`;
-if (!location || !location.formatted) {
-const geo = await geocodeAddress(fullAddress);
-if (geo) {
-  pharmacy.location = {
-    type: "Point",
-    coordinates: [geo.lng, geo.lat], // [lng, lat] order!
-    formatted: geo.formatted
-  };
-} else {
-  // Optional: You can choose to block registration, or just skip location
-  pharmacy.location = undefined;
- }
-} 
+      const fullAddress = `${address}, ${area}, ${city}`;
+      if (!location || !location.formatted) {
+        const geo = await geocodeAddress(fullAddress);
+        if (geo) {
+          pharmacy.location = {
+            type: "Point",
+            coordinates: [geo.lng, geo.lat], // [lng, lat] order!
+            formatted: geo.formatted
+          };
+        } else {
+          pharmacy.location = undefined;
+        }
+      }
       await pharmacy.save();
       // After pharmacy.save() and BEFORE res.status(201)...
-const transporter = nodemailer.createTransport({
-  host: "smtp.hostinger.com", // change to smtp.gmail.com if using Gmail, or as per your provider
-  port: 465, // or 587 for TLS
-  secure: true, // true for port 465, false for 587
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+      const transporter = nodemailer.createTransport({
+        host: "smtp.hostinger.com", // change to smtp.gmail.com if using Gmail, or as per your provider
+        port: 465, // or 587 for TLS
+        secure: true, // true for port 465, false for 587
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS,
+        },
+      });
 
-const mailOptions = {
-  from: `"GoDavaii" <${process.env.EMAIL_USER}>`,
-  to: pharmacy.email,
-  subject: "GoDavaii: Pharmacy Registration Received",
-  html: `
-    <div style="font-family:sans-serif">
-      <h2>Welcome to GoDavaii!</h2>
-      <p>Hi <b>${pharmacy.ownerName}</b>,</p>
-      <p>Your pharmacy registration for <b>${pharmacy.name}</b> has been received and is now under review by our admin team.</p>
-      <p>You will be notified by email/SMS as soon as your account is approved.</p>
-      <br>
-      <p>Thank you for joining the GoDavaii!</p>
-      <p>Team GoDavaii</p>
-    </div>
-  `
-};
-try {
-  await transporter.sendMail(mailOptions);
-  console.log("✅ Registration email sent to:", pharmacy.email);
-} catch (emailErr) {
-  console.error("❌ Failed to send registration email:", emailErr);
-}
+      const mailOptions = {
+        from: `"GoDavaii" <${process.env.EMAIL_USER}>`,
+        to: pharmacy.email,
+        subject: "GoDavaii: Pharmacy Registration Received",
+        html: `
+          <div style="font-family:sans-serif">
+            <h2>Welcome to GoDavaii!</h2>
+            <p>Hi <b>${pharmacy.ownerName}</b>,</p>
+            <p>Your pharmacy registration for <b>${pharmacy.name}</b> has been received and is now under review by our admin team.</p>
+            <p>You will be notified by email/SMS as soon as your account is approved.</p>
+            <br>
+            <p>Thank you for joining the GoDavaii!</p>
+            <p>Team GoDavaii</p>
+          </div>
+        `
+      };
+      try {
+        await transporter.sendMail(mailOptions);
+        console.log("✅ Registration email sent to:", pharmacy.email);
+      } catch (emailErr) {
+        console.error("❌ Failed to send registration email:", emailErr);
+      }
       res.status(201).json({ message: "Pharmacy registration submitted! Await admin approval." });
     } catch (err) {
       res.status(500).json({ message: "Registration failed", error: err.message });
@@ -680,7 +678,7 @@ app.delete("/api/admin/pharmacy/:id", async (req, res) => {
 app.get("/api/admin/pharmacy/:id/medicines", async (req, res) => {
   try {
     const list = await Medicine.find({ pharmacy: req.params.id });
-    res.json(list);
+  res.json(list);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch medicines" });
   }
@@ -1075,343 +1073,6 @@ app.post("/api/pharmacy/login", async (req, res) => {
   res.json({ token, pharmacy });
 });
 
-app.get("/api/pharmacy/orders", auth, async (req, res) => {
-  if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
-  const pharmacy = await Pharmacy.findById(req.user.pharmacyId);
-  if (!pharmacy) return res.status(403).json({ message: "Invalid pharmacy" });
-  const orders = await Order.find({ pharmacy: pharmacy._id }).lean();
-  // Remove address field from each order object
-  const sanitizedOrders = orders.map(order => {
-    // Remove entire address object, or just the sensitive fields you want
-    if (order.address) {
-      // Option 1: Remove entire address object
-      delete order.address;
-
-      // Option 2: If you want to keep coordinates or pin, you can delete only specific fields
-      // delete order.address.addressLine;
-      // delete order.address.landmark;
-      // delete order.address.floor;
-      // delete order.address.city;
-      // ... etc.
-    }
-    return order;
-  });
-  res.json(sanitizedOrders);
-});
-
-
-app.patch("/api/pharmacy/orders/:orderId", auth, async (req, res) => {
-  if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
-  const order = await Order.findById(req.params.orderId);
-  if (!order) return res.status(404).json({ message: "Order not found" });
-  const { dosage, note, status } = req.body;
-
-  if (dosage) order.dosage = dosage;
-  if (note) order.note = note;
-  if (typeof status !== "undefined") order.status = status;
-  await order.save();
-
-  // Notify user if QUOTED
-  // Adjust this line as per your actual "quoted" status (could be string "quoted" or a number, eg. 2)
-  if (
-    (typeof status === "string" && status.toLowerCase() === "quoted") ||
-    status === 2 // if you use a numeric code for quoted
-  ) {
-    await notifyUser(
-      order.userId.toString(),
-      "Prescription Quote Ready",
-      "A pharmacy has submitted a quote for your prescription! Tap to view details.",
-      `${process.env.FRONTEND_URL || "http://localhost:3000"}/my-prescriptions`
-    );
-    await saveInAppNotification({
-      userId: order.userId.toString(),
-      title: "Prescription Quote Ready",
-      message: "A pharmacy has submitted a quote for your prescription."
-    });
-  } else if (dosage || note) {
-    await notifyUser(
-      order.userId.toString(),
-      "Order Updated by Pharmacy",
-      "Check your order for new dosage/note.",
-      `${process.env.FRONTEND_URL || "http://localhost:3000"}/order/${order._id}`
-    );
-  }
-  res.json(order);
-});
-
-
-app.post("/api/admin/pharmacy/approve", auth, async (req, res) => {
-  if (!req.user.type || req.user.type !== "admin") return res.status(403).json({ message: "Not authorized" });
-  const { pharmacyId } = req.body;
-  await Pharmacy.findByIdAndUpdate(pharmacyId, { approved: true });
-  res.json({ message: "Pharmacy approved" });
-});
-
-app.post("/api/admin/offer", auth, async (req, res) => {
-  if (!req.user.type || req.user.type !== "admin") return res.status(403).json({ message: "Not authorized" });
-  const offer = new Offer(req.body);
-  await offer.save();
-  res.json(offer);
-});
-
-app.get("/api/pharmacies", async (req, res) => {
-  try {
-    const { city, area, location, trending } = req.query;
-    let filter = { active: true }; // <<-- Add this!
-    if (city) filter.city = new RegExp(city, "i");
-    if (area) filter.area = new RegExp(area, "i");
-    if (location) {
-      filter.$or = [
-        { city: new RegExp(location, "i") },
-        { area: new RegExp(location, "i") }
-      ];
-    }
-    if (trending === "1" || trending === "true") filter.trending = true;
-    const pharmacies = await Pharmacy.find(filter);
-    res.json(pharmacies);
-  } catch (err) {
-    res.status(500).json({ message: "Failed to fetch pharmacies" });
-  }
-});
-
-app.get("/api/medicines", async (req, res) => {
-  try {
-    const { pharmacyId, trending, city, area, location } = req.query;
-    let pharmacyFilter = {};
-
-    // If a pharmacyId is given, just filter by it (used on pharmacy page)
-    if (pharmacyId) {
-      pharmacyFilter._id = pharmacyId;
-    } else {
-      // Otherwise filter by city/area if provided
-      if (city) pharmacyFilter.city = new RegExp(city, "i");
-      if (area) pharmacyFilter.area = new RegExp(area, "i");
-      if (location) {
-        pharmacyFilter.$or = [
-          { city: new RegExp(location, "i") },
-          { area: new RegExp(location, "i") }
-        ];
-      }
-    }
-
-    // Find pharmacies that match city/area (or all if none selected)
-    const pharmacies = await Pharmacy.find(pharmacyFilter).select("_id");
-    const pharmacyIds = pharmacies.map(p => p._id);
-
-    // Now fetch medicines only from these pharmacies
-    let medFilter = {};
-    if (pharmacyIds.length > 0) medFilter.pharmacy = { $in: pharmacyIds };
-    if (trending === "1" || trending === "true") medFilter.trending = true;
-    // If searching for a city/area but no pharmacy matches, return []
-    if ((city || area || location) && pharmacyIds.length === 0)
-      return res.json([]);
-
-    // Get medicines, also populate pharmacy so you can show name/city in frontend if needed
-    const medicines = await Medicine.find(medFilter).populate("pharmacy");
-    res.json(medicines);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch medicines" });
-  }
-});
-
-
-app.get('/api/medicines/search', async (req, res) => {
-  const q = req.query.q || '';
-  if (!q) return res.json([]);
-  try {
-    const results = await Medicine.find({
-      name: { $regex: q, $options: 'i' }
-    }).limit(10);
-    res.json(results);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to search medicines" });
-  }
-});
-
-app.post("/api/medicines", async (req, res) => {
-  try {
-    const { name, price, pharmacy, city, area, category, trending } = req.body;
-    if (!name || !price) {
-      return res.status(400).json({ message: "Name and price required" });
-    }
-
-    let img;
-    try {
-      img = await generateMedicineImage(name);
-    } catch (e) {
-      img = "https://img.freepik.com/free-vector/medicine-bottle-pills-isolated_1284-42391.jpg";
-    }
-
-    // ⏬ Generate description if missing
-    let description = req.body.description;
-    if (!description && name) {
-      description = await generateMedicineDescription(name);
-    }
-
-    const medicine = new Medicine({
-      name,
-      price,
-      pharmacy,
-      city,
-      area,
-      category: category || "Miscellaneous",
-      trending,
-      img,
-      description
-    });
-
-    await medicine.save();
-
-    await Pharmacy.findByIdAndUpdate(
-      pharmacy,
-      { $addToSet: { medicines: medicine._id } }
-    );
-
-    res.status(201).json(medicine);
-  } catch (err) {
-    res.status(500).json({ message: "Failed to add medicine", error: err.message });
-  }
-});
-
-app.get("/api/offers", async (req, res) => {
-  const offers = await Offer.find().sort({ createdAt: -1 });
-  res.json(offers);
-});
-
-app.get("/api/trending", (req, res) => {
-  res.json([
-    { id: "med1", name: "Paracetamol 500mg", image: "/images/para.png", sold: 1200 },
-    { id: "med2", name: "Vitamin C 1000mg", image: "/images/vitc.png", sold: 980 },
-    { id: "med3", name: "Cough Syrup", image: "/images/cough.png", sold: 870 }
-  ]);
-});
-
-app.post("/api/orders", auth, async (req, res) => {
-  try {
-    const {
-      items, address, dosage, paymentMethod, pharmacyId,
-      total, prescription,
-    } = req.body;
-    if (!items || !items.length || !address || !pharmacyId || !total) {
-      return res.status(400).json({ message: "Incomplete order data" });
-    }
-    const pharmacy = await Pharmacy.findById(pharmacyId);
-    const order = new Order({
-  userId: req.user.userId,
-  pharmacy: pharmacyId,
-  items, address, dosage, paymentMethod, total, prescription,
-  status: "placed", // <-- fix here!
-  createdAt: new Date(),
-  pharmacyName: pharmacy ? pharmacy.name : undefined,
-});
-    await order.save();
-
-// ADD THIS CODE RIGHT HERE 👇
-const { createPaymentRecord } = require('./controllers/paymentsController');
-try {
-  // Always create Payment record for every order (COD or Razorpay/UPI/card)
-  await createPaymentRecord(order._id, { method: paymentMethod });
-} catch (err) {
-  console.error("Failed to create payment record:", err);
-}
-
-await notifyUser(
-  req.user.userId.toString(),
-  "Order Placed!",
-  "Your order has been placed and is being processed. Track it in GoDavaii app.",
-  `${process.env.FRONTEND_URL || "http://localhost:3000"}/order/${order._id}`
-);
-res.status(201).json({ message: "Order placed successfully!", order });
-  } catch (err) {
-    res.status(500).json({ message: "Order placement failed", error: err.message });
-  }
-});
-
-app.get("/api/orders/:orderId", async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.orderId);
-    if (!order) return res.status(404).json({ message: "Order not found" });
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-app.post("/api/orders/:orderId/location", auth, async (req, res) => {
-  try {
-    const { lat, lng } = req.body;
-    await Order.findByIdAndUpdate(req.params.orderId, { driverLocation: { lat, lng } });
-    res.json({ message: "Location updated" });
-  } catch {
-    res.status(500).json({ message: "Failed to update location" });
-  }
-});
-
-// In your order status update endpoint, e.g.:
-app.post("/api/orders/:orderId/status", auth, async (req, res) => {
-  const { status } = req.body;
-  try {
-    const order = await Order.findById(req.params.orderId);
-    if (!order) return res.status(404).json({ message: "Order not found" });
-
-    order.status = status;
-    await order.save();
-
-    // Example: Notify user on delivery
-    if (status === 2) {
-      await notifyUser(
-        order.userId.toString(),
-        "Order Out for Delivery 🚚",
-        "Your medicines are out for delivery! Track your order in GoDavaii.",
-        `${process.env.FRONTEND_URL || "http://localhost:3000"}/order/${order._id}`
-      );
-      await saveInAppNotification({
-        userId: order.userId,
-        title: "Order Out for Delivery 🚚",
-        message: "Your medicines are out for delivery! Track your order in GoDavaii."
-      });
-    }
-    // Example: Notify user on delivered
-    if (status === 3) {
-      await notifyUser(
-        order.userId.toString(),
-        "Delivered! Get Well Soon 🎉",
-        "Your order has been delivered. Wishing you a speedy recovery!",
-        `${process.env.FRONTEND_URL || "http://localhost:3000"}/order/${order._id}`
-      );
-      await saveInAppNotification({
-        userId: order.userId,
-        title: "Delivered! Get Well Soon 🎉",
-        message: "Your order has been delivered. Wishing you a speedy recovery!"
-      });
-    }
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ message: "Could not update order status" });
-  }
-});
-
-
-app.patch("/api/orders/:orderId/dosage", auth, async (req, res) => {
-  try {
-    const { dosage, note } = req.body;
-    const order = await Order.findById(req.params.orderId);
-    if (!order) return res.status(404).json({ message: "Order not found" });
-    if (dosage) order.dosage = dosage;
-    if (note) order.note = note;
-    await order.save();
-    await notifyUser(
-      order.userId.toString(),
-      "Dosage Updated",
-      "Pharmacy updated your dosage instructions. Check your order details.",
-      `${process.env.FRONTEND_URL || "http://localhost:3000"}/order/${order._id}`
-    );
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ message: "Could not update dosage/note" });
-  }
-});
-
 app.get("/api/pharmacy/:pharmacyId/orders", auth, async (req, res) => {
   const { pharmacyId } = req.params;
   const orders = await Order.find({ pharmacy: pharmacyId });
@@ -1482,7 +1143,7 @@ app.post("/api/request-reset", async (req, res) => {
     const twilioClient = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
     await twilioClient.messages.create({
       body: `Your GoDavaii password reset OTP is: ${otp}`,
-      from: process.env.TWILIO_PHONE,
+      from: process.env.TWILIO_PHONE},
       to: "+91" + user.mobile,
     });
     */
@@ -1530,7 +1191,7 @@ app.post("/api/reset-password-otp", async (req, res) => {
 });
 
 // Health checks / root endpoints
-app.get("/cors-test", (req, res) => 
+app.get("/cors-test", (req, res) =>
   res.json({ ok: true, origin: req.headers.origin || null })
 );
 app.get("/", (req, res) => res.send("GoDavai API is running..."));
@@ -1660,4 +1321,3 @@ app.get("/routes", (req, res) => {
 });
 
 module.exports = app;
- 
