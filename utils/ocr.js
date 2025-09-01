@@ -91,6 +91,9 @@ async function preprocess(buf) {
   }
 }
 
+/* -------------------------------- Sleep ---------------------------------- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /* ------------------------------ Engines ---------------------------------- */
 
 /** Google Vision OCR (with tiny retry) */
@@ -107,10 +110,7 @@ async function ocrGoogle(buf) {
       if (text) return text;
     } catch (err) {
       if (process.env.DEBUG_OCR)
-        console.warn(
-          "[OCR] google-vision attempt failed:",
-          err?.message || err
-        );
+        console.warn("[OCR] google-vision attempt failed:", err?.message || err);
     }
   }
   return null;
@@ -118,43 +118,58 @@ async function ocrGoogle(buf) {
 
 /** Azure Vision Read OCR (REST, v3.2) — longer poll for PDFs/handwriting */
 async function ocrAzure(buf) {
-  const ep = (process.env.AZURE_VISION_ENDPOINT || "").replace(/\/+$/, "");
+  // Accept BOTH names to avoid env typo breakage
+  const ep = (process.env.AZURE_VISION_ENDPOINT || process.env.AZURE_OCR_ENDPOINT || "").replace(/\/+$/, "");
   const key = process.env.AZURE_VISION_KEY;
   if (!ep || !key) return null;
 
-  // 1) submit
-  const submit = await fetchWithUA(`${ep}/vision/v3.2/read/analyze?language=unk`, {
-    method: "POST",
-    headers: {
-      "Ocp-Apim-Subscription-Key": key,
-      "Content-Type": "application/octet-stream",
-    },
-    body: buf,
-  });
-  if (submit.status !== 202) return null;
-
-  const op = submit.headers.get("operation-location");
-  if (!op) return null;
-
-  // 2) poll (wait ~22s max: 28 * 800ms)
-  for (let i = 0; i < 28; i++) {
-    await new Promise((r) => setTimeout(r, 800));
-    const res = await fetchWithUA(op, {
-      headers: { "Ocp-Apim-Subscription-Key": key },
+  try {
+    // 1) submit
+    const submit = await fetchWithUA(`${ep}/vision/v3.2/read/analyze?language=unk`, {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": key,
+        "Content-Type": "application/octet-stream",
+      },
+      body: buf,
     });
-    const j = await res.json();
-    if (j.status === "succeeded") {
-      const lines =
-        j?.analyzeResult?.readResults?.flatMap((p) =>
-          (p.lines || []).map((l) => l.text)
-        ) ??
-        j?.analyzeResult?.pages?.flatMap((p) =>
-          (p.lines || []).map((l) => l.content)
-        ) ??
-        [];
-      return lines && lines.length ? lines.join("\n") : null;
+
+    if (submit.status !== 202) {
+      if (process.env.DEBUG_OCR) {
+        const txt = await submit.text().catch(() => "");
+        console.warn("[OCR] azure submit failed:", submit.status, submit.statusText, txt.slice(0, 200));
+      }
+      return null;
     }
-    if (j.status === "failed") return null;
+
+    const op = submit.headers.get("operation-location");
+    if (!op) return null;
+
+    // 2) poll (wait ~22s max: 28 * 800ms)
+    for (let i = 0; i < 28; i++) {
+      await sleep(800);
+      const res = await fetchWithUA(op, {
+        headers: { "Ocp-Apim-Subscription-Key": key },
+      });
+      const j = await res.json().catch(() => ({}));
+      if (j.status === "succeeded") {
+        const lines =
+          j?.analyzeResult?.readResults?.flatMap((p) =>
+            (p.lines || []).map((l) => l.text)
+          ) ??
+          j?.analyzeResult?.pages?.flatMap((p) =>
+            (p.lines || []).map((l) => l.content)
+          ) ??
+          [];
+        return lines && lines.length ? lines.join("\n") : null;
+      }
+      if (j.status === "failed") {
+        if (process.env.DEBUG_OCR) console.warn("[OCR] azure status=failed");
+        return null;
+      }
+    }
+  } catch (e) {
+    if (process.env.DEBUG_OCR) console.warn("[OCR] azure error:", e?.message || e);
   }
   return null;
 }
@@ -163,24 +178,24 @@ async function ocrAzure(buf) {
 async function ocrTextract(buf) {
   if (!textractClient) return null;
   try {
-  const { DetectDocumentTextCommand } = require("@aws-sdk/client-textract");
-  const out = await textractClient.send(
-    new DetectDocumentTextCommand({ Document: { Bytes: buf } })
-  );
-  const lines = (out?.Blocks || [])
-    .filter((b) => b.BlockType === "LINE")
-    .map((b) => b.Text)
-    .filter(Boolean);
-  return lines.length ? lines.join("\n") : null;
+    const { DetectDocumentTextCommand } = require("@aws-sdk/client-textract");
+    const out = await textractClient.send(
+      new DetectDocumentTextCommand({ Document: { Bytes: buf } })
+    );
+    const lines = (out?.Blocks || [])
+      .filter((b) => b.BlockType === "LINE")
+      .map((b) => b.Text)
+      .filter(Boolean);
+    return lines.length ? lines.join("\n") : null;
   } catch (e) {
     if (process.env.DEBUG_OCR) {
-        console.warn("[OCR] textract failed:", e?.message || e);
-        }
-        return null; // <- DO NOT throw; let the pipeline continue
-        }
+      console.warn("[OCR] textract failed:", e?.message || e);
+    }
+    return null; // never throw; let the pipeline continue
+  }
 }
 
-/** Local Tesseract OCR (fallback, optional & safe) */
+/** Local Tesseract OCR (fallback, optional & safe with timeout) */
 async function ocrTesseract(buf) {
   let createWorker;
   try {
@@ -191,20 +206,31 @@ async function ocrTesseract(buf) {
     return null;
   }
 
-  const worker = await createWorker({ logger: () => {} });
+  let worker;
+  // Hard stop after 30s to avoid hanging/502 on serverless hosts
+  let timeout;
+  const kill = async () => {
+    clearTimeout(timeout);
+    try { await worker?.terminate(); } catch {}
+  };
+
   try {
+    worker = await createWorker({ logger: () => {} });
+    timeout = setTimeout(() => {
+      // best-effort terminate; caller will just get null
+      kill();
+    }, 30_000);
+
     await worker.loadLanguage("eng");
     await worker.initialize("eng");
     const { data } = await worker.recognize(buf);
+    await kill();
     return data?.text || null;
   } catch (e) {
     if (process.env.DEBUG_OCR)
       console.warn("[OCR] tesseract run failed:", e.message);
+    await kill();
     return null;
-  } finally {
-    try {
-      await worker.terminate();
-    } catch {}
   }
 }
 

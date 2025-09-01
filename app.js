@@ -99,41 +99,29 @@ function isOriginAllowed(origin) {
   return allowedOrigins.some(o => normalizeOrigin(o) === normOrigin);
 }
 
-app.use(cors({
-  origin: function (origin, callback) {
-    // DEBUG LOGGING
-    console.log("[CORS CHECK] Incoming origin:", origin);
-    console.log("[CORS CHECK] allowedOrigins:", allowedOrigins);
+// --- CORS: keep this BEFORE any routes ---
+const cors = require('cors');
 
-    if (isOriginAllowed(origin)) {
-      console.log("[CORS] Allowed!");
-      return callback(null, true);
-    }
-    console.log("[CORS] Blocked!");
-    return callback(new Error("Not allowed by CORS"));
-  },
+const corsOptions = {
+  origin: [
+    'https://godavaii.com',
+    'https://www.godavaii.com',
+    /\.vercel\.app$/i,         // allow your preview apps
+    'http://localhost:3000'    // keep for local dev if you use it
+  ],
   credentials: true,
-  methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
+  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
   allowedHeaders: [
-    "Origin",
-    "X-Requested-With",
-    "Content-Type",
-    "Accept",
-    "Authorization",
-    "deliverypartnerid",
-    "pharmacyid",
-    "adminid",
-    "userid",
-    "x-access-token",
-    "x-refresh-token",
-    "x-csrf-token"
-  ].join(","),
-  exposedHeaders: [
-    "Authorization",
-    "x-access-token"
-  ].join(","),
-}));
-app.options("*", cors()); // answer all preflights (OPTIONS)
+    'Origin','X-Requested-With','Content-Type','Accept','Authorization',
+    'deliverypartnerid','pharmacyid','adminid','userid',
+    'x-access-token','x-refresh-token','x-csrf-token'
+  ],
+  exposedHeaders: ['Authorization','x-access-token']
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // respond to all preflights
+
 
 // Upload folders
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
@@ -1657,6 +1645,21 @@ app.get("/routes", (req, res) => {
   };
   app._router.stack.forEach(l => walk("", l));
   res.json(out.sort());
+});
+
+// --- Global error handler that still returns CORS so the browser shows the real error ---
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  // echo back the origin if allowed; otherwise use first allowed origin or *
+  const reqOrigin = req.headers.origin;
+  const allow =
+    ['https://godavaii.com','https://www.godavaii.com'].includes(reqOrigin) ||
+    /\.vercel\.app$/i.test(reqOrigin) ||
+    reqOrigin === 'http://localhost:3000';
+
+  res.setHeader('Access-Control-Allow-Origin', allow ? reqOrigin : 'https://www.godavaii.com');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.status(500).json({ error: 'Server error' });
 });
 
 module.exports = app;
