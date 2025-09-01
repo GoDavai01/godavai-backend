@@ -124,8 +124,8 @@ async function ocrAzure(buf) {
   if (!ep || !key) return null;
 
   try {
-    // 1) submit
-    const submit = await fetchWithUA(`${ep}/vision/v3.2/read/analyze?language=unk`, {
+    // 1) submit  (NOTE: no ?language=unk -> let Azure auto-detect)
+    const submit = await fetchWithUA(`${ep}/vision/v3.2/read/analyze`, {
       method: "POST",
       headers: {
         "Ocp-Apim-Subscription-Key": key,
@@ -215,7 +215,8 @@ async function ocrTesseract(buf) {
   };
 
   try {
-    worker = await createWorker({ logger: () => {} });
+    // NOTE: do NOT pass a logger function; it causes DataCloneError in Node workers
+    worker = await createWorker();
     timeout = setTimeout(() => {
       // best-effort terminate; caller will just get null
       kill();
