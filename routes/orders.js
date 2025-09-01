@@ -24,6 +24,25 @@ const WAVES = [
   { delayMs: 60_000, km: 8.0, k: 6 }, // Wave 3
 ];
 
+// --- status normalization so numeric or string statuses both work ---
+const STATUS_MAP = {
+  0: "pending",
+  1: "processing",
+  2: "out_for_delivery",
+  3: "delivered",
+  4: "cancelled",
+  5: "rejected",
+  6: "assigned",
+  7: "accepted",
+};
+function normalizeStatus(s) {
+  if (typeof s === "number") return STATUS_MAP[s] || String(s);
+  if (s == null) return s;
+  const t = String(s).trim();
+  if (/^\d+$/.test(t)) return STATUS_MAP[Number(t)] || t;
+  return t.toLowerCase();
+}
+
 async function findCandidateNear(lng, lat, km, k) {
   const freshSince = new Date(Date.now() - AUTOASSIGN_FRESH_MINUTES * 60 * 1000);
 
@@ -85,13 +104,14 @@ function scheduleAutoAssign(orderId, baseLng, baseLat) {
         const order = await Order.findById(orderId);
         if (!order) return;
 
-        // Treat "unset" as "unassigned" (key fix)
+        // Treat "unset" as "unassigned"
         const assignState = order.deliveryAssignmentStatus || "unassigned";
+        const currentStatus = normalizeStatus(order.status);
 
         if (
           order.deliveryPartner ||
           assignState !== "unassigned" ||
-          order.status !== "processing"
+          currentStatus !== "processing"
         ) {
           // Debug: why a wave is skipped
           console.log(
@@ -269,7 +289,7 @@ router.put("/:orderId/quote", async (req, res) => {
         `Quote for order #${order._id} is ready. Review and confirm!`,
         `/orders/${order._id}`
       );
-      await saveInAppNotification({
+        await saveInAppNotification({
         userId: user._id,
         title: "Quote Ready",
         message: `Order #${order._id} has a quote.`,
@@ -349,10 +369,11 @@ router.put("/:orderId/accept", async (req, res) => {
       const baseLng = full?.pharmacy?.location?.coordinates?.[0] ?? full?.address?.lng;
       const baseLat = full?.pharmacy?.location?.coordinates?.[1] ?? full?.address?.lat;
       if (typeof baseLng === "number" && typeof baseLat === "number") {
+        const currentStatus = normalizeStatus(full.status);
         if (
           !full.deliveryPartner &&
           (full.deliveryAssignmentStatus === "unassigned" || !full.deliveryAssignmentStatus) &&
-          full.status === "processing"
+          currentStatus === "processing"
         ) {
           scheduleAutoAssign(full._id, baseLng, baseLat);
         }
@@ -372,11 +393,12 @@ async function handleStatusUpdate(req, res) {
     const { orderId } = req.params;
     const { status, statusText } = req.body;
 
-    let updateObj = { status };
+    const norm = normalizeStatus(status);
+    let updateObj = { status: norm };
     const orderBefore = await Order.findById(orderId);
 
     // a. Pharmacy Accepts/Starts Processing
-    if (status === "processing" && !orderBefore.pharmacyAcceptedAt) {
+    if (norm === "processing" && !orderBefore.pharmacyAcceptedAt) {
       updateObj.pharmacyAcceptedAt = new Date();
       orderBefore.assignmentHistory = orderBefore.assignmentHistory || [];
       orderBefore.assignmentHistory.push({
@@ -386,19 +408,19 @@ async function handleStatusUpdate(req, res) {
       await orderBefore.save();
     }
 
-    if (status === "assigned" && !orderBefore.assignedAt) {
+    if (norm === "assigned" && !orderBefore.assignedAt) {
       updateObj.assignedAt = new Date();
     }
 
-    if ((status === "accepted" || status === "out_for_delivery") && !orderBefore.partnerAcceptedAt) {
+    if ((norm === "accepted" || norm === "out_for_delivery") && !orderBefore.partnerAcceptedAt) {
       updateObj.partnerAcceptedAt = new Date();
     }
 
-    if (status === "picked_up" && !orderBefore.pickedUpAt) {
+    if (norm === "picked_up" && !orderBefore.pickedUpAt) {
       updateObj.pickedUpAt = new Date();
     }
 
-    if (status === "delivered" && !orderBefore.deliveredAt) {
+    if (norm === "delivered" && !orderBefore.deliveredAt) {
       updateObj.deliveredAt = new Date();
     }
 
@@ -407,7 +429,7 @@ async function handleStatusUpdate(req, res) {
 
     // If we just moved to processing and it's still unassigned, schedule auto-assign
     if (
-      status === "processing" &&
+      norm === "processing" &&
       !order.deliveryPartner &&
       (order.deliveryAssignmentStatus === "unassigned" || !order.deliveryAssignmentStatus)
     ) {
@@ -426,7 +448,7 @@ async function handleStatusUpdate(req, res) {
     }
 
     // If delivered, call controller (also generates invoice) and return
-    if (typeof status === "string" && status.toLowerCase() === "delivered") {
+    if (normalizeStatus(status) === "delivered") {
       await markOrderDelivered({ params: { id: orderId } }, res);
       return; // Prevent sending response twice!
     }
@@ -438,13 +460,13 @@ async function handleStatusUpdate(req, res) {
       await notifyUser(
         user._id.toString(),
         "Order Status Updated",
-        `Your order #${order._id} is now "${statusText || status}".`,
+        `Your order #${order._id} is now "${statusText || norm}".`,
         `/orders/${order._id}`
       );
       await saveInAppNotification({
         userId: user._id,
         title: "Order Status Updated",
-        message: `Order #${order._id} is now "${statusText || status}".`,
+        message: `Order #${order._id} is now "${statusText || norm}".`,
       });
     }
 
@@ -452,13 +474,13 @@ async function handleStatusUpdate(req, res) {
       await notifyUser(
         pharmacy._id.toString(),
         "Order Status Updated",
-        `Order #${order._id} is now "${statusText || status}".`,
+        `Order #${order._id} is now "${statusText || norm}".`,
         `/pharmacy/orders`
       );
       await saveInAppNotification({
         userId: pharmacy._id,
         title: "Order Status Updated",
-        message: `Order #${order._id} is now "${statusText || status}".`,
+        message: `Order #${order._id} is now "${statusText || norm}".`,
       });
     }
 
