@@ -8,7 +8,7 @@ const fetchFn =
     return f(...args);
   });
 
-// small helper to always send a UA (some CDNs block no-UA requests)
+// Small helper to always send a UA (some CDNs block no-UA requests)
 async function fetchWithUA(url, opts = {}) {
   const headers = Object.assign(
     { "User-Agent": "Godavaii-OCR/1.0" },
@@ -25,9 +25,20 @@ let visionClient = null;
 try {
   if (process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GCV_CREDENTIALS_JSON) {
     const { ImageAnnotatorClient } = require("@google-cloud/vision");
+
+    // Optional: let env override API endpoint (rarely needed)
+    const apiEndpoint =
+      (process.env.GCV_API_ENDPOINT || process.env.GOOGLE_VISION_API_ENDPOINT || "").trim() || undefined;
+
+    // IMPORTANT: fallback:true forces REST transport (avoids gRPC/OpenSSL issues)
+    const baseOpts = { fallback: true, ...(apiEndpoint ? { apiEndpoint } : {}) };
+
     visionClient = process.env.GCV_CREDENTIALS_JSON
-      ? new ImageAnnotatorClient({ credentials: JSON.parse(process.env.GCV_CREDENTIALS_JSON) })
-      : new ImageAnnotatorClient();
+      ? new ImageAnnotatorClient({
+          ...baseOpts,
+          credentials: JSON.parse(process.env.GCV_CREDENTIALS_JSON),
+        })
+      : new ImageAnnotatorClient(baseOpts);
   }
 } catch {
   /* ignore */
@@ -35,7 +46,12 @@ try {
 
 let textractClient = null;
 try {
-  if (process.env.AWS_REGION && process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+  if (
+    process.env.DISABLE_TEXTRACT !== "1" && // <-- honor env flag to disable Textract
+    process.env.AWS_REGION &&
+    process.env.AWS_ACCESS_KEY_ID &&
+    process.env.AWS_SECRET_ACCESS_KEY
+  ) {
     const { TextractClient } = require("@aws-sdk/client-textract");
     textractClient = new TextractClient({ region: process.env.AWS_REGION });
   }
