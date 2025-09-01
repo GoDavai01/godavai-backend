@@ -19,9 +19,9 @@ const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_API_KEY;
 // ---- Auto-assign constants (tunable) ----
 const AUTOASSIGN_FRESH_MINUTES = 15; // partner pinged within last 15 mins
 const WAVES = [
-  { delayMs: 0, km: 4.5, k: 8 }, // Wave 1: 0–30s
-  { delayMs: 30_000, km: 6.0, k: 6 }, // Wave 2: 30–60s
-  { delayMs: 60_000, km: 8.0, k: 6 }, // Wave 3: 60–90s
+  { delayMs: 0, km: 4.5, k: 8 },      // Wave 1
+  { delayMs: 30_000, km: 6.0, k: 6 }, // Wave 2
+  { delayMs: 60_000, km: 8.0, k: 6 }, // Wave 3
 ];
 
 async function findCandidateNear(lng, lat, km, k) {
@@ -44,6 +44,9 @@ async function findCandidateNear(lng, lat, km, k) {
   })
     .limit(Math.max(30, k))
     .lean();
+
+  // Debug: nearby pool size
+  console.log(`[auto-assign] nearby candidates count=${nearby.length}`);
 
   // Prefer those with autoAccept and with no active order
   for (const p of nearby) {
@@ -88,6 +91,10 @@ function scheduleAutoAssign(orderId, baseLng, baseLat) {
           order.status !== "processing"
         )
           return;
+
+        // Debug: wave starting
+        console.log(`[auto-assign] wave: ${km}km k=${k} for order ${orderId}`);
+
         const partner = await findCandidateNear(baseLng, baseLat, km, k);
         if (partner) await assignOrderToPartner(order, partner);
       } catch (e) {
@@ -143,6 +150,10 @@ router.post("/", auth, async (req, res) => {
       paymentDetails: paymentDetails || {},
       quote: null,
       createdAt: new Date(),
+
+      // ---- A. initialize assignment state ----
+      deliveryAssignmentStatus: "unassigned",
+      deliveryPartner: undefined,
     });
 
     try {
@@ -343,7 +354,7 @@ router.put("/:orderId/accept", async (req, res) => {
       if (typeof baseLng === "number" && typeof baseLat === "number") {
         if (
           !full.deliveryPartner &&
-          full.deliveryAssignmentStatus === "unassigned" &&
+          (full.deliveryAssignmentStatus === "unassigned" || !full.deliveryAssignmentStatus) &&
           full.status === "processing"
         ) {
           scheduleAutoAssign(full._id, baseLng, baseLat);
@@ -358,8 +369,8 @@ router.put("/:orderId/accept", async (req, res) => {
   }
 });
 
-// 4. Update order status
-router.put("/:orderId/status", async (req, res) => {
+// 4. Update order status (PUT + POST alias share the same handler)
+async function handleStatusUpdate(req, res) {
   try {
     const { orderId } = req.params;
     const { status, statusText } = req.body;
@@ -398,7 +409,11 @@ router.put("/:orderId/status", async (req, res) => {
     if (!order) return res.status(404).json({ error: "Order not found" });
 
     // If we just moved to processing and it's still unassigned, schedule auto-assign
-    if (status === "processing" && !order.deliveryPartner && order.deliveryAssignmentStatus === "unassigned") {
+    if (
+      status === "processing" &&
+      !order.deliveryPartner &&
+      (order.deliveryAssignmentStatus === "unassigned" || !order.deliveryAssignmentStatus)
+    ) {
       try {
         const withPharmacy = await Order.findById(order._id).populate("pharmacy");
         const baseLng =
@@ -414,7 +429,7 @@ router.put("/:orderId/status", async (req, res) => {
     }
 
     // If delivered, call controller (also generates invoice) and return
-    if (status.toLowerCase() === "delivered") {
+    if (typeof status === "string" && status.toLowerCase() === "delivered") {
       await markOrderDelivered({ params: { id: orderId } }, res);
       return; // Prevent sending response twice!
     }
@@ -455,7 +470,10 @@ router.put("/:orderId/status", async (req, res) => {
     console.error("Error updating order status:", err);
     res.status(500).json({ error: "Order status update failed" });
   }
-});
+}
+
+router.put("/:orderId/status", handleStatusUpdate);
+router.post("/:orderId/status", handleStatusUpdate); // B. POST alias for dashboard
 
 // Get order by id (hardened with ObjectId validation)
 router.get("/:orderId", async (req, res) => {
@@ -484,7 +502,7 @@ router.put("/:orderId/reject", async (req, res) => {
       },
       { new: true }
     );
-    if (!order) return res.status(404).json({ error: "Order not found" });
+  if (!order) return res.status(404).json({ error: "Order not found" });
 
     res.json(order);
   } catch (err) {
