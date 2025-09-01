@@ -46,26 +46,33 @@ async function runAiParseForOrder(order) {
       ? `${process.env.SERVER_BASE_URL || "http://localhost:5000"}${order.prescriptionUrl}`
       : order.prescriptionUrl;
 
-    // ⬇️ NEW: show exactly what the server is trying to fetch (only when DEBUG_OCR is truthy)
     if (process.env.DEBUG_OCR) console.log("[AI parse] fetching:", url);
 
-    const { text, engine } = await extractTextPlus(url);
-    if (process.env.DEBUG_OCR) {
-      console.log(`[AI parse] engine=${engine}, chars=${(text||"").length}, order=${order._id}`);
-    }
-    const items = parseMeds(text || "");
+    // Use the newer, stricter pipeline (sections + stopwords + drug-line heuristics)
+    const out = await extractPrescriptionItems(url);
+    const items = (out.items || []).map(i => ({
+      name: i.name,
+      composition: i.composition || "",
+      strength: i.strength || "",
+      form: i.form || "",
+      quantity: i.qty || i.quantity || 1,
+      confidence: typeof i.confidence === "number" ? i.confidence : 0.5,
+    }));
+
     order.ai = {
-      parser: engine,
+      parser: out.engine || "ocr-heuristics:v2",
       parsedAt: new Date(),
-      rawText: (text || "").slice(0, 100000),
-      items
+      rawText: (out.raw || "").slice(0, 100000),
+      items,
     };
-    // Optional legacy field
+
+    // keep legacy convenience field for your flows
     order.medicinesRequested = items.map(i => ({
       name: i.name,
       quantity: i.quantity || 1,
       brand: "",
     }));
+
     await order.save();
   } catch (err) {
     console.error("[AI parse] failed:", err.message);

@@ -57,11 +57,11 @@ async function findCandidateNear(lng, lat, km, k) {
     location: {
       $near: {
         $geometry: { type: "Point", coordinates: [lng, lat] },
-        $maxDistance: km * 1000, // meters
+        $maxDistance: Math.ceil(km * 1000),
       },
     },
   })
-    .limit(Math.max(30, k))
+    .limit(Math.max(60, k)) // slightly larger pool; still distance-sorted
     .lean();
 
   // Debug: nearby pool size
@@ -654,5 +654,37 @@ router.post("/:orderId/ratings", async (req, res) => {
 });
 
 router.post("/:id/deliver", markOrderDelivered);
+
+const RESCAN_INTERVAL_MS = Number(process.env.AUTOASSIGN_RESCAN_MS || 15000);
+
+async function rescanAndAssign() {
+  try {
+    // Find "processing" orders with no partner and still unassigned
+    const freshSince = new Date(Date.now() - 2 * 60 * 60 * 1000); // last 2h window
+    const backlog = await Order.find({
+      status: "processing",
+      deliveryPartner: { $exists: false },
+      $or: [{ deliveryAssignmentStatus: { $exists: false } }, { deliveryAssignmentStatus: "unassigned" }],
+      createdAt: { $gte: freshSince },
+    })
+      .limit(20)
+      .populate("pharmacy")
+      .lean();
+
+    for (const o of backlog) {
+      const baseLng = o?.pharmacy?.location?.coordinates?.[0] ?? o?.address?.lng;
+      const baseLat = o?.pharmacy?.location?.coordinates?.[1] ?? o?.address?.lat;
+      if (typeof baseLng !== "number" || typeof baseLat !== "number") continue;
+
+      // Run the same three waves immediately (0/30/60s) for any stranded order
+      scheduleAutoAssign(o._id, baseLng, baseLat);
+    }
+  } catch (e) {
+    console.error("[auto-assign] rescanner error:", e?.message || e);
+  }
+}
+
+// kick it off once the route file is loaded (node process lifetime)
+setInterval(rescanAndAssign, RESCAN_INTERVAL_MS).unref();
 
 module.exports = router;

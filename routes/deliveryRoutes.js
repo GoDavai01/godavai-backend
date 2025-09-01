@@ -274,6 +274,9 @@ router.patch("/partner/:id/active", async (req, res) => {
         lastUpdated: new Date(), // <-- nested freshness
       };
       partner.lastSeenAt = new Date(); // <-- root freshness
+      } else if (typeof active === "boolean" && active) {
+        // partner turned ON but we didn't get GPS; keep them "fresh" so waves can try them.
+        partner.lastSeenAt = new Date();
     }
 
     await partner.save();

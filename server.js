@@ -49,7 +49,7 @@ mongoose.set("strictQuery", true);
     await mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
     console.log("✅ MongoDB connected");
 
-    // Ensure geo index (idempotent)
+    // Ensure geo/indexes (idempotent)
     try {
       const Pharmacy = require("./models/Pharmacy");
       if (Pharmacy?.collection?.createIndex) {
@@ -57,7 +57,22 @@ mongoose.set("strictQuery", true);
         console.log("✅ Ensured 2dsphere index on Pharmacy.location");
       }
     } catch (e) {
-      console.warn("⚠️ Could not ensure 2dsphere index:", e.message);
+      console.warn("⚠️ Could not ensure Pharmacy 2dsphere index:", e.message);
+    }
+
+    // ✅ Ensure all indexes on DeliveryPartner (includes 2dsphere on location)
+    try {
+      const DeliveryPartner = require("./models/DeliveryPartner");
+      if (DeliveryPartner?.syncIndexes) {
+        await DeliveryPartner.syncIndexes();
+        console.log("✅ Ensured indexes on DeliveryPartner (syncIndexes)");
+      } else if (DeliveryPartner?.collection?.createIndex) {
+        // Fallback for older Mongoose
+        await DeliveryPartner.collection.createIndex({ location: "2dsphere" });
+        console.log("✅ Ensured 2dsphere index on DeliveryPartner.location");
+      }
+    } catch (e) {
+      console.warn("⚠️ Could not ensure DeliveryPartner indexes:", e.message);
     }
 
     const server = app.listen(PORT, () => {
@@ -86,3 +101,5 @@ mongoose.set("strictQuery", true);
     process.exit(1);
   }
 })();
+
+module.exports = app;
