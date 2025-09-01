@@ -13,7 +13,7 @@ const { findPharmaciesNearby } = require('../utils/pharmacyGeo');
 const path = require('path');
 
 // === A) AI imports ===
-const { extractTextPlus } = require('../utils/ocr');
+const { extractTextPlus, extractPrescriptionItems } = require('../utils/ocr');
 const { parse: parseMeds } = require('../utils/ai/medParser');
 
 // CRON: Prevent double schedule in dev
@@ -394,6 +394,23 @@ router.get('/ai/:orderId', auth, async (req, res) => {
     res.json(order.ai || { items: [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Quick ad-hoc OCR → parsed medicine items (no DB write)
+router.get('/ai-scan', async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: "Missing ?url" });
+
+    if (process.env.DEBUG_OCR) console.log("[AI scan] url:", url);
+
+    const out = await extractPrescriptionItems(url);
+    // out = { items:[{name,strength,qty,confidence}], engine, raw }
+    return res.json(out);
+  } catch (e) {
+    console.error("[AI scan] failed:", e);
+    return res.status(500).json({ error: e.message });
   }
 });
 
