@@ -100,7 +100,7 @@ function isOriginAllowed(origin) {
 }
 
 // --- CORS: keep this BEFORE any routes ---
-const cors = require('cors');
+
 
 const corsOptions = {
   origin: [
@@ -204,7 +204,7 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/support-chat", require("./routes/supportChat"));
 app.use('/api/admin', require('./routes/admin'));
-app.use('/api/orders', ordersRouter);
+
 app.use("/api/allorders", require("./routes/allorders"));
 app.use("/api/pharmacy", require("./routes/pharmacyAuth"));
 app.use(express.json());
