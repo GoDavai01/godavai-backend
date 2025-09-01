@@ -162,6 +162,7 @@ async function ocrAzure(buf) {
 /** AWS Textract OCR (simple lines) */
 async function ocrTextract(buf) {
   if (!textractClient) return null;
+  try {
   const { DetectDocumentTextCommand } = require("@aws-sdk/client-textract");
   const out = await textractClient.send(
     new DetectDocumentTextCommand({ Document: { Bytes: buf } })
@@ -171,6 +172,12 @@ async function ocrTextract(buf) {
     .map((b) => b.Text)
     .filter(Boolean);
   return lines.length ? lines.join("\n") : null;
+  } catch (e) {
+    if (process.env.DEBUG_OCR) {
+        console.warn("[OCR] textract failed:", e?.message || e);
+        }
+        return null; // <- DO NOT throw; let the pipeline continue
+        }
 }
 
 /** Local Tesseract OCR (fallback, optional & safe) */

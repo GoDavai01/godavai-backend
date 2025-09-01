@@ -17,7 +17,7 @@ const { markOrderDelivered } = require("../controllers/orderController");
 const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_API_KEY;
 
 // ---- Auto-assign constants (tunable) ----
-const AUTOASSIGN_FRESH_MINUTES = 15; // partner pinged within last 15 mins
+const AUTOASSIGN_FRESH_MINUTES = Number(process.env.AUTOASSIGN_FRESH_MINUTES || 15); // partner pinged within last 15 mins
 const WAVES = [
   { delayMs: 0, km: 4.5, k: 8 },      // Wave 1
   { delayMs: 30_000, km: 6.0, k: 6 }, // Wave 2
@@ -38,7 +38,7 @@ async function findCandidateNear(lng, lat, km, k) {
     location: {
       $near: {
         $geometry: { type: "Point", coordinates: [lng, lat] },
-        $maxDistance: km * 1000,
+        $maxDistance: km * 1000, // meters
       },
     },
   })
@@ -48,14 +48,13 @@ async function findCandidateNear(lng, lat, km, k) {
   // Debug: nearby pool size
   console.log(`[auto-assign] nearby candidates count=${nearby.length}`);
 
-  // Prefer those with autoAccept and with no active order
+  // Prefer first free (already distance-sorted by $near)
   for (const p of nearby) {
-    // capacity check: skip if already busy on an active order
     const busy = await Order.exists({
       deliveryPartner: p._id,
       status: { $in: ["assigned", "accepted", "out_for_delivery"] },
     });
-    if (!busy) return p; // pick first free (already distance-sorted by $near)
+    if (!busy) return p;
   }
   return null;
 }
@@ -85,12 +84,21 @@ function scheduleAutoAssign(orderId, baseLng, baseLat) {
       try {
         const order = await Order.findById(orderId);
         if (!order) return;
+
+        // Treat "unset" as "unassigned" (key fix)
+        const assignState = order.deliveryAssignmentStatus || "unassigned";
+
         if (
           order.deliveryPartner ||
-          order.deliveryAssignmentStatus !== "unassigned" ||
+          assignState !== "unassigned" ||
           order.status !== "processing"
-        )
+        ) {
+          // Debug: why a wave is skipped
+          console.log(
+            `[auto-assign] skip wave for order ${orderId} — partner=${!!order.deliveryPartner} status=${order.status} assignStatus=${assignState}`
+          );
           return;
+        }
 
         // Debug: wave starting
         console.log(`[auto-assign] wave: ${km}km k=${k} for order ${orderId}`);
@@ -151,7 +159,7 @@ router.post("/", auth, async (req, res) => {
       quote: null,
       createdAt: new Date(),
 
-      // ---- A. initialize assignment state ----
+      // Initialize assignment state for waves to start later
       deliveryAssignmentStatus: "unassigned",
       deliveryPartner: undefined,
     });
@@ -283,18 +291,15 @@ router.put("/:orderId/accept", async (req, res) => {
 
     let updateObj = {
       confirmedAt: new Date(),
+      status: "processing", // always move to processing
     };
 
     if (paymentStatus === "PARTIAL_PAID") {
-      updateObj.status = "processing";
       updateObj.paymentStatus = "PARTIAL_PAID";
       updateObj.paymentDetails = paymentDetails;
     } else if (paymentStatus === "PAID") {
-      updateObj.status = "processing";
       updateObj.paymentStatus = "PAID";
       updateObj.paymentDetails = paymentDetails;
-    } else {
-      updateObj.status = "processing";
     }
 
     const orderBefore = await Order.findById(orderId);
@@ -302,14 +307,7 @@ router.put("/:orderId/accept", async (req, res) => {
       updateObj.pharmacyAcceptedAt = new Date();
     }
 
-    const order = await Order.findByIdAndUpdate(
-      orderId,
-      {
-        ...updateObj,
-      },
-      { new: true }
-    );
-
+    const order = await Order.findByIdAndUpdate(orderId, { ...updateObj }, { new: true });
     if (!order) return res.status(404).json({ error: "Order not found" });
 
     const pharmacy = await Pharmacy.findById(order.pharmacy);
@@ -348,7 +346,6 @@ router.put("/:orderId/accept", async (req, res) => {
     // ---- Auto-assign start (non-blocking) ----
     try {
       const full = await Order.findById(order._id).populate("pharmacy");
-      // Prefer pharmacy location; fallback to user address
       const baseLng = full?.pharmacy?.location?.coordinates?.[0] ?? full?.address?.lng;
       const baseLat = full?.pharmacy?.location?.coordinates?.[1] ?? full?.address?.lat;
       if (typeof baseLng === "number" && typeof baseLat === "number") {
@@ -473,7 +470,7 @@ async function handleStatusUpdate(req, res) {
 }
 
 router.put("/:orderId/status", handleStatusUpdate);
-router.post("/:orderId/status", handleStatusUpdate); // B. POST alias for dashboard
+router.post("/:orderId/status", handleStatusUpdate); // POST alias for dashboard
 
 // Get order by id (hardened with ObjectId validation)
 router.get("/:orderId", async (req, res) => {
@@ -502,7 +499,7 @@ router.put("/:orderId/reject", async (req, res) => {
       },
       { new: true }
     );
-  if (!order) return res.status(404).json({ error: "Order not found" });
+    if (!order) return res.status(404).json({ error: "Order not found" });
 
     res.json(order);
   } catch (err) {
