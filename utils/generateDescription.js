@@ -1,6 +1,8 @@
 // utils/generateDescription.js
 const axios = require("axios");
 
+// NOTE: Do NOT call dotenv.config() here — load env once in server.js/app.js
+
 /**
  * Generate a rich, customer-friendly description using GPT.
  * @param {Object|string} input  Either the medicine name string, or an object:
@@ -11,8 +13,8 @@ async function generateMedicineDescription(input) {
   const meta = typeof input === "string" ? { name: input } : (input || {});
   const { name = "", brand = "", composition = "", company = "", type = "" } = meta;
 
-  // Gate exactly like OCR: require API key and allow disabling via GPT_MED_STAGE=0
-  if (!process.env.OPENAI_API_KEY || process.env.GPT_MED_STAGE === "0") {
+  if (!process.env.OPENAI_API_KEY) {
+    console.error("❌ OPENAI_API_KEY is not set.");
     return "No description available.";
   }
 
@@ -34,6 +36,9 @@ Cover briefly:
 Tone: simple, trustworthy, and non-alarming. Avoid medical jargon, avoid dosage instructions or exhaustive contraindication lists. Keep to ~130–170 words.`;
 
   try {
+    // ✅ Log AFTER model & displayName exist
+    console.log("🟢 generateMedicineDescription using", model, "for", displayName);
+
     const res = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -46,16 +51,16 @@ Tone: simple, trustworthy, and non-alarming. Avoid medical jargon, avoid dosage 
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "User-Agent": "GoDavaii/1.0 (medicine-description)"
+          "User-Agent": "GoDavaii/1.0 (medicine-description)",
         },
-        timeout: 20000
+        timeout: 20000,
       }
     );
 
     const text = res?.data?.choices?.[0]?.message?.content?.trim();
     return text || "No description available.";
   } catch (err) {
-    // Log API error body if present to help debug on Render logs
+    // Show API error body if present to help you debug on Render logs
     console.error("🔴 OpenAI generateMedicineDescription error:", err.response?.data || err.message);
     return "No description available.";
   }

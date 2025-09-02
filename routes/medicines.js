@@ -35,6 +35,49 @@ function normalizeCategory(input) {
 }
 const asTrimmedString = (v) => (v ?? "").toString().trim();
 
+
+// --- ENSURE DESCRIPTION NOW (idempotent) ---
+router.post("/medicines/:id/ensure-description", async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+    const med = await Medicine.findById(id);
+    if (!med) return res.status(404).json({ error: "Medicine not found" });
+
+    // If already present, just return it
+    if (med.description && med.description.trim()) {
+      return res.json({ ok: true, description: med.description });
+    }
+
+    // Guard: GPT stage flag
+    if (String(process.env.GPT_MED_STAGE || "1") !== "1") {
+      return res.json({ ok: false, error: "GPT disabled", description: "" });
+    }
+
+    // Generate
+    const text = await require("../utils/generateDescription")({
+      name: med.name,
+      brand: med.brand,
+      composition: med.composition,
+      company: med.company,
+      type: med.type,
+    });
+
+    if (text && text !== "No description available.") {
+      med.description = text;
+      await med.save();
+      return res.json({ ok: true, description: text });
+    }
+
+    return res.json({ ok: false, description: "" });
+  } catch (e) {
+    console.error("ensure-description error:", e?.response?.data || e.message);
+    res.status(500).json({ error: "Failed to ensure description" });
+  }
+});
+
 /* ------------------------------------------------------------------
    IMPORTANT:
    The POST /pharmacy/medicines and PATCH /pharmacy/medicines/:id
@@ -502,5 +545,14 @@ router.get("/medicines", async (req, res) => {
   }
 });
 /* ============================================================= */
+
+// --- DEBUG: GPT MED FLAGS ---
+router.get("/debug/gpt-med", (req, res) => {
+  res.json({
+    GPT_MED_STAGE: String(process.env.GPT_MED_STAGE || ""),
+    GPT_MED_MODEL: String(process.env.GPT_MED_MODEL || ""),
+    OPENAI_KEY_SET: !!process.env.OPENAI_API_KEY,
+  });
+});
 
 module.exports = router;
