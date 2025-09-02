@@ -599,4 +599,46 @@ router.get("/debug/gpt-med", (req, res) => {
   });
 });
 
+// --- Autocomplete for live search bar ---
+router.get("/autocomplete", async (req, res) => {
+  let { q = "", limit = 10, city = "" } = req.query;
+  q = String(q || "").trim();
+  if (!q) return res.json([]);
+
+  try {
+    const rx = new RegExp(escapeRegex(q), "i");
+
+    // optional: restrict to pharmacies in city
+    let pharmacyIds = [];
+    if (city) {
+      const phs = await Pharmacy.find({ city: { $regex: city, $options: "i" }, active: true, status: "approved" })
+        .select("_id");
+      pharmacyIds = phs.map(p => p._id);
+    }
+
+    const meds = await Medicine.find({
+      $or: [{ name: rx }, { brand: rx }, { composition: rx }],
+      ...(pharmacyIds.length ? { pharmacy: { $in: pharmacyIds } } : {})
+    })
+      .select("name brand composition")   // keep it light
+      .limit(parseInt(limit, 10));
+
+    // Deduplicate suggestions by name+brand
+    const seen = new Set();
+    const suggestions = [];
+    for (const m of meds) {
+      const label = m.brand || m.name || "";
+      if (!seen.has(label.toLowerCase())) {
+        seen.add(label.toLowerCase());
+        suggestions.push({ id: m._id, label, composition: m.composition });
+      }
+    }
+
+    res.json(suggestions);
+  } catch (err) {
+    console.error("Autocomplete error:", err);
+    res.status(500).json({ error: "Failed to autocomplete" });
+  }
+});
+
 module.exports = router;

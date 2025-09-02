@@ -186,7 +186,7 @@ app.get("/api/medicines/suggestions", suggestionsHandler);
 app.get("/api/medicine/suggestions", suggestionsHandler);
 
 // ---- end suggestions ----
-
+app.use("/api/search", require("./routes/search"));
 // Routes (leave unchanged - already modular and clean)
 // replace the four lines above with just these two:
 app.use("/api/pharmacies", pharmaciesRouter);
@@ -199,7 +199,7 @@ app.use('/api/notifications', require('./routes/notifications'));
 app.use("/api/users", require("./routes/users"));
 app.use("/api/delivery", require("./routes/deliveryRoutes"));
 app.use("/api/prescriptions", require("./routes/prescriptions"));
-app.use("/api/search", require("./routes/search"));
+
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/support-chat", require("./routes/supportChat"));
