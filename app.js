@@ -987,6 +987,34 @@ app.delete("/api/pharmacy/medicines/:id", auth, async (req, res) => {
   res.json({ message: "Medicine deleted" });
 });
 
+app.patch("/api/pharmacy/medicines/:id/availability", auth, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+
+    const body = req.body || {};
+    const toUnavailable = typeof body.unavailable === "boolean"
+      ? body.unavailable
+      : String(body.status || "").toLowerCase() === "unavailable";
+
+    const nextStatus = toUnavailable ? "unavailable" : "active";
+
+    const med = await Medicine.findByIdAndUpdate(
+      id,
+      { $set: { status: nextStatus, available: !toUnavailable } },
+      { new: true }
+    );
+
+    if (!med) return res.status(404).json({ error: "Medicine not found" });
+    return res.json({ ok: true, medicine: med });
+  } catch (e) {
+    console.error("availability toggle error:", e.message);
+    res.status(500).json({ error: "Failed to update availability" });
+  }
+});
+
 // ================= USER AUTH APIs =================
 app.post("/api/register", async (req, res) => {
   try {
