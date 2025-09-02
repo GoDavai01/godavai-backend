@@ -866,7 +866,13 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
       });
 
       try {
-        const desc = await generateMedicineDescription(mergedName);
+        const desc = await generateMedicineDescription({
+  name: mergedName,
+  brand,
+  composition,
+  company,
+  type: typeValue
+});
         if (desc) med.description = desc;
       } catch { /* ignore description failure */ }
 
@@ -904,6 +910,28 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
 
   // JSON path (no files)
   return run();
+});
+
+app.post("/api/medicines/refresh-all-descriptions", async (req, res) => {
+  const meds = await Medicine.find({ $or: [ { description: { $exists: false } }, { description: "" } ] });
+  for (const m of meds) {
+    try {
+      const text = await generateMedicineDescription({
+        name: m.name,
+        brand: m.brand,
+        composition: m.composition,
+        company: m.company,
+        type: m.type
+      });
+      if (text && text !== "No description available.") {
+        m.description = text;
+        await m.save();
+      }
+    } catch (e) {
+      console.error("Failed desc for", m.name, e.message);
+    }
+  }
+  res.json({ ok: true });
 });
 
 /** PATCH: edit medicine — now updates composition & company too */
