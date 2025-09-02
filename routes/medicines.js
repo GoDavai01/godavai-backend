@@ -202,6 +202,9 @@ router.get("/search", async (req, res) => {
     const meds = await Medicine.find({
       $or: or,
       ...(pharmacyIds.length ? { pharmacy: { $in: pharmacyIds } } : {}),
+      status: { $ne: "unavailable" },
+      available: { $ne: false },
+      stock: { $gt: 0 },
     })
       .select("name brand company composition category type img images mrp price pharmacy description")
       .limit(parseInt(limit, 10) || 80)
@@ -330,6 +333,8 @@ router.get("/by-name", async (req, res) => {
         name: { $regex: rx },
         pharmacy: { $in: pharmacyIds },
         stock: { $gt: 0 },
+        status: { $ne: "unavailable" },
+        available: { $ne: false },
       }).populate("pharmacy");
       if (meds.length) break;
     }
@@ -370,7 +375,11 @@ router.get("/all", async (req, res) => {
       const pharmacyIds = pharmacies.map((p) => p._id);
       filter.pharmacy = { $in: pharmacyIds };
     }
-    const medicines = await Medicine.find(filter).populate(
+    const medicines = await Medicine.find({
+      ...filter,
+      status: { $ne: "unavailable" },
+      available: { $ne: false },
+    }).populate(
       "pharmacy",
       "name area city"
     );
@@ -429,7 +438,11 @@ async function getMostOrderedMedicines(req, res) {
     } else {
       const allMeds = await Medicine.find(
         pharmacyIds.length > 0 ? { pharmacy: { $in: pharmacyIds } } : {}
-      )
+      ).find({
+        status: { $ne: "unavailable" },
+        available: { $ne: false },
+        stock: { $gt: 0 },
+      })
         .limit(10)
         .populate("pharmacy");
       results = allMeds.map((med) => ({
@@ -465,6 +478,9 @@ router.get("/offers", async (req, res) => {
 
     const offers = await Medicine.find({
       name: med.name,
+      status: { $ne: "unavailable" },
+      available: { $ne: false },
+      stock: { $gt: 0 },
     }).populate({
       path: "pharmacy",
       match: pharmacyFilter,
@@ -545,8 +561,11 @@ router.get("/medicines", async (req, res) => {
   try {
     const { pharmacyId } = req.query;
     const filter = pharmacyId ? { pharmacy: pharmacyId } : {};
-        if (String(req.query.onlyAvailable || "") === "1") {
+        // default: hide unavailable unless onlyAvailable="0"
+        if (String(req.query.onlyAvailable || "1") === "1") {
       filter.status = { $ne: "unavailable" };
+      filter.available = { $ne: false };
+      filter.stock = { $gt: 0 };
     }
 
     const meds = await Medicine.find(filter).lean(); // lean for speed
