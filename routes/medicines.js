@@ -15,6 +15,9 @@ const {
 // auth is still used by some routes below (e.g., if you later secure them)
 const auth = require("../middleware/auth");
 
+// ---- GPT description generator (used below) ----
+const generateDesc = require("../utils/generateDescription");
+
 function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
@@ -383,8 +386,6 @@ router.get("/offers", async (req, res) => {
 });
 
 // ===== ADMIN: Backfill missing descriptions =====
-const generateMedicineDescription = require("../utils/generateDescription");
-
 router.post("/admin/backfill-descriptions", async (req, res) => {
   try {
     const limit = Number(req.body.limit || 20); // optional batch size
@@ -399,7 +400,7 @@ router.post("/admin/backfill-descriptions", async (req, res) => {
     const results = [];
     for (const med of meds) {
       try {
-        const desc = await generateMedicineDescription({
+        const desc = await generateDesc({
           name: med.name,
           brand: med.brand,
           composition: med.composition,
@@ -426,5 +427,80 @@ router.post("/admin/backfill-descriptions", async (req, res) => {
   }
 });
 
+/* ==================== EAGER-ON-READ (NEW) ==================== */
+// Small concurrency limiter to avoid spiking the LLM API
+const pLimit = (concurrency) => {
+  const q = [];
+  let active = 0;
+  const next = () => {
+    active--;
+    if (q.length) q.shift()();
+  };
+  return async (fn) =>
+    new Promise((resolve, reject) => {
+      const run = async () => {
+        active++;
+        try { resolve(await fn()); }
+        catch (e) { reject(e); }
+        finally { next(); }
+      };
+      if (active < concurrency) run();
+      else q.push(run);
+    });
+};
+
+/**
+ * GET /api/medicines?pharmacyId=<id>
+ * - Returns medicines for a pharmacy
+ * - If description is empty, eagerly generates one, persists, and includes it in response.
+ */
+router.get("/medicines", async (req, res) => {
+  try {
+    const { pharmacyId } = req.query;
+    const filter = pharmacyId ? { pharmacy: pharmacyId } : {};
+    const meds = await Medicine.find(filter).lean(); // lean for speed
+
+    // nothing to do?
+    if (!Array.isArray(meds) || meds.length === 0) return res.json([]);
+
+    // only if GPT is enabled
+    const shouldFill = String(process.env.GPT_MED_STAGE || "1") === "1";
+    if (!shouldFill) return res.json(meds);
+
+    // fill only missing ones
+    const missing = meds.filter(m => !m.description || !m.description.trim());
+
+    if (missing.length) {
+      const limit = pLimit(3); // be nice to the API
+      await Promise.all(
+        missing.map(m => limit(async () => {
+          try {
+            const text = await generateDesc({
+              name: m.name,
+              brand: m.brand,
+              composition: m.composition,
+              company: m.company,
+              type: m.type,
+            });
+            if (text && text !== "No description available.") {
+              await Medicine.updateOne({ _id: m._id }, { $set: { description: text } });
+              // also mutate our local copy so response includes it now
+              const hit = meds.find(x => String(x._id) === String(m._id));
+              if (hit) hit.description = text;
+            }
+          } catch (e) {
+            console.error("Desc gen (on-read) failed:", m.name, e?.response?.data || e.message);
+          }
+        }))
+      );
+    }
+
+    res.json(meds);
+  } catch (err) {
+    console.error("GET /api/medicines error:", err);
+    res.status(500).json({ error: "Failed to fetch medicines" });
+  }
+});
+/* ============================================================= */
 
 module.exports = router;

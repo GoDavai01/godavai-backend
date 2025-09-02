@@ -246,20 +246,17 @@ function looksLikeDrugLine(s) {
   if (looksLikeDateOrSerial(s)) return false;
   // hard-drop known junk
   if (JUNK_PHRASES.some(p => s.toLowerCase().includes(p))) return false;
+
+  // very common non-medicine lines
+  if (/^dr\.|\bdoctor\b|\bsignature\b|\breg\.?\s?no\b|\bregistration\b/i.test(s)) return false;
+
   // instruction/schedule-only lines are not medicines
   if (DOSE_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
   if (DURATION_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
   if (/^(after|before|meals?|massage)\b/i.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
 
-  // keep if it has a dose/unit or looks like a form
-  if (STRENGTH_RE.test(s)) return true;
-  if (FORM_RE.test(s)) return true;
-
-  // keep shortish name-ish lines (<= 6 words) that aren’t all uppercase metadata
-  const words = s.split(/\s+/);
-  const manyUpper = words.filter(w => /^[A-Z0-9\.\-]+$/.test(w)).length / words.length > 0.7;
-  const hasWord3 = words.some(w => /[A-Za-z]{3,}/.test(w));
-  return words.length <= 6 && !manyUpper && hasWord3;
+  // ✅ Require a real medicine “signal”
+  return STRENGTH_RE.test(s) || FORM_RE.test(s) || /\bTr\.?\b/i.test(s);
 }
 
 function parseDrugLine(s) {
@@ -268,14 +265,23 @@ function parseDrugLine(s) {
   if (DURATION_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
   if (/^(after|before|meals?|massage)\b/i.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
 
-  // Common “Tr Belladonna 15 ml”, “Amphogel qs ad 120 ml”, “Paracetamol 500 mg”
-  const tincture = s.match(/\bTr\.?\s*([A-Za-z][\w\.\-]+(?:\s+[A-Za-z][\w\.\-]+){0,2})\b/i);
-  const dose = s.match(STRENGTH_RE);
-  const qtyToken = s.match(/\bx\s*([1-9]\d?)\b/i) || s.match(/\bqty[:\s]*([1-9]\d?)\b/i);
+  // normalize common OCR slips (mq→mg, O→0)
+  const norm = s
+    .replace(/\b(\d{1,4})\s*mq\b/ig, "$1 mg")
+    .replace(/\bO\b/g, "0");
 
-  let name = s;
+  // Common “Tr Belladonna 15 ml”, “Amphogel qs ad 120 ml”, “Paracetamol 500 mg”
+  const tincture = norm.match(/\bTr\.?\s*([A-Za-z][\w\.\-]+(?:\s+[A-Za-z][\w\.\-]+){0,2})\b/i);
+  const dose     = norm.match(STRENGTH_RE);
+  const formHit  = norm.match(FORM_RE);
+  const qtyToken =
+    norm.match(/\b(\d{1,3})\s*(?:tab(?:let)?|cap(?:sule)?|caps?)\b/i) || // “1 tab”, “2 caps”
+    norm.match(/\bx\s*([1-9]\d?)\b/i) ||
+    norm.match(/\bqty[:\s]*([1-9]\d?)\b/i);
+
+  let name = norm;
   if (tincture) name = tincture[1];
-  else if (dose) name = s.replace(dose[0], "").trim();
+  else if (dose) name = norm.replace(dose[0], "").trim();
 
   // strip obvious junk
   name = name
@@ -290,9 +296,11 @@ function parseDrugLine(s) {
   const strength = dose ? dose[0] : "";
   const qty = qtyToken ? parseInt(qtyToken[1], 10) : 1;
 
-  // sanity: name must have at least 2 letters
-  if (!/[A-Za-z]{2,}/.test(name)) return null;
-  return { name, strength, qty };
+  // sanity: must contain strength or form to qualify; name must be pronounceable
+  if (!dose && !formHit) return null;
+  if (!/[A-Za-z]{3,}/.test(name) || !/[aeiou]/i.test(name)) return null;
+
+  return { name, strength, qty, form: formHit ? formHit[0].toLowerCase() : "" };
 }
 
 /* --------------------------- Public functions ---------------------------- */
@@ -369,7 +377,8 @@ async function extractPrescriptionItems(urlOrPath) {
   // 3) OPTIONAL GPT post-filter/normalizer
   let gptItems = [];
   try {
-    if (process.env.GPT_MED_STAGE === "1") {
+    // Changed condition: run when API key exists and not explicitly disabled
+    if (process.env.OPENAI_API_KEY && process.env.GPT_MED_STAGE !== "0") {
       const { gptFilterMedicines } = require("./ai/gptMeds");
       const out = await gptFilterMedicines(bodyText);
       if (out && Array.isArray(out.items)) {
@@ -394,7 +403,12 @@ async function extractPrescriptionItems(urlOrPath) {
     const k = keyOf(it);
     if (!byKey.has(k)) byKey.set(k, it);
   }
-  const merged = Array.from(byKey.values());
+
+  // Keep only sensible rows (no tiny/no-vowel names)
+  const merged = Array.from(byKey.values()).filter(it => {
+    const n = (it.name || "").replace(/[^A-Za-z]/g, "");
+    return n.length >= 3 && /[aeiou]/i.test(n);
+  });
 
   return {
     items: merged.map(i => ({
