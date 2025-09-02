@@ -213,9 +213,9 @@ router.get("/search", async (req, res) => {
     if (shouldFill) {
       const toFix = meds.filter(m => isMissingDesc(m.description));
       if (toFix.length) {
-        const limit = pLimit(3);
+        const limiter = pLimit(3);
         await Promise.all(
-          toFix.map(m => limit(async () => {
+          toFix.map(m => limiter(async () => {
             try {
               const text = await generateDesc({
                 name: m.name,
@@ -535,10 +535,6 @@ router.post("/admin/backfill-descriptions", async (req, res) => {
     res.status(500).json({ error: "Failed to backfill descriptions" });
   }
 });
-
-/* ==================== EAGER-ON-READ (NEW) ==================== */
-// Small concurrency limiter to avoid spiking the LLM API
-
 
 /**
  * GET /api/medicines?pharmacyId=<id>
