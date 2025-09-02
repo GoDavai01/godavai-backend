@@ -223,7 +223,20 @@ function looksLikeDateOrSerial(s) {
 
 const UNITS = "(mg|mcg|g|ml|l|iu|%)";
 const STRENGTH_RE = new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*${UNITS}\\b`, "i");
-const FORM_RE = /\b(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|ointment|cream|drop|solution|inj(?:ection)?|tablet|capsule)s?\b/i;
+// include more forms seen in dental/GP Rxs
+const FORM_RE = /\b(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|ointment|cream|gel|lotion|spray|paint|drop|solution|soln|inj(?:ection)?|tablet|capsule)s?\b/i;
+
+// schedule/instruction patterns
+const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;           // 1-0-1
+const DURATION_RE = /\b[x×]\s*\d+\s*(day|days|week|weeks)\b/i;    // x5 days
+const MEAL_RE = /\b(after|before)\s+meals?\b|\b(?:ac|pc)\b/i;      // after/before meals, AC/PC
+
+// obvious non-medicine phrases
+const JUNK_PHRASES = [
+  "smile designing","teeth whitening","dental implants","general dentistry",
+  "rx","patient","mr.","mrs.","ms.","age","date","www.","email:","ph:","phone:","@",
+  "instagram.com","facebook.com"
+];
 
 function looksLikeDrugLine(s) {
   if (!/[A-Za-z]/.test(s)) return false;
@@ -231,6 +244,12 @@ function looksLikeDrugLine(s) {
 
   for (const w of STOPWORDS) if (U.includes(w)) return false;
   if (looksLikeDateOrSerial(s)) return false;
+  // hard-drop known junk
+  if (JUNK_PHRASES.some(p => s.toLowerCase().includes(p))) return false;
+  // instruction/schedule-only lines are not medicines
+  if (DOSE_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
+  if (DURATION_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
+  if (/^(after|before|meals?|massage)\b/i.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
 
   // keep if it has a dose/unit or looks like a form
   if (STRENGTH_RE.test(s)) return true;
@@ -239,10 +258,16 @@ function looksLikeDrugLine(s) {
   // keep shortish name-ish lines (<= 6 words) that aren’t all uppercase metadata
   const words = s.split(/\s+/);
   const manyUpper = words.filter(w => /^[A-Z0-9\.\-]+$/.test(w)).length / words.length > 0.7;
-  return words.length <= 6 && !manyUpper;
+  const hasWord3 = words.some(w => /[A-Za-z]{3,}/.test(w));
+  return words.length <= 6 && !manyUpper && hasWord3;
 }
 
 function parseDrugLine(s) {
+  // belt & suspenders—reject instruction-only at parse stage too
+  if (DOSE_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
+  if (DURATION_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
+  if (/^(after|before|meals?|massage)\b/i.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
+
   // Common “Tr Belladonna 15 ml”, “Amphogel qs ad 120 ml”, “Paracetamol 500 mg”
   const tincture = s.match(/\bTr\.?\s*([A-Za-z][\w\.\-]+(?:\s+[A-Za-z][\w\.\-]+){0,2})\b/i);
   const dose = s.match(STRENGTH_RE);
@@ -262,7 +287,7 @@ function parseDrugLine(s) {
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  const strength = dose ? dose[0] : "-";
+  const strength = dose ? dose[0] : "";
   const qty = qtyToken ? parseInt(qtyToken[1], 10) : 1;
 
   // sanity: name must have at least 2 letters

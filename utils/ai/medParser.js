@@ -8,8 +8,12 @@
 
 const FORM_WORDS = [
   "tablet","tab","capsule","cap","syrup","suspension","susp","drops","drop",
-  "injection","inj","cream","ointment","oint","gel","spray","inhaler","solution","soln"
+  "injection","inj","cream","ointment","oint","gel","spray","inhaler","solution","soln",
+  "paint","lotion"
 ];
+const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;
+const DURATION_RE = /\b[x×]\s*\d+\s*(day|days|week|weeks)\b/i;
+const MEAL_RE = /\b(after|before)\s+meals?\b|\b(?:ac|pc)\b/i;
 
 function normalizeLine(s) {
   return s
@@ -81,8 +85,12 @@ function parse(text) {
   for (const line of lines) {
     if (line.length < 3) continue;
 
-    // de-noise: ignore admin/instruction lines
-    if (/^(sig|rx|diagnosis|patient|dr\.|doc|age|date|review|refill|morning|evening|night)\b/i.test(line)) {
+    // de-noise: ignore admin + instruction-only + clinic headers
+    if (
+      /^(sig|rx|diagnosis|patient|dr\.|doc|age|date|review|refill|morning|evening|night|www\.|email:|ph:|phone:|@)/i.test(line) ||
+      /\b(smile designing|teeth whitening|dental implants|general dentistry)\b/i.test(line) ||
+      DOSE_RE.test(line) || DURATION_RE.test(line) || MEAL_RE.test(line)
+    ) {
       continue;
     }
 
@@ -105,14 +113,9 @@ function parse(text) {
 
     const conf = score(line, item);
 
-    // Primary acceptance: has some hard signal
+    // Primary acceptance: must have a hard signal
     if (composition || strength || form || quantity || /\d/.test(line)) {
       items.push({ ...item, confidence: conf });
-    } else {
-      // Fallback: accept short name-only candidates with tiny confidence
-      if (item.name.length >= 3 && item.name.split(" ").length <= 3) {
-        items.push({ ...item, quantity: 1, confidence: 0.18 });
-      }
     }
   }
 
