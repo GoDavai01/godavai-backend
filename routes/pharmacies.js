@@ -1,10 +1,11 @@
 // routes/pharmacies.js
-
 const express = require("express");
 const router = express.Router();
 const Pharmacy = require("../models/Pharmacy");
-const auth = require("../middleware/auth");
 const Medicine = require("../models/Medicine");
+const auth = require("../middleware/auth");
+const mongoose = require("mongoose");
+const generateMedicineDescription = require("../utils/generateDescription");
 
 /**
  * POST /api/pharmacies/available-for-cart
@@ -19,16 +20,12 @@ router.post("/available-for-cart", async (req, res) => {
     }
     const query = { city: new RegExp(`^${city}$`, "i"), ...(area ? { area } : {}), active: true };
 
-    // Find all pharmacies in city/area
     const pharmacies = await Pharmacy.find(query);
-
-    // Filter those who have ALL medicines
     const result = pharmacies.filter(pharmacy =>
       medicines.every(medId =>
-        pharmacy.medicines.map(String).includes(String(medId))
+        (pharmacy.medicines || []).map(String).includes(String(medId))
       )
     );
-
     res.json(result);
   } catch (err) {
     console.error("available-for-cart error:", err);
@@ -37,9 +34,9 @@ router.post("/available-for-cart", async (req, res) => {
 });
 
 /**
- * GET /api/pharmacies?city=Mumbai
- * Returns all pharmacies in the given city (case-insensitive)
- * Used by frontend Home.js to show pharmacy cards
+ * GET /api/pharmacies
+ * Query: ?city=&area=&all=1
+ * Returns pharmacies (used by Home.js cards)
  */
 router.get("/", async (req, res) => {
   try {
@@ -47,12 +44,12 @@ router.get("/", async (req, res) => {
     const area = req.query.area || "";
     const all = req.query.all === "1" || req.query.all === "true";
 
-    let query = {};
-    if (!all) query.active = true;
-    if (city) query.city = new RegExp(city, "i");
-    if (area) query.area = new RegExp(area, "i");
+    const q = {};
+    if (!all) q.active = true;
+    if (city) q.city = new RegExp(city, "i");
+    if (area) q.area = new RegExp(area, "i");
 
-    const pharmacies = await Pharmacy.find(query);
+    const pharmacies = await Pharmacy.find(q);
     res.json(pharmacies);
   } catch (err) {
     console.error("Pharmacy list error:", err);
@@ -61,9 +58,8 @@ router.get("/", async (req, res) => {
 });
 
 /**
- * GET /api/pharmacy/medicines
- * Returns all medicines belonging to the logged-in pharmacy (for dashboard/autocomplete)
- * Requires pharmacy authentication
+ * GET /api/pharmacies/medicines  (pharmacy dashboard/autocomplete)
+ * Requires auth with a pharmacyId
  */
 router.get("/medicines", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
@@ -76,8 +72,10 @@ router.get("/medicines", auth, async (req, res) => {
   }
 });
 
-// ADD BELOW your existing router.get("/medicines", auth, …)
-
+/**
+ * POST /api/pharmacies/medicines/quick-add-draft
+ * Creates a draft medicine quickly AND eagerly generates description.
+ */
 router.post("/medicines/quick-add-draft", auth, async (req, res) => {
   try {
     if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
@@ -87,7 +85,7 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
       return res.status(400).json({ error: "Provide at least Brand or Composition." });
     }
 
-    const doc = await Medicine.create({
+    let doc = await Medicine.create({
       name: name || brand || composition || "Draft",
       brand: brand || "",
       composition: composition || "",
@@ -104,6 +102,23 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
       status: "draft",
     });
 
+    // EAGER: generate & persist description immediately
+    try {
+      const desc = await generateMedicineDescription({
+        name: doc.name,
+        brand: doc.brand,
+        composition: doc.composition,
+        company: doc.company,
+        type: doc.type,
+      });
+      if (desc && desc !== "No description available.") {
+        doc.description = desc;
+        await doc.save();
+      }
+    } catch (e) {
+      console.error("Desc gen failed (draft):", e?.response?.data || e?.message);
+    }
+
     res.json(doc);
   } catch (err) {
     console.error(err);
@@ -111,6 +126,10 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
   }
 });
 
+/**
+ * PATCH /api/pharmacies/medicines/:id/activate
+ * Activates the medicine AND eagerly fills description if missing.
+ */
 router.patch("/medicines/:id/activate", auth, async (req, res) => {
   try {
     if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
@@ -120,7 +139,7 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
       return res.status(400).json({ error: "price and mrp are required to activate." });
     }
 
-    const med = await Medicine.findOneAndUpdate(
+    let med = await Medicine.findOneAndUpdate(
       { _id: req.params.id, pharmacy: req.user.pharmacyId },
       {
         $set: {
@@ -137,6 +156,26 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
     );
 
     if (!med) return res.status(404).json({ error: "Medicine not found." });
+
+    // EAGER: fill description if empty
+    if (!med.description) {
+      try {
+        const desc = await generateMedicineDescription({
+          name: med.name,
+          brand: med.brand,
+          composition: med.composition,
+          company: med.company,
+          type: med.type,
+        });
+        if (desc && desc !== "No description available.") {
+          med.description = desc;
+          await med.save();
+        }
+      } catch (e) {
+        console.error("Desc gen failed (activate):", e?.response?.data || e?.message);
+      }
+    }
+
     res.json(med);
   } catch (err) {
     console.error(err);
@@ -144,6 +183,9 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/pharmacies/me
+ */
 router.get("/me", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   try {
@@ -156,7 +198,10 @@ router.get("/me", auth, async (req, res) => {
   }
 });
 
-router.patch('/active', auth, async (req, res) => {
+/**
+ * PATCH /api/pharmacies/active
+ */
+router.patch("/active", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   const { active } = req.body;
   try {
@@ -172,10 +217,12 @@ router.patch('/active', auth, async (req, res) => {
   }
 });
 
-// --- Suggest pharmacies for unavailable medicines (filtered by city/area) ---
+/**
+ * POST /api/pharmacies/suggest-for-prescription
+ */
 router.post("/suggest-for-prescription", async (req, res) => {
   try {
-    const { city, area, medicines } = req.body; // medicines: [{ name: "Dolo", quantity: 1 }, ...]
+    const { city, area, medicines } = req.body;
     if (!city || !medicines || !medicines.length) {
       return res.status(400).json({ error: "city and medicines required" });
     }
@@ -191,33 +238,17 @@ router.post("/suggest-for-prescription", async (req, res) => {
       stock: { $gt: 0 },
     }).populate("pharmacy");
 
-    const pharmacyMap = {};
+    const map = {};
     meds.forEach(med => {
       const pid = med.pharmacy._id.toString();
-      if (!pharmacyMap[pid]) {
-        pharmacyMap[pid] = {
-          pharmacy: med.pharmacy,
-          items: [],
-          total: 0,
-        };
-      }
-      pharmacyMap[pid].items.push({
-        name: med.name,
-        price: med.price,
-        quantity: 1
-      });
-      pharmacyMap[pid].total += med.price;
+      if (!map[pid]) map[pid] = { pharmacy: med.pharmacy, items: [], total: 0 };
+      map[pid].items.push({ name: med.name, price: med.price, quantity: 1 });
+      map[pid].total += med.price;
     });
 
-    const suggestions = Object.values(pharmacyMap).map(ph => {
+    const suggestions = Object.values(map).map(ph => {
       const allAvailable = ph.items.length === medicines.length;
-      return {
-        pharmacyId: ph.pharmacy._id,
-        name: ph.pharmacy.name,
-        total: ph.total,
-        allAvailable,
-        availableItems: ph.items
-      };
+      return { pharmacyId: ph.pharmacy._id, name: ph.pharmacy.name, total: ph.total, allAvailable, availableItems: ph.items };
     });
 
     suggestions.sort((a, b) => {
@@ -233,9 +264,11 @@ router.post("/suggest-for-prescription", async (req, res) => {
   }
 });
 
-// GET /api/pharmacies/nearby?lat=...&lng=...
+/**
+ * GET /api/pharmacies/nearby?lat=&lng=&maxDistance=
+ */
 router.get("/nearby", async (req, res) => {
-  const { lat, lng, maxDistance = 8000 } = req.query; // meters
+  const { lat, lng, maxDistance = 8000 } = req.query;
   if (!lat || !lng) return res.status(400).json({ error: "lat/lng required" });
   try {
     const pharmacies = await Pharmacy.aggregate([
@@ -243,7 +276,7 @@ router.get("/nearby", async (req, res) => {
         $geoNear: {
           near: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
           distanceField: "dist.calculated",
-          maxDistance: parseInt(maxDistance),
+          maxDistance: parseInt(maxDistance, 10),
           spherical: true,
           query: { active: true, status: "approved" }
         }
@@ -252,12 +285,15 @@ router.get("/nearby", async (req, res) => {
     ]);
     res.json(pharmacies);
   } catch (err) {
+    console.error("Geo search error:", err);
     res.status(500).json({ error: "Geo search error" });
   }
 });
 
-// routes/pharmacies.js
-router.patch('/set-location', auth, async (req, res) => {
+/**
+ * PATCH /api/pharmacies/set-location
+ */
+router.patch("/set-location", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   const { lat, lng, formatted } = req.body;
   if (!lat || !lng) return res.status(400).json({ message: "lat/lng required" });
@@ -275,9 +311,9 @@ router.patch('/set-location', auth, async (req, res) => {
     );
     res.json({ message: "Location updated", location: updated.location });
   } catch (err) {
+    console.error("set-location error:", err);
     res.status(500).json({ message: "Failed to update location" });
   }
 });
-
 
 module.exports = router;

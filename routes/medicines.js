@@ -382,4 +382,49 @@ router.get("/offers", async (req, res) => {
   }
 });
 
+// ===== ADMIN: Backfill missing descriptions =====
+const generateMedicineDescription = require("../utils/generateDescription");
+
+router.post("/admin/backfill-descriptions", async (req, res) => {
+  try {
+    const limit = Number(req.body.limit || 20); // optional batch size
+    const meds = await Medicine.find({
+      $or: [{ description: { $exists: false } }, { description: "" }]
+    }).limit(limit);
+
+    if (!meds.length) {
+      return res.json({ message: "All medicines already have descriptions" });
+    }
+
+    const results = [];
+    for (const med of meds) {
+      try {
+        const desc = await generateMedicineDescription({
+          name: med.name,
+          brand: med.brand,
+          composition: med.composition,
+          company: med.company,
+          type: med.type,
+        });
+        if (desc && desc !== "No description available.") {
+          med.description = desc;
+          await med.save();
+          results.push({ id: med._id, name: med.name, ok: true });
+        } else {
+          results.push({ id: med._id, name: med.name, ok: false });
+        }
+      } catch (err) {
+        console.error("Backfill failed for", med.name, err.message);
+        results.push({ id: med._id, name: med.name, ok: false, error: err.message });
+      }
+    }
+
+    res.json({ filled: results.length, results });
+  } catch (err) {
+    console.error("Backfill error:", err);
+    res.status(500).json({ error: "Failed to backfill descriptions" });
+  }
+});
+
+
 module.exports = router;
