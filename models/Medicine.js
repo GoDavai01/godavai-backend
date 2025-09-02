@@ -8,8 +8,17 @@ const MedicineSchema = new mongoose.Schema(
     composition: { type: String, default: "", trim: true },
     company: { type: String, default: "", trim: true },
 
-    price: { type: Number, required: true, min: 0 },
-    mrp: { type: Number, required: true, min: 0 },
+    // required unless status === 'draft'
+    price: {
+      type: Number,
+      min: 0,
+      required: function () { return this.status !== "draft"; }
+    },
+    mrp: {
+      type: Number,
+      min: 0,
+      required: function () { return this.status !== "draft"; }
+    },
     discount: { type: Number, default: 0, min: 0, max: 100 },
     stock: { type: Number, default: 0, min: 0 },
 
@@ -26,6 +35,8 @@ const MedicineSchema = new mongoose.Schema(
     pharmacy: { type: mongoose.Schema.Types.ObjectId, ref: "Pharmacy" },
 
     description: { type: String, trim: true },
+
+    status: { type: String, enum: ["draft", "active"], default: "active" },
   },
   { timestamps: true }
 );

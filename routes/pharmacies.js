@@ -76,6 +76,74 @@ router.get("/medicines", auth, async (req, res) => {
   }
 });
 
+// ADD BELOW your existing router.get("/medicines", auth, …)
+
+router.post("/medicines/quick-add-draft", auth, async (req, res) => {
+  try {
+    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+
+    const { name, brand, composition, company } = req.body;
+    if (!brand && !composition) {
+      return res.status(400).json({ error: "Provide at least Brand or Composition." });
+    }
+
+    const doc = await Medicine.create({
+      name: name || brand || composition || "Draft",
+      brand: brand || "",
+      composition: composition || "",
+      company: company || "",
+      price: 0,
+      mrp: 0,
+      discount: 0,
+      stock: 0,
+      images: [],
+      category: ["Miscellaneous"],
+      type: "Tablet",
+      prescriptionRequired: false,
+      pharmacy: req.user.pharmacyId,
+      status: "draft",
+    });
+
+    res.json(doc);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Could not create draft." });
+  }
+});
+
+router.patch("/medicines/:id/activate", auth, async (req, res) => {
+  try {
+    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+
+    const { price, mrp, stock, category, type, prescriptionRequired } = req.body;
+    if (price == null || mrp == null) {
+      return res.status(400).json({ error: "price and mrp are required to activate." });
+    }
+
+    const med = await Medicine.findOneAndUpdate(
+      { _id: req.params.id, pharmacy: req.user.pharmacyId },
+      {
+        $set: {
+          price: Number(price),
+          mrp: Number(mrp),
+          stock: stock != null ? Number(stock) : 0,
+          category: Array.isArray(category) && category.length ? category : ["Miscellaneous"],
+          type: type || "Tablet",
+          prescriptionRequired: !!prescriptionRequired,
+          status: "active",
+        },
+      },
+      { new: true }
+    );
+
+    if (!med) return res.status(404).json({ error: "Medicine not found." });
+    res.json(med);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to activate." });
+  }
+});
+
 router.get("/me", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   try {
