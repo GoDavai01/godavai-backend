@@ -1,8 +1,6 @@
 // utils/generateDescription.js
 const axios = require("axios");
 
-// NOTE: Do NOT call dotenv.config() here — load env once in server.js/app.js
-
 /**
  * Generate a rich, customer-friendly description using GPT.
  * @param {Object|string} input  Either the medicine name string, or an object:
@@ -13,8 +11,8 @@ async function generateMedicineDescription(input) {
   const meta = typeof input === "string" ? { name: input } : (input || {});
   const { name = "", brand = "", composition = "", company = "", type = "" } = meta;
 
-  if (!process.env.OPENAI_API_KEY) {
-    console.error("❌ OPENAI_API_KEY is not set.");
+  // Gate exactly like OCR: require API key and allow disabling via GPT_MED_STAGE=0
+  if (!process.env.OPENAI_API_KEY || process.env.GPT_MED_STAGE === "0") {
     return "No description available.";
   }
 
@@ -57,7 +55,7 @@ Tone: simple, trustworthy, and non-alarming. Avoid medical jargon, avoid dosage 
     const text = res?.data?.choices?.[0]?.message?.content?.trim();
     return text || "No description available.";
   } catch (err) {
-    // Show API error body if present to help you debug on Render logs
+    // Log API error body if present to help debug on Render logs
     console.error("🔴 OpenAI generateMedicineDescription error:", err.response?.data || err.message);
     return "No description available.";
   }
