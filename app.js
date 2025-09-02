@@ -777,6 +777,10 @@ const toBool = (v) => {
   return s === "true" || s === "1" || s === "yes" || s === "on";
 };
 
+// treat empty, whitespace, or the sentinel as "missing"
+const isMissingDesc = (s) =>
+  !s || !String(s).trim() || /^no description available\.?$/i.test(String(s).trim());
+
 /** GET: dashboard list (unchanged) */
 app.get("/api/pharmacy/medicines", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
@@ -866,13 +870,7 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
       });
 
       try {
-        const desc = await generateMedicineDescription({
-  name: mergedName,
-  brand,
-  composition,
-  company,
-  type: typeValue
-});
+        const desc = await generateMedicineDescription(mergedName);
         if (desc) med.description = desc;
       } catch { /* ignore description failure */ }
 
@@ -910,28 +908,6 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
 
   // JSON path (no files)
   return run();
-});
-
-app.post("/api/medicines/refresh-all-descriptions", async (req, res) => {
-  const meds = await Medicine.find({ $or: [ { description: { $exists: false } }, { description: "" } ] });
-  for (const m of meds) {
-    try {
-      const text = await generateMedicineDescription({
-        name: m.name,
-        brand: m.brand,
-        composition: m.composition,
-        company: m.company,
-        type: m.type
-      });
-      if (text && text !== "No description available.") {
-        m.description = text;
-        await m.save();
-      }
-    } catch (e) {
-      console.error("Failed desc for", m.name, e.message);
-    }
-  }
-  res.json({ ok: true });
 });
 
 /** PATCH: edit medicine — now updates composition & company too */
@@ -1229,7 +1205,7 @@ app.get("/api/medicines", async (req, res) => {
     // Eager-fill missing descriptions only when enabled
     const gptOn = String(process.env.GPT_MED_STAGE || "1") === "1" && !!process.env.OPENAI_API_KEY;
     if (gptOn) {
-      const missing = meds.filter(m => !m.description || !m.description.trim());
+      const missing = meds.filter(m => isMissingDesc(m.description));
       if (missing.length) {
         // small concurrency cap
         const slots = 3;
@@ -1281,7 +1257,7 @@ app.post("/api/medicines/:id/ensure-description", async (req, res) => {
     if (!med) return res.status(404).json({ error: "Medicine not found" });
 
     // already has description?
-    if (med.description && med.description.trim()) {
+    if (!isMissingDesc(med.description)) {
       return res.json({ ok: true, description: med.description });
     }
 
@@ -1296,7 +1272,7 @@ app.post("/api/medicines/:id/ensure-description", async (req, res) => {
       type: med.type
     });
 
-    if (text && text !== "No description available.") {
+    if (text && !isMissingDesc(text)) {
       med.description = text;
       await med.save();
       return res.json({ ok: true, description: text });

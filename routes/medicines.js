@@ -35,6 +35,10 @@ function normalizeCategory(input) {
 }
 const asTrimmedString = (v) => (v ?? "").toString().trim();
 
+// treat empty, whitespace, or the sentinel as "missing"
+const isMissingDesc = (s) =>
+  !s || !String(s).trim() || /^no description available\.?$/i.test(String(s).trim());
+
 
 // --- ENSURE DESCRIPTION NOW (idempotent) ---
 router.post("/medicines/:id/ensure-description", async (req, res) => {
@@ -433,7 +437,11 @@ router.post("/admin/backfill-descriptions", async (req, res) => {
   try {
     const limit = Number(req.body.limit || 20); // optional batch size
     const meds = await Medicine.find({
-      $or: [{ description: { $exists: false } }, { description: "" }]
+      $or: [
+        { description: { $exists: false } },
+        { description: { $in: [null, ""] } },
+        { description: { $regex: /^no description available\.?$/i } }
+        ]
     }).limit(limit);
 
     if (!meds.length) {
