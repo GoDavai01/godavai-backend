@@ -336,15 +336,16 @@ async function extractTextPlusDetailed(urlOrPath) {
   return { text: "", lines: [], engine: "none" };
 }
 
-/** Heuristic extraction of medicine-like rows */
+/** Heuristic extraction + OPTIONAL GPT post-filter to force ONLY medicines */
 async function extractPrescriptionItems(urlOrPath) {
   const detailed = await extractTextPlusDetailed(urlOrPath);
   const lines = (detailed.lines || []).map(l => (typeof l === "string" ? { text: l } : l));
 
-  // 1) try to isolate the actual Rx body
+  // 1) Isolate likely Rx body (between Inscription..Signa if present)
   const bodyLines = slicePrescriptionSection(lines);
+  const bodyText  = bodyLines.map(l => (l.text || "").trim()).filter(Boolean).join("\n");
 
-  // 2) filter & parse
+  // 2) Heuristic filter & parse (current logic)
   const items = [];
   for (const raw of bodyLines) {
     const s = (raw.text || raw).trim();
@@ -355,17 +356,58 @@ async function extractPrescriptionItems(urlOrPath) {
     items.push({ ...parsed, confidence: typeof raw.confidence === "number" ? raw.confidence : 0.5 });
   }
 
-  // 3) de-dupe by normalized name
+  // de-dupe by normalized name
   const seen = new Set();
-  const unique = [];
+  const uniqueHeur = [];
   for (const it of items) {
     const key = it.name.toLowerCase().replace(/[^a-z0-9]/g, "");
     if (seen.has(key)) continue;
     seen.add(key);
-    unique.push(it);
+    uniqueHeur.push(it);
   }
 
-  return { items: unique, engine: detailed.engine, raw: detailed.text };
+  // 3) OPTIONAL GPT post-filter/normalizer
+  let gptItems = [];
+  try {
+    if (process.env.GPT_MED_STAGE === "1") {
+      const { gptFilterMedicines } = require("./ai/gptMeds");
+      const out = await gptFilterMedicines(bodyText);
+      if (out && Array.isArray(out.items)) {
+        gptItems = out.items.map(i => ({
+          name: i.name,
+          strength: i.strength || "",
+          form: i.form || "",
+          qty: i.qty || 1,
+          confidence: 0.85, // trust post-filter baseline more than OCR conf
+        }));
+      }
+    }
+  } catch (e) {
+    if (process.env.DEBUG_OCR) console.warn("[OCR] GPT post-filter failed:", e.message);
+  }
+
+  // 4) Merge GPT + heuristic (prefer GPT rows; then add missing heuristic uniques)
+  const byKey = new Map();
+  const keyOf = (x) => (x.name || "").toLowerCase().replace(/[^a-z0-9]/g, "") + "|" + (x.strength || "") + "|" + (x.form || "");
+  for (const it of gptItems) byKey.set(keyOf(it), it);
+  for (const it of uniqueHeur) {
+    const k = keyOf(it);
+    if (!byKey.has(k)) byKey.set(k, it);
+  }
+  const merged = Array.from(byKey.values());
+
+  return {
+    items: merged.map(i => ({
+      name: i.name,
+      composition: "",                 // not required by spec; keep blank
+      strength: i.strength || "",
+      form: i.form || "",
+      qty: i.qty || i.quantity || 1,
+      confidence: typeof i.confidence === "number" ? i.confidence : 0.7
+    })),
+    engine: gptItems.length ? (detailed.engine + "+gpt") : detailed.engine,
+    raw: detailed.text
+  };
 }
 
 async function extractText(urlOrPath) {
