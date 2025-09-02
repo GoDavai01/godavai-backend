@@ -545,6 +545,10 @@ router.get("/medicines", async (req, res) => {
   try {
     const { pharmacyId } = req.query;
     const filter = pharmacyId ? { pharmacy: pharmacyId } : {};
+        if (String(req.query.onlyAvailable || "") === "1") {
+      filter.status = { $ne: "unavailable" };
+    }
+
     const meds = await Medicine.find(filter).lean(); // lean for speed
 
     // nothing to do?
