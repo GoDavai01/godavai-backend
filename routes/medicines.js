@@ -599,7 +599,7 @@ router.get("/debug/gpt-med", (req, res) => {
   });
 });
 
-// --- Autocomplete for live search bar ---
+// --- Autocomplete for live search bar (name, brand, composition, category, company) ---
 router.get("/autocomplete", async (req, res) => {
   let { q = "", limit = 10, city = "" } = req.query;
   q = String(q || "").trim();
@@ -611,26 +611,44 @@ router.get("/autocomplete", async (req, res) => {
     // optional: restrict to pharmacies in city
     let pharmacyIds = [];
     if (city) {
-      const phs = await Pharmacy.find({ city: { $regex: city, $options: "i" }, active: true, status: "approved" })
-        .select("_id");
+      const phs = await Pharmacy.find({
+        city: { $regex: city, $options: "i" },
+        active: true,
+        status: "approved"
+      }).select("_id");
       pharmacyIds = phs.map(p => p._id);
     }
 
     const meds = await Medicine.find({
-      $or: [{ name: rx }, { brand: rx }, { composition: rx }],
+      $or: [
+        { name: rx },
+        { brand: rx },
+        { composition: rx },
+        { company: rx },
+        { category: rx }
+      ],
       ...(pharmacyIds.length ? { pharmacy: { $in: pharmacyIds } } : {})
     })
-      .select("name brand composition")   // keep it light
+      .select("name brand composition company category")
       .limit(parseInt(limit, 10));
 
-    // Deduplicate suggestions by name+brand
+    // Deduplicate suggestions by (brand||name||company||category)
     const seen = new Set();
     const suggestions = [];
     for (const m of meds) {
-      const label = m.brand || m.name || "";
+      const label =
+        m.brand || m.name || m.company || (m.category?.[0] || "");
+      if (!label) continue;
+
       if (!seen.has(label.toLowerCase())) {
         seen.add(label.toLowerCase());
-        suggestions.push({ id: m._id, label, composition: m.composition });
+        suggestions.push({
+          id: m._id,
+          label,
+          composition: m.composition,
+          category: m.category,
+          company: m.company
+        });
       }
     }
 
@@ -640,5 +658,6 @@ router.get("/autocomplete", async (req, res) => {
     res.status(500).json({ error: "Failed to autocomplete" });
   }
 });
+
 
 module.exports = router;
