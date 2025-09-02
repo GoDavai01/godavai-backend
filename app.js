@@ -191,8 +191,6 @@ app.get("/api/medicine/suggestions", suggestionsHandler);
 // replace the four lines above with just these two:
 app.use("/api/pharmacies", pharmaciesRouter);
 app.use("/api/medicines", medicinesRouter);
-app.use("/api", pharmaciesRouter);
-app.use("/api", medicinesRouter);
 
 app.use("/api/orders", require("./routes/orders"));
 
