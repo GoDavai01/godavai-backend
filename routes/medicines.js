@@ -35,10 +35,36 @@ function normalizeCategory(input) {
 }
 const asTrimmedString = (v) => (v ?? "").toString().trim();
 
-// treat empty, whitespace, or the sentinel as "missing"
-const isMissingDesc = (s) =>
-  !s || !String(s).trim() || /^no description available\.?$/i.test(String(s).trim());
+// treat empty, whitespace, the sentinel, or old long paragraphs (no bullets) as "missing"
+const isBulleted = (s) => /(^|\n)\s*(?:•|-|\d+\.)\s+/.test(String(s || ""));
+const isMissingDesc = (s) => {
+  const t = String(s || "").trim();
+  if (!t) return true;
+  if (/^no description available\.?$/i.test(t)) return true;
+  // legacy long paragraph (not bulleted) → replace
+  if (t.length > 240 && !isBulleted(t)) return true;
+  return false;
+};
 
+const pLimit = (concurrency) => {
+  const q = [];
+  let active = 0;
+  const next = () => {
+    active--;
+    if (q.length) q.shift()();
+  };
+  return async (fn) =>
+    new Promise((resolve, reject) => {
+      const run = async () => {
+        active++;
+        try { resolve(await fn()); }
+        catch (e) { reject(e); }
+        finally { next(); }
+      };
+      if (active < concurrency) run();
+      else q.push(run);
+    });
+};
 
 // --- ENSURE DESCRIPTION NOW (idempotent) ---
 router.post("/medicines/:id/ensure-description", async (req, res) => {
@@ -51,7 +77,7 @@ router.post("/medicines/:id/ensure-description", async (req, res) => {
     if (!med) return res.status(404).json({ error: "Medicine not found" });
 
     // If already present, just return it
-    if (med.description && med.description.trim()) {
+   if (!isMissingDesc(med.description)) {
       return res.json({ ok: true, description: med.description });
     }
 
@@ -177,9 +203,40 @@ router.get("/search", async (req, res) => {
       $or: or,
       ...(pharmacyIds.length ? { pharmacy: { $in: pharmacyIds } } : {}),
     })
-      .select("name brand company composition category type img images mrp price pharmacy")
+      .select("name brand company composition category type img images mrp price pharmacy description")
       .limit(parseInt(limit, 10) || 80)
       .lean();
+
+    // >>>>>>>>>>>>>>>>>>>>>>> PASTE BLOCK STARTS HERE <<<<<<<<<<<<<<<<<<<<<<<<
+    // also compact/fill for search results
+    const shouldFill = String(process.env.GPT_MED_STAGE || "1") === "1";
+    if (shouldFill) {
+      const toFix = meds.filter(m => isMissingDesc(m.description));
+      if (toFix.length) {
+        const limit = pLimit(3);
+        await Promise.all(
+          toFix.map(m => limit(async () => {
+            try {
+              const text = await generateDesc({
+                name: m.name,
+                brand: m.brand,
+                composition: m.composition,
+                company: m.company,
+                type: m.type,
+              });
+              if (text && text !== "No description available.") {
+                await Medicine.updateOne({ _id: m._id }, { $set: { description: text } });
+                const hit = meds.find(x => String(x._id) === String(m._id));
+                if (hit) hit.description = text;
+              }
+            } catch (e) {
+              console.error("Desc gen (search) failed:", m.name, e?.response?.data || e.message);
+            }
+          }))
+        );
+      }
+    }
+    // >>>>>>>>>>>>>>>>>>>>>>>  PASTE BLOCK ENDS HERE  <<<<<<<<<<<<<<<<<<<<<<<<
 
     // dedupe by (brand||name + composition)
     let out = meds;
@@ -199,6 +256,7 @@ router.get("/search", async (req, res) => {
     res.status(500).json({ error: "Failed to search medicines" });
   }
 });
+
 /* ==================================================================== */
 
 // --- Find all pharmacies (and price) that have a medicine ---
@@ -480,25 +538,7 @@ router.post("/admin/backfill-descriptions", async (req, res) => {
 
 /* ==================== EAGER-ON-READ (NEW) ==================== */
 // Small concurrency limiter to avoid spiking the LLM API
-const pLimit = (concurrency) => {
-  const q = [];
-  let active = 0;
-  const next = () => {
-    active--;
-    if (q.length) q.shift()();
-  };
-  return async (fn) =>
-    new Promise((resolve, reject) => {
-      const run = async () => {
-        active++;
-        try { resolve(await fn()); }
-        catch (e) { reject(e); }
-        finally { next(); }
-      };
-      if (active < concurrency) run();
-      else q.push(run);
-    });
-};
+
 
 /**
  * GET /api/medicines?pharmacyId=<id>
@@ -519,7 +559,7 @@ router.get("/medicines", async (req, res) => {
     if (!shouldFill) return res.json(meds);
 
     // fill only missing ones
-    const missing = meds.filter(m => !m.description || !m.description.trim());
+    const missing = meds.filter(m => isMissingDesc(m.description));
 
     if (missing.length) {
       const limit = pLimit(3); // be nice to the API

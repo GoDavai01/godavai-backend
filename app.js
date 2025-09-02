@@ -778,8 +778,17 @@ const toBool = (v) => {
 };
 
 // treat empty, whitespace, or the sentinel as "missing"
-const isMissingDesc = (s) =>
-  !s || !String(s).trim() || /^no description available\.?$/i.test(String(s).trim());
+// treat empty, whitespace, the sentinel, or old long paragraphs (no bullets) as "missing"
+const isBulleted = (s) => /(^|\n)\s*(?:•|-|\d+\.)\s+/.test(String(s || ""));
+const isMissingDesc = (s) => {
+  const t = String(s || "").trim();
+  if (!t) return true;
+  if (/^no description available\.?$/i.test(t)) return true;
+  // legacy long paragraph (not bulleted) → replace
+  if (t.length > 240 && !isBulleted(t)) return true;
+  return false;
+};
+
 
 /** GET: dashboard list (unchanged) */
 app.get("/api/pharmacy/medicines", auth, async (req, res) => {
