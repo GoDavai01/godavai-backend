@@ -1195,12 +1195,91 @@ app.get("/api/medicines", async (req, res) => {
       return res.json([]);
 
     // Get medicines, also populate pharmacy so you can show name/city in frontend if needed
-    const medicines = await Medicine.find(medFilter).populate("pharmacy");
-    res.json(medicines);
+    // NOTE: lean() so we can mutate before sending
+    const meds = await Medicine.find(medFilter).populate("pharmacy").lean();
+
+    // Eager-fill missing descriptions only when enabled
+    const gptOn = String(process.env.GPT_MED_STAGE || "1") === "1" && !!process.env.OPENAI_API_KEY;
+    if (gptOn) {
+      const missing = meds.filter(m => !m.description || !m.description.trim());
+      if (missing.length) {
+        // small concurrency cap
+        const slots = 3;
+        let inFlight = 0;
+        const queue = [...missing];
+
+        const runOne = async () => {
+          const m = queue.shift();
+          if (!m) return;
+          inFlight++;
+          try {
+            const text = await generateMedicineDescription({
+              name: m.name,
+              brand: m.brand,
+              composition: m.composition,
+              company: m.company,
+              type: m.type
+            });
+            if (text && text !== "No description available.") {
+              await Medicine.updateOne({ _id: m._id }, { $set: { description: text } });
+              const hit = meds.find(x => String(x._id) === String(m._id));
+              if (hit) hit.description = text; // so response includes it now
+            }
+          } catch (e) {
+            console.error("Desc gen (GET /api/medicines) failed:", m?.name, e?.response?.data || e.message);
+          } finally {
+            inFlight--;
+            if (queue.length) await runOne();
+          }
+        };
+
+        // kick off workers
+        const workers = Array(Math.min(slots, queue.length)).fill(0).map(runOne);
+        await Promise.all(workers);
+      }
+    }
+
+    res.json(meds);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch medicines" });
   }
 });
+
+// Ensure a single medicine has a description now (idempotent)
+app.post("/api/medicines/:id/ensure-description", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const med = await Medicine.findById(id);
+    if (!med) return res.status(404).json({ error: "Medicine not found" });
+
+    // already has description?
+    if (med.description && med.description.trim()) {
+      return res.json({ ok: true, description: med.description });
+    }
+
+    const gptOn = String(process.env.GPT_MED_STAGE || "1") === "1" && !!process.env.OPENAI_API_KEY;
+    if (!gptOn) return res.json({ ok: false, error: "GPT disabled", description: "" });
+
+    const text = await generateMedicineDescription({
+      name: med.name,
+      brand: med.brand,
+      composition: med.composition,
+      company: med.company,
+      type: med.type
+    });
+
+    if (text && text !== "No description available.") {
+      med.description = text;
+      await med.save();
+      return res.json({ ok: true, description: text });
+    }
+    res.json({ ok: false, description: "" });
+  } catch (e) {
+    console.error("ensure-description error:", e?.response?.data || e.message);
+    res.status(500).json({ error: "Failed to ensure description" });
+  }
+});
+
 
 
 app.get('/api/medicines/search', async (req, res) => {
