@@ -1231,6 +1231,12 @@ app.get("/api/medicines", async (req, res) => {
     let medFilter = {};
     if (pharmacyIds.length > 0) medFilter.pharmacy = { $in: pharmacyIds };
     if (trending === "1" || trending === "true") medFilter.trending = true;
+    // default: hide unavailable unless onlyAvailable="0"
+    if (String(req.query.onlyAvailable || "1") === "1") {
+      medFilter.status = { $ne: "unavailable" };
+      medFilter.available = { $ne: false };
+      medFilter.stock = { $gt: 0 };
+      }
     // If searching for a city/area but no pharmacy matches, return []
     if ((city || area || location) && pharmacyIds.length === 0)
       return res.json([]);
