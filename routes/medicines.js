@@ -655,27 +655,48 @@ router.get("/autocomplete", async (req, res) => {
       .select("name brand composition company category")
       .limit(parseInt(limit, 10));
 
-    // Deduplicate suggestions by (brand||name||company||category)
-    const seen = new Set();
-    const suggestions = [];
-    for (const m of meds) {
-      const label =
-        m.brand || m.name || m.company || (m.category?.[0] || "");
-      if (!label) continue;
+    // Prefer composition when it matches the query, then fall back to brand/name.
+// Keep the same object shape (id, label, composition, category, company).
+const seen = new Set();
+const suggestions = [];
+const lim = Math.min(parseInt(limit, 10) || 10, 50);
 
-      if (!seen.has(label.toLowerCase())) {
-        seen.add(label.toLowerCase());
-        suggestions.push({
-          id: m._id,
-          label,
-          composition: m.composition,
-          category: m.category,
-          company: m.company
-        });
-      }
-    }
+const push = (m, label) => {
+  const t = String(label || "").trim();
+  if (!t) return;
+  const key = t.toLowerCase();
+  if (seen.has(key)) return;
+  seen.add(key);
+  suggestions.push({
+    id: m._id,
+    label: t,
+    composition: m.composition,
+    category: m.category,
+    company: m.company
+  });
+};
 
-    res.json(suggestions);
+for (const m of meds) {
+  // 1) If composition matches the query, show that first
+  if (m.composition && rx.test(String(m.composition))) {
+    push(m, m.composition);
+    if (suggestions.length >= lim) break;
+  }
+
+  // 2) Primary fallback label: brand > name > company > first category
+  const primary =
+    m.brand ||
+    m.name ||
+    m.company ||
+    (Array.isArray(m.category) ? m.category[0] : m.category);
+
+  push(m, primary);
+
+  if (suggestions.length >= lim) break;
+}
+
+return res.json(suggestions);
+
   } catch (err) {
     console.error("Autocomplete error:", err);
     res.status(500).json({ error: "Failed to autocomplete" });
