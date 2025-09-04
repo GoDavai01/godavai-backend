@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 async function geocodeAddress(address) {
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY || process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+  const apiKey = process.env.REACT_APP_GOOGLE_MAPS_API_KEY; // or process.env.GOOGLE_MAPS_API_KEY
   const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`;
   try {
     const resp = await axios.get(url);

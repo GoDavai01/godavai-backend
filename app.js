@@ -80,7 +80,7 @@ const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000").spl
 // ADD THESE DEBUG LOGS HERE:
 console.log("[ENV FRONTEND_URL]:", process.env.FRONTEND_URL);
 console.log("[Allowed origins]:", allowedOrigins);
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
 
 // --- For Password Reset ---
 function randomOTP() {
