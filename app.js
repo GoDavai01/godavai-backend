@@ -299,34 +299,6 @@ const pharmacyDocsUpload = isS3
       }
     }).fields(pharmacyDocFields);
 
-    app.get("/api/pharmacies/nearby", async (req, res) => {
-  try {
-    const lat = Number(req.query.lat);
-    const lng = Number(req.query.lng);
-    const maxDistance = Number(req.query.maxDistance || 8000);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      return res.status(400).json({ message: "lat/lng required numbers" });
-    }
-    const Pharmacy = require("./models/Pharmacy");
-    const docs = await Pharmacy.aggregate([
-      {
-        $geoNear: {
-          near: { type: "Point", coordinates: [lng, lat] },
-          distanceField: "dist.calculated",
-          maxDistance,
-          spherical: true,
-          query: { active: true, status: "approved" }
-        }
-      },
-      { $limit: 25 }
-    ]);
-    res.json(docs);
-  } catch (e) {
-    console.error("nearby error", e);
-    res.status(500).json({ message: "Geo query failed", error: e.message });
-  }
-});
-
 
 // ========== PHARMACY REGISTRATION (Multer comes BEFORE body parser!) ==========
 app.post("/api/pharmacy/register", (req, res) => {
@@ -1181,26 +1153,6 @@ app.post("/api/admin/offer", auth, async (req, res) => {
   const offer = new Offer(req.body);
   await offer.save();
   res.json(offer);
-});
-
-app.get("/api/pharmacies", async (req, res) => {
-  try {
-    const { city, area, location, trending } = req.query;
-    let filter = { active: true }; // <<-- Add this!
-    if (city) filter.city = new RegExp(city, "i");
-    if (area) filter.area = new RegExp(area, "i");
-    if (location) {
-      filter.$or = [
-        { city: new RegExp(location, "i") },
-        { area: new RegExp(location, "i") }
-      ];
-    }
-    if (trending === "1" || trending === "true") filter.trending = true;
-    const pharmacies = await Pharmacy.find(filter);
-    res.json(pharmacies);
-  } catch (err) {
-    res.status(500).json({ message: "Failed to fetch pharmacies" });
-  }
 });
 
 app.get("/api/medicines", async (req, res) => {
