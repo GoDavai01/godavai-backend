@@ -266,17 +266,24 @@ router.post("/suggest-for-prescription", async (req, res) => {
 
 /**
  * GET /api/pharmacies/nearby?lat=&lng=&maxDistance=
+ * Strict validation + safe geoNear
  */
 router.get("/nearby", async (req, res) => {
-  const { lat, lng, maxDistance = 8000 } = req.query;
-  if (!lat || !lng) return res.status(400).json({ error: "lat/lng required" });
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  const maxDistance = Number(req.query.maxDistance || 8000);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ error: "lat/lng must be numbers" });
+  }
+
   try {
     const pharmacies = await Pharmacy.aggregate([
       {
         $geoNear: {
-          near: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
+          near: { type: "Point", coordinates: [lng, lat] }, // [lng,lat]
           distanceField: "dist.calculated",
-          maxDistance: parseInt(maxDistance, 10),
+          maxDistance: Number.isFinite(maxDistance) ? maxDistance : 8000,
           spherical: true,
           query: { active: true, status: "approved" }
         }
@@ -285,10 +292,14 @@ router.get("/nearby", async (req, res) => {
     ]);
     res.json(pharmacies);
   } catch (err) {
-    console.error("Geo search error:", err);
-    res.status(500).json({ error: "Geo search error" });
+    console.error("Geo search error:", err?.message || err);
+    res.status(500).json({
+      error: "Geo search error",
+      hint: "Ensure a 2dsphere index on 'location' exists in production."
+    });
   }
 });
+
 
 /**
  * PATCH /api/pharmacies/set-location
