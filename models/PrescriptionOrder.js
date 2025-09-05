@@ -70,7 +70,8 @@ const PrescriptionOrderSchema = new Schema(
     pharmaciesTried: [{ type: Schema.Types.ObjectId, ref: "Pharmacy" }],
 
     // core order info
-    prescriptionUrl: { type: String, required: true },
+    prescriptionUrl: { type: String, required: true },    // primary (first) file – kept for legacy flows
+    attachments: { type: [String], default: [] },          // NEW: all file URLs (images/PDFs)
     city: { type: String },
     area: { type: String },
     notes: { type: String },

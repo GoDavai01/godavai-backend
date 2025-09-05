@@ -42,32 +42,62 @@ function isValidId(id) {
 // === B) AI parse helper ===
 async function runAiParseForOrder(order) {
   try {
-    const url = order.prescriptionUrl?.startsWith('/uploads/')
-      ? `${process.env.SERVER_BASE_URL || "http://localhost:5000"}${order.prescriptionUrl}`
-      : order.prescriptionUrl;
+    // build list of urls to scan (attachments[] first, fallback to single url)
+    const base = process.env.SERVER_BASE_URL || "http://localhost:5000";
+    const urls = (Array.isArray(order.attachments) && order.attachments.length
+      ? order.attachments
+      : [order.prescriptionUrl]
+    )
+      .filter(Boolean)
+      .map(u => (u?.startsWith('/uploads/') ? `${base}${u}` : u));
 
-    if (process.env.DEBUG_OCR) console.log("[AI parse] fetching:", url);
+    if (!urls.length) return;
 
-    // Use the newer, stricter pipeline (sections + stopwords + drug-line heuristics)
-    const out = await extractPrescriptionItems(url);
-    const items = (out.items || []).map(i => ({
-      name: i.name,
-      composition: i.composition || "",
-      strength: i.strength || "",
-      form: i.form || "",
-      quantity: i.qty || i.quantity || 1,
-      confidence: typeof i.confidence === "number" ? i.confidence : 0.5,
-    }));
+    let allItems = [];
+    let allRaw = [];
+
+    for (const url of urls) {
+      if (process.env.DEBUG_OCR) console.log("[AI parse] fetching:", url);
+      const out = await extractPrescriptionItems(url);
+      allRaw.push(out.raw || "");
+
+      const items = (out.items || []).map(i => ({
+        name: i.name,
+        composition: i.composition || "",
+        strength: i.strength || "",
+        form: i.form || "",
+        quantity: i.qty || i.quantity || 1,
+        confidence: typeof i.confidence === "number" ? i.confidence : 0.5,
+      }));
+      allItems = allItems.concat(items);
+    }
+
+    // merge by (name|strength|form) — sum quantities, keep highest confidence
+    const keyOf = it => [it.name.toLowerCase(), it.strength || "", it.form || ""].join("|");
+    const merged = new Map();
+    for (const it of allItems) {
+      const k = keyOf(it);
+      const prev = merged.get(k);
+      if (!prev) merged.set(k, it);
+      else {
+        merged.set(k, {
+          ...((prev.confidence >= it.confidence) ? prev : it),
+          quantity: (prev.quantity || 1) + (it.quantity || 1),
+        });
+      }
+    }
+
+    const itemsFinal = Array.from(merged.values());
 
     order.ai = {
-      parser: out.engine || "ocr-heuristics:v2",
+      parser: "ocr-heuristics:v2(multi)",
       parsedAt: new Date(),
-      rawText: (out.raw || "").slice(0, 100000),
-      items,
+      rawText: allRaw.join("\n\n").slice(0, 100000),
+      items: itemsFinal,
     };
 
-    // keep legacy convenience field for your flows
-    order.medicinesRequested = items.map(i => ({
+    // legacy convenience field for downstream flows
+    order.medicinesRequested = itemsFinal.map(i => ({
       name: i.name,
       quantity: i.quantity || 1,
       brand: "",
@@ -188,10 +218,13 @@ router.post('/upload', upload.single('prescription'), async (req, res) => {
   }
 });
 
-// 2. CREATE PRESCRIPTION ORDER
+
 router.post('/order', auth, async (req, res) => {
   try {
-    const { prescriptionUrl, city, area, notes, uploadType, chosenPharmacyId, address } = req.body;
+    const { prescriptionUrl, attachments = [], city, area, notes, uploadType, chosenPharmacyId, address } = req.body
+    // pick a primary URL (backward compat)
+    const primaryUrl = prescriptionUrl || (Array.isArray(attachments) && attachments[0]);
+    if (!primaryUrl) return res.status(400).json({ message: "Missing prescription file." });
     let pharmacyIds = [];
     let pharmaciesTried = [];
     if (uploadType === "manual") {
@@ -218,7 +251,8 @@ router.post('/order', auth, async (req, res) => {
 
     const order = await PrescriptionOrder.create({
       user: req.user.userId,
-      prescriptionUrl,
+      prescriptionUrl: primaryUrl,
+      attachments: Array.isArray(attachments) ? attachments : [primaryUrl],
       city,
       area,
       pharmacyCandidates: pharmacyIds,
@@ -420,6 +454,60 @@ router.get('/ai-scan', async (req, res) => {
     return res.status(500).json({ error: e.message });
   }
 });
+
+// Quick ad-hoc OCR → parsed medicine items for MULTIPLE urls (no DB write)
+router.get('/ai-scan-multi', async (req, res) => {
+  try {
+    const urls = []
+      .concat(req.query.urls || []) // supports ?urls=a&urls=b
+      .flatMap(u => (typeof u === 'string' ? u.split(',') : u))
+      .map(s => s && s.trim())
+      .filter(Boolean);
+
+    if (!urls.length) return res.status(400).json({ error: "Missing ?urls" });
+
+    let allItems = [];
+    let raw = [];
+
+    for (const url of urls) {
+      const out = await extractPrescriptionItems(url);
+      raw.push(out.raw || "");
+      const items = (out.items || []).map(i => ({
+        name: i.name,
+        strength: i.strength || "",
+        form: i.form || "",
+        qty: i.qty || i.quantity || 1,
+        confidence: typeof i.confidence === "number" ? i.confidence : 0.7,
+      }));
+      allItems = allItems.concat(items);
+    }
+
+    // merge
+    const keyOf = x => (x.name || "").toLowerCase() + "|" + (x.strength || "") + "|" + (x.form || "");
+    const merged = new Map();
+    for (const it of allItems) {
+      const k = keyOf(it);
+      const prev = merged.get(k);
+      if (!prev) merged.set(k, it);
+      else {
+        merged.set(k, {
+          ...((prev.confidence >= it.confidence) ? prev : it),
+          qty: (prev.qty || 1) + (it.qty || 1),
+        });
+      }
+    }
+
+    res.json({
+      items: Array.from(merged.values()),
+      engine: "multi",
+      raw: raw.join("\n\n"),
+    });
+  } catch (e) {
+    console.error("[AI scan multi] failed:", e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 
 // 8. ACCEPT PRESCRIPTION ORDER
 router.put("/:prescriptionOrderId/accept", async (req, res) => {
