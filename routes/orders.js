@@ -687,4 +687,17 @@ async function rescanAndAssign() {
 // kick it off once the route file is loaded (node process lifetime)
 setInterval(rescanAndAssign, RESCAN_INTERVAL_MS).unref();
 
+router.get('/:orderId/driver-location', async (req, res) => {
+  const order = await Order.findById(req.params.orderId).select('driverLocation status deliveryPartner');
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  const { driverLocation } = order;
+  res.json({
+    lat: driverLocation?.lat ?? null,
+    lng: driverLocation?.lng ?? null,
+    updatedAt: driverLocation?.lastUpdated ?? null,
+    status: order.status,
+    deliveryPartner: order.deliveryPartner,
+  });
+});
+
 module.exports = router;

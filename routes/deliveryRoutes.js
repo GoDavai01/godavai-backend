@@ -267,16 +267,18 @@ router.patch("/partner/:id/active", async (req, res) => {
     if (typeof autoAccept === "boolean") partner.autoAccept = autoAccept;
 
     // Seed/refresh location when switching to active, and set freshness on both fields
-    if (lat && lng) {
+    const la = Number(lat);
+    const lo = Number(lng);
+    if (Number.isFinite(la) && Number.isFinite(lo)) {
       partner.location = {
         type: "Point",
-        coordinates: [parseFloat(lng), parseFloat(lat)],
+        coordinates: [lo, la],
         lastUpdated: new Date(), // <-- nested freshness
       };
       partner.lastSeenAt = new Date(); // <-- root freshness
-      } else if (typeof active === "boolean" && active) {
-        // partner turned ON but we didn't get GPS; keep them "fresh" so waves can try them.
-        partner.lastSeenAt = new Date();
+    } else if (typeof active === "boolean" && active) {
+      // partner turned ON but we didn't get GPS; keep them "fresh" so waves can try them.
+      partner.lastSeenAt = new Date();
     }
 
     await partner.save();
@@ -409,10 +411,16 @@ router.post("/update-location", async (req, res) => {
     if (orderId && !isValidId(orderId))
       return res.status(400).json({ error: "Invalid orderId" });
 
+    const la = Number(lat);
+    const lo = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) {
+      return res.status(400).json({ error: "lat/lng must be numbers" });
+    }
+
     await DeliveryPartner.findByIdAndUpdate(partnerId, {
       location: {
         type: "Point",
-        coordinates: [parseFloat(lng), parseFloat(lat)],
+        coordinates: [lo, la],
         lastUpdated: new Date(), // keep nested freshness
       },
       lastSeenAt: new Date(), // <-- root freshness for easy queries
@@ -420,7 +428,7 @@ router.post("/update-location", async (req, res) => {
 
     if (orderId) {
       await Order.findByIdAndUpdate(orderId, {
-        driverLocation: { lat, lng, lastUpdated: new Date() },
+        driverLocation: { lat: la, lng: lo, lastUpdated: new Date() },
       });
     }
     res.json({ ok: true });
@@ -449,7 +457,7 @@ router.post("/login", async (req, res) => {
         name: partner.name,
         mobile: partner.mobile,
       },
-      process.env.JWT_SECRET,
+        process.env.JWT_SECRET,
       { expiresIn: "30d" }
     );
 
@@ -700,8 +708,11 @@ router.get("/active-partner-in-city", async (req, res) => {
    - Radius up to 8km (tunable)
 ============================================================================ */
 router.get("/active-partner-nearby", async (req, res) => {
-  const { lat, lng } = req.query;
-  if (!lat || !lng) return res.json({ activePartnerExists: false });
+  const lat = Number(req.query.lat);
+  const lng = Number(req.query.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.json({ activePartnerExists: false });
+  }
 
   try {
     const MAX_DISTANCE_M = 8000; // 8 km
@@ -718,7 +729,7 @@ router.get("/active-partner-nearby", async (req, res) => {
         $near: {
           $geometry: {
             type: "Point",
-            coordinates: [parseFloat(lng), parseFloat(lat)],
+            coordinates: [lng, lat],
           },
           $maxDistance: MAX_DISTANCE_M,
         },

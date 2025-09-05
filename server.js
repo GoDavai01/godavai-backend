@@ -49,6 +49,18 @@ mongoose.set("strictQuery", true);
     await mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
     console.log("✅ MongoDB connected");
 
+    // 🔒 GUARANTEE INDEXES (best practice): run on connection "open"
+    // This will (idempotently) create the 2dsphere index on Pharmacy.location if missing.
+    mongoose.connection.once("open", async () => {
+      try {
+        const Pharmacy = require("./models/Pharmacy");
+        await Pharmacy.syncIndexes(); // safe + idempotent
+        console.log("✅ Pharmacy indexes synchronized (2dsphere on location included).");
+      } catch (e) {
+        console.error("❌ Failed to sync Pharmacy indexes:", e.message);
+      }
+    });
+
     // Ensure geo/indexes (idempotent)
     try {
       const Pharmacy = require("./models/Pharmacy");
