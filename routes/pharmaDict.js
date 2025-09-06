@@ -1,5 +1,8 @@
 const express = require("express");
-const { hasDrug, bestMatch, suggestByPrefix } = require("../utils/pharma/spellfix");
+const {
+  hasDrug, bestMatch, suggestByPrefix,
+  dictSize, dictLoadedFromFile
+} = require("../utils/pharma/spellfix");
 const router = express.Router();
 
 router.get("/lookup", (req, res) => {
@@ -15,6 +18,11 @@ router.get("/suggest", (req, res) => {
   const k = Math.max(1, Math.min(25, Number(req.query.k) || 10));
   const list = q ? suggestByPrefix(q, k) : [];
   res.json({ ok: true, items: list });
+});
+
+// Optional: quick health endpoint
+router.get("/__health", (req, res) => {
+  res.json({ ok: true, size: dictSize(), fromFile: dictLoadedFromFile() });
 });
 
 module.exports = router;

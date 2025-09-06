@@ -111,25 +111,28 @@ function hasDrug(name) {
   return LOWER_SET.has(String(name || "").toLowerCase());
 }
 
-/** Top fuzzy match above a threshold */
-function bestMatch(name, minScore = 0.85) {
+/** Top fuzzy match with adaptive threshold (looser for longer words) */
+function bestMatch(name, minScore) {
   const dict = loadDict();
   const clean = String(name || "").replace(/\s{2,}/g, " ").trim();
   if (!clean) return null;
 
-  // exact?
   if (hasDrug(clean)) return { word: DICT.find(w => w.toLowerCase() === clean.toLowerCase()), score: 1 };
 
-  // fuzzy — prune by length to speed up
   const L = clean.length;
+  // adaptive minimum: longer words tolerate lower score
+  const need = (typeof minScore === "number")
+    ? minScore
+    : (L <= 5 ? 0.92 : L <= 7 ? 0.88 : 0.78);
+
   let best = { word: null, score: 0 };
   for (const w of dict) {
     const wl = w.length;
-    if (Math.abs(wl - L) > Math.ceil(L * 0.5)) continue; // length guard
+    if (Math.abs(wl - L) > Math.ceil(L * 0.6)) continue; // length guard
     const sc = similarity(clean, w);
     if (sc > best.score) { best = { word: w, score: sc }; if (sc === 1) break; }
   }
-  return best.score >= minScore ? best : null;
+  return best.score >= need ? best : null;
 }
 
 /** Small helper: return up to K prefix suggestions (autocomplete) */
@@ -156,8 +159,8 @@ function correctDrugName(name) {
   const cacheKey = clean.toLowerCase();
   if (NAME_CACHE.has(cacheKey)) return NAME_CACHE.get(cacheKey);
 
-  // try exact/fuzzy
-  const hit = bestMatch(clean, clean.length <= 6 ? 0.90 : 0.85);
+  // try exact/fuzzy with adaptive thresholds
+  const hit = bestMatch(clean); // adaptive thresholds inside
   if (hit) {
     const out = { name: hit.word, corrected: hit.word.toLowerCase() !== clean.toLowerCase() };
     NAME_CACHE.set(cacheKey, out);
@@ -190,9 +193,14 @@ function normalizeForm(form) {
   return f;
 }
 
+// --- Health helpers (for logging/diagnostics) ---
+function dictSize() { loadDict(); return (DICT ? DICT.length : 0); }
+function dictLoadedFromFile() { return !!(process.env.PHARMA_DICTIONARY_PATH || "").trim(); }
+
 module.exports = {
   // existing
   correctDrugName, normalizeForm, primeFromDB,
-  // new
   hasDrug, bestMatch, suggestByPrefix,
+  // new helpers
+  dictSize, dictLoadedFromFile,
 };

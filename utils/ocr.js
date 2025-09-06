@@ -223,10 +223,16 @@ function looksLikeDateOrSerial(s) {
   return false;
 }
 
-const UNITS = "(mg|mcg|g|ml|l|iu|%)";
+// UNITS (+ add µg + IU variations)
+const UNITS = "(mg|mcg|µg|g|ml|l|iu|IU|%)";
+// classic “number + unit”
 const STRENGTH_RE = new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*${UNITS}\\b`, "i");
-// include more forms seen in dental/GP Rxs
-const FORM_RE = /\b(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|ointment|cream|gel|lotion|spray|paint|drop|solution|soln|inj(?:ection)?|tablet|capsule)s?\b/i;
+
+// Add support for “unitless number with release code” (e.g., Dicorate ER 250)
+const RELEASE_RE = /\b(ER|SR|CR|MR|XL|XR)\b/i;
+
+// include short forms like "T.", "C.", "Syp."
+const FORM_RE = /\b(t\.?|tab(?:let)?|c\.?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|ointment|cream|gel|lotion|spray|paint|drop|solution|soln|inj(?:ection)?|tablet|capsule)s?\b/i;
 
 // schedule/instruction patterns
 const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;           // 1-0-1
@@ -275,6 +281,19 @@ function parseDrugLine(s) {
   // Common “Tr Belladonna 15 ml”, “Amphogel qs ad 120 ml”, “Paracetamol 500 mg”
   const tincture = norm.match(/\bTr\.?\s*([A-Za-z][\w\.\-]+(?:\s+[A-Za-z][\w\.\-]+){0,2})\b/i);
   const dose     = norm.match(STRENGTH_RE);
+
+  // vitamin D “60k” style → map to 60000 IU (heuristic)
+  let dose2 = null;
+  const kHit = norm.match(/\b(\d{2,3})\s*k\b/i);
+  if (kHit) dose2 = `${parseInt(kHit[1], 10) * 1000} IU`;
+
+  // unitless number with release code (treat as mg)
+  let dose3 = null;
+  if (RELEASE_RE.test(norm)) {
+    const m = norm.match(/\b(\d{2,4})\b/);
+    if (m) dose3 = `${m[1]} mg`;
+  }
+
   const formHit  = norm.match(FORM_RE);
   const qtyToken =
     norm.match(/\b(\d{1,3})\s*(?:tab(?:let)?|cap(?:sule)?|caps?)\b/i) || // “1 tab”, “2 caps”
@@ -295,11 +314,11 @@ function parseDrugLine(s) {
     .replace(/\s{2,}/g, " ")
     .trim();
 
-  const strength = dose ? dose[0] : "";
+  const strength = dose ? dose[0] : (dose2 || dose3 || "");
   const qty = qtyToken ? parseInt(qtyToken[1], 10) : 1;
 
   // sanity: must contain strength or form to qualify; name must be pronounceable
-  if (!dose && !formHit) return null;
+  if (!dose && !formHit && !dose2 && !dose3) return null;
   if (!/[A-Za-z]{3,}/.test(name) || !/[aeiou]/i.test(name)) return null;
 
   return { name, strength, qty, form: formHit ? formHit[0].toLowerCase() : "" };
@@ -412,44 +431,40 @@ async function extractPrescriptionItems(urlOrPath) {
     return n.length >= 3 && /[aeiou]/i.test(n);
   });
 
-    // 4.5) Spell-correct names using pharma dictionary; normalize forms
   // 4.5) Hard-check against dictionary first; then fuzzy-correct; normalize forms
-const corrected = merged.map(i => {
-  const formNorm = normalizeForm(i.form || "");
+  const corrected = merged.map(i => {
+    const formNorm = normalizeForm(i.form || "");
+    let chosen = String(i.name || "").trim();
 
-  let chosen = String(i.name || "").trim();
-
-  // 1) exact dict hit? keep as-is (canonical)
-  if (!hasDrug(chosen)) {
-    // 2) fuzzy dict hit above threshold?
-    const bm = bestMatch(chosen, chosen.length <= 6 ? 0.90 : 0.85);
-    if (bm && bm.word) chosen = bm.word;
-    else {
-      // 3) lastly, run the legacy token-corrector
-      const fixLegacy = correctDrugName(chosen);
-      chosen = fixLegacy.name;
+    // 1) exact dict hit? keep as-is (canonical)
+    if (!hasDrug(chosen)) {
+      // 2) fuzzy dict hit (adaptive inside bestMatch)
+      const bm = bestMatch(chosen, chosen.length <= 6 ? 0.90 : 0.85);
+      if (bm && bm.word) chosen = bm.word;
+      else {
+        // 3) lastly, run the legacy token-corrector
+        const fixLegacy = correctDrugName(chosen);
+        chosen = fixLegacy.name;
+      }
     }
-  }
 
-  // add a small confidence nudge if we snapped to dictionary
-  const bumped = hasDrug(chosen);
-
-  return {
-    ...i,
-    name: chosen,
-    form: formNorm || "",
-    confidence: Math.min(
-      0.98,
-      (typeof i.confidence === "number" ? i.confidence : 0.7) + (bumped ? 0.08 : 0)
-    )
-  };
-});
-
+    const bumped = hasDrug(chosen);
 
     return {
+      ...i,
+      name: chosen,
+      form: formNorm || "",
+      confidence: Math.min(
+        0.98,
+        (typeof i.confidence === "number" ? i.confidence : 0.7) + (bumped ? 0.08 : 0)
+      )
+    };
+  });
+
+  return {
     items: corrected.map(i => ({
       name: i.name,
-      composition: "",                 // not required by spec; keep blank
+      composition: "",
       strength: i.strength || "",
       form: i.form || "",
       qty: i.qty || i.quantity || 1,
