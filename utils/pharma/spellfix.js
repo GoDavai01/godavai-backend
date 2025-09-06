@@ -130,31 +130,97 @@ function similarity(a, b) {
   return L ? 1 - d / L : 0;
 }
 
+// --- Jaro + Jaro-Winkler (good for swaps/near-prefixes) ---
+function jaro(a, b) {
+  a = String(a || ""); b = String(b || "");
+  if (!a.length && !b.length) return 1;
+  const matchDist = Math.floor(Math.max(a.length, b.length) / 2) - 1;
+
+  const aMatches = new Array(a.length).fill(false);
+  const bMatches = new Array(b.length).fill(false);
+
+  let matches = 0, transpositions = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    const start = Math.max(0, i - matchDist);
+    const end   = Math.min(i + matchDist + 1, b.length);
+    for (let j = start; j < end; j++) {
+      if (bMatches[j]) continue;
+      if (a[i] !== b[j]) continue;
+      aMatches[i] = true;
+      bMatches[j] = true;
+      matches++;
+      break;
+    }
+  }
+  if (!matches) return 0;
+
+  let k = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (!aMatches[i]) continue;
+    while (!bMatches[k]) k++;
+    if (a[i] !== b[k]) transpositions++;
+    k++;
+  }
+  transpositions /= 2;
+
+  return (matches / a.length + matches / b.length + (matches - transpositions) / matches) / 3;
+}
+
+function jaroWinkler(a, b, prefixScale = 0.1) {
+  const j = jaro(a, b);
+  let p = 0;
+  const maxP = 4;
+  for (; p < Math.min(maxP, a.length, b.length); p++) {
+    if (a[p] !== b[p]) break;
+  }
+  return j + p * prefixScale * (1 - j);
+}
+
 /** O(1) exact check (case-insensitive) */
 function hasDrug(name) {
   loadDict();
   return LOWER_SET.has(String(name || "").toLowerCase());
 }
 
-/** Top fuzzy match with adaptive threshold (looser for long words) */
+/** Top fuzzy match: DL + Jaro-Winkler + base-token JW (looser for long words) */
 function bestMatch(name, minScore) {
   const dict = loadDict();
   const clean = String(name || "").replace(/\s{2,}/g, " ").trim();
   if (!clean) return null;
 
+  // fast path: exact (case-insensitive)
   if (hasDrug(clean)) return { word: DICT.find(w => w.toLowerCase() === clean.toLowerCase()), score: 1 };
 
   const L = clean.length;
+  // adaptive minimum; longer words tolerate lower scores
   const need = (typeof minScore === "number")
     ? minScore
-    : (L <= 5 ? 0.92 : L <= 7 ? 0.88 : 0.78);
+    : (L <= 5 ? 0.92 : L <= 7 ? 0.88 : 0.70); // looser for long words
+
+  // strong pruning
+  const fc = clean[0]?.toLowerCase();
+  const baseClean = baseToken(clean).toLowerCase();
 
   let best = { word: null, score: 0 };
+
   for (const w of dict) {
+    if (!w) continue;
+    if (fc && w[0]?.toLowerCase() !== fc) continue;                     // first-letter prune
     const wl = w.length;
-    if (Math.abs(wl - L) > Math.ceil(L * 0.6)) continue; // length guard
-    const sc = similarity(clean, w);
-    if (sc > best.score) { best = { word: w, score: sc }; if (sc === 1) break; }
+    if (Math.abs(wl - L) > Math.ceil(L * 0.7)) continue;                // length guard (looser)
+
+    // three signals: DL, JW on full, JW on base tokens; fuse with max()
+    const wLower = w.toLowerCase();
+    const s1 = similarity(clean, w);                                    // Damerau-Levenshtein
+    const s2 = jaroWinkler(clean.toLowerCase(), wLower);                // Jaro-Winkler
+    const s3 = jaroWinkler(baseClean, baseToken(wLower));               // base tokens
+    const sc = Math.max(s1, s2, s3);
+
+    if (sc > best.score) {
+      best = { word: w, score: sc };
+      if (sc >= 0.99) break; // perfect enough
+    }
   }
   return best.score >= need ? best : null;
 }
@@ -221,7 +287,10 @@ function dictSize() { loadDict(); return (DICT ? DICT.length : 0); }
 function dictLoadedFromFile() { return !!(process.env.PHARMA_DICTIONARY_PATH || "").trim(); }
 
 module.exports = {
+  // existing
   correctDrugName, normalizeForm, primeFromDB,
+  // new
   hasDrug, bestMatch, suggestByPrefix,
+  // health
   dictSize, dictLoadedFromFile,
 };
