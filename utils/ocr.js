@@ -76,7 +76,13 @@ async function preprocess(buf) {
   const kind = sniffMime(buf);
   if (kind !== "image") return buf; // PDFs/TIFFs as-is
   try {
-    return await sharp(buf).rotate().jpeg({ quality: 92 }).normalize().toBuffer();
+    // Optional downscale to speed up remote OCRs without changing logic
+    const maxDim = Number(process.env.OCR_MAX_DIM || 0); // e.g. 1600–2000
+    const s = sharp(buf).rotate();
+    const chain = maxDim
+      ? s.resize({ width: maxDim, height: maxDim, fit: "inside", withoutEnlargement: true })
+      : s;
+    return await chain.jpeg({ quality: 92 }).normalize().toBuffer();
   } catch (e) {
     if (process.env.DEBUG_OCR) console.warn("[OCR] preprocess skipped:", e.message);
     return buf;
@@ -303,6 +309,8 @@ function parseDrugLine(s) {
   let name = norm;
   if (tincture) name = tincture[1];
   else if (dose) name = norm.replace(dose[0], "").trim();
+  else if (dose2) name = norm.replace(kHit[0], "").trim();
+  else if (dose3) name = norm.replace(/\b(\d{2,4})\b/, "").trim();
 
   // strip obvious junk
   name = name
@@ -318,7 +326,7 @@ function parseDrugLine(s) {
   const qty = qtyToken ? parseInt(qtyToken[1], 10) : 1;
 
   // sanity: must contain strength or form to qualify; name must be pronounceable
-  if (!dose && !formHit && !dose2 && !dose3) return null;
+  if (!dose && !formHit) return null;
   if (!/[A-Za-z]{3,}/.test(name) || !/[aeiou]/i.test(name)) return null;
 
   return { name, strength, qty, form: formHit ? formHit[0].toLowerCase() : "" };
@@ -436,13 +444,10 @@ async function extractPrescriptionItems(urlOrPath) {
     const formNorm = normalizeForm(i.form || "");
     let chosen = String(i.name || "").trim();
 
-    // 1) exact dict hit? keep as-is (canonical)
     if (!hasDrug(chosen)) {
-      // 2) fuzzy dict hit (adaptive inside bestMatch)
-      const bm = bestMatch(chosen, chosen.length <= 6 ? 0.90 : 0.85);
+      const bm = bestMatch(chosen); // adaptive thresholds inside
       if (bm && bm.word) chosen = bm.word;
       else {
-        // 3) lastly, run the legacy token-corrector
         const fixLegacy = correctDrugName(chosen);
         chosen = fixLegacy.name;
       }

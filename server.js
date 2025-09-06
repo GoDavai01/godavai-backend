@@ -49,7 +49,7 @@ mongoose.set("strictQuery", true);
     await mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
     console.log("✅ MongoDB connected");
 
-    // 🔎 Prime and log pharma dictionary status (uses env PHARMA_DICTIONARY_PATH)
+    // 🔤 Load/prime pharma dictionary and log size/path
     try {
       const Medicine = require("./models/Medicine");
       const { primeFromDB, dictSize, dictLoadedFromFile } = require("./utils/pharma/spellfix");

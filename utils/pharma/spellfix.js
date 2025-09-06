@@ -111,7 +111,7 @@ function hasDrug(name) {
   return LOWER_SET.has(String(name || "").toLowerCase());
 }
 
-/** Top fuzzy match with adaptive threshold (looser for longer words) */
+/** Top fuzzy match with adaptive threshold (looser for long words) */
 function bestMatch(name, minScore) {
   const dict = loadDict();
   const clean = String(name || "").replace(/\s{2,}/g, " ").trim();
@@ -120,7 +120,6 @@ function bestMatch(name, minScore) {
   if (hasDrug(clean)) return { word: DICT.find(w => w.toLowerCase() === clean.toLowerCase()), score: 1 };
 
   const L = clean.length;
-  // adaptive minimum: longer words tolerate lower score
   const need = (typeof minScore === "number")
     ? minScore
     : (L <= 5 ? 0.92 : L <= 7 ? 0.88 : 0.78);
@@ -159,8 +158,8 @@ function correctDrugName(name) {
   const cacheKey = clean.toLowerCase();
   if (NAME_CACHE.has(cacheKey)) return NAME_CACHE.get(cacheKey);
 
-  // try exact/fuzzy with adaptive thresholds
-  const hit = bestMatch(clean); // adaptive thresholds inside
+  // try exact/fuzzy (adaptive thresholds inside bestMatch)
+  const hit = bestMatch(clean);
   if (hit) {
     const out = { name: hit.word, corrected: hit.word.toLowerCase() !== clean.toLowerCase() };
     NAME_CACHE.set(cacheKey, out);
@@ -171,7 +170,7 @@ function correctDrugName(name) {
   const tokens = clean.split(/\s+/);
   const fixed = tokens.map(t => {
     if (!/[A-Za-z]/.test(t)) return t;
-    const m = bestMatch(t, t.length <= 5 ? 0.92 : 0.87);
+    const m = bestMatch(t);
     return m ? m.word.split(/\s+/)[0] : t;
   });
   const rebuilt = fixed.join(" ");
@@ -193,14 +192,15 @@ function normalizeForm(form) {
   return f;
 }
 
-// --- Health helpers (for logging/diagnostics) ---
+/* ---- tiny health helpers ---- */
 function dictSize() { loadDict(); return (DICT ? DICT.length : 0); }
 function dictLoadedFromFile() { return !!(process.env.PHARMA_DICTIONARY_PATH || "").trim(); }
 
 module.exports = {
   // existing
   correctDrugName, normalizeForm, primeFromDB,
+  // new
   hasDrug, bestMatch, suggestByPrefix,
-  // new helpers
+  // health
   dictSize, dictLoadedFromFile,
 };
