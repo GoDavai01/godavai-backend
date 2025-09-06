@@ -9,22 +9,21 @@ function buildPrompt(ocrBodyText) {
     {
       role: "system",
       content:
-        "You convert noisy OCR’d prescription text to a JSON list of ONLY medicines. " +
-        "Discard everything else (patient, doctor, dates, directions, doses schedules like 1-0-1, durations, meal instructions, clinic headers). " +
-        "Extract medicine lines with the best possible normalized fields. Never hallucinate."
+        "You convert noisy OCR’d prescription text into ONLY medicines as JSON. " +
+        "Discard patient/doctor/headers/directions/schedules/durations. " +
+        "Correct obvious spelling errors of medicine names (brand or generic) when unambiguous; " +
+        "prefer known pharma spellings; if ambiguous, keep as-is. Do not invent new drugs."
     },
     {
       role: "user",
       content:
-        "From the text below, return ONLY a JSON object with key 'items' which is an array of medicines.\n" +
-        "Each medicine has: name (string), strength (string or ''), form (string or ''), qty (integer >=1).\n" +
-        "Rules:\n" +
-        "- name: generic or brand as written; no doctor/clinic words; trim junk.\n" +
-        "- strength: like '650 mg', '500mg', '5 ml', '' if truly absent.\n" +
-        "- form: tablet/capsule/syrup/ointment/drop/solution/injection/gel/cream/etc., '' if absent.\n" +
-        "- qty: integer count if present, else 1.\n" +
-        "- DO NOT include directions (e.g., 1-0-1, x5 days, after meals) or diagnostics.\n\n" +
-        "Text:\n" + ocrBodyText
+        "Return STRICT JSON with key 'items' (array). Each item has:\n" +
+        "- name: corrected brand OR generic (string)\n" +
+        "- strength: '650 mg', '5 ml', '' if missing\n" +
+        "- form: one of tablet/capsule/syrup/drop/solution/injection/gel/cream/ointment/lotion/spray or ''\n" +
+        "- qty: integer >= 1 (default 1)\n" +
+        "Do not include directions like 1-0-1, x5 days, after meals.\n\n" +
+        "TEXT:\n" + ocrBodyText
     }
   ];
 }
@@ -44,7 +43,8 @@ async function gptFilterMedicines(ocrBodyText) {
     model: OPENAI_MODEL,
     response_format: { type: "json_object" },
     messages,
-    temperature: 0.1,
+    temperature: 0.0,
+    top_p: 0.1,
   });
 
   let parsed;

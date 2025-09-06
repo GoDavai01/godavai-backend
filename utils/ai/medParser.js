@@ -14,6 +14,7 @@ const FORM_WORDS = [
 const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;
 const DURATION_RE = /\b[x×]\s*\d+\s*(day|days|week|weeks)\b/i;
 const MEAL_RE = /\b(after|before)\s+meals?\b|\b(?:ac|pc)\b/i;
+const { normalizeForm } = require("../pharma/spellfix");
 
 function normalizeLine(s) {
   return s
@@ -96,7 +97,7 @@ function parse(text) {
 
     const quantity    = parseQty(line);
     const strength    = parseStrength(line);
-    const form        = parseForm(line);
+      const form        = normalizeForm(parseForm(line) || "");
     const composition = parseComposition(line);
     const nameRaw     = parseName(line);
 

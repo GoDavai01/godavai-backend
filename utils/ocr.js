@@ -13,6 +13,8 @@ async function fetchWithUA(url, opts = {}) {
   return fetchFn(url, { ...opts, headers });
 }
 
+// add after existing requires
+const { correctDrugName, normalizeForm, hasDrug, bestMatch } = require("./pharma/spellfix");
 const sharp = require("sharp");
 
 /* ----------------------- Clients (lazy / optional) ----------------------- */
@@ -410,14 +412,48 @@ async function extractPrescriptionItems(urlOrPath) {
     return n.length >= 3 && /[aeiou]/i.test(n);
   });
 
+    // 4.5) Spell-correct names using pharma dictionary; normalize forms
+  // 4.5) Hard-check against dictionary first; then fuzzy-correct; normalize forms
+const corrected = merged.map(i => {
+  const formNorm = normalizeForm(i.form || "");
+
+  let chosen = String(i.name || "").trim();
+
+  // 1) exact dict hit? keep as-is (canonical)
+  if (!hasDrug(chosen)) {
+    // 2) fuzzy dict hit above threshold?
+    const bm = bestMatch(chosen, chosen.length <= 6 ? 0.90 : 0.85);
+    if (bm && bm.word) chosen = bm.word;
+    else {
+      // 3) lastly, run the legacy token-corrector
+      const fixLegacy = correctDrugName(chosen);
+      chosen = fixLegacy.name;
+    }
+  }
+
+  // add a small confidence nudge if we snapped to dictionary
+  const bumped = hasDrug(chosen);
+
   return {
-    items: merged.map(i => ({
+    ...i,
+    name: chosen,
+    form: formNorm || "",
+    confidence: Math.min(
+      0.98,
+      (typeof i.confidence === "number" ? i.confidence : 0.7) + (bumped ? 0.08 : 0)
+    )
+  };
+});
+
+
+    return {
+    items: corrected.map(i => ({
       name: i.name,
       composition: "",                 // not required by spec; keep blank
       strength: i.strength || "",
       form: i.form || "",
       qty: i.qty || i.quantity || 1,
-      confidence: typeof i.confidence === "number" ? i.confidence : 0.7
+      confidence: typeof i.confidence === "number" ? i.confidence : 0.75
     })),
     engine: gptItems.length ? (detailed.engine + "+gpt") : detailed.engine,
     raw: detailed.text
