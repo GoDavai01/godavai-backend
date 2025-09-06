@@ -200,6 +200,7 @@ app.use("/api/users", require("./routes/users"));
 app.use("/api/delivery", require("./routes/deliveryRoutes"));
 app.use("/api/prescriptions", require("./routes/prescriptions"));
 app.use("/api/pharma", require("./routes/pharmaDict"));
+app.use("/ocr", require("./routes/ocrJobs"));
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/support-chat", require("./routes/supportChat"));

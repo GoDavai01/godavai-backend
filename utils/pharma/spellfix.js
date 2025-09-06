@@ -26,8 +26,22 @@ let LOWER_SET = null;        // Set of lowercase entries for O(1) exact checks
 let NAME_CACHE = new Map();  // memo for corrected names
 let PRIMED = false;
 
+// strip dose + forms → base brand/generic (e.g., "Thyronorm 50mcg Tablet" → "Thyronorm")
+function baseToken(s) {
+  const UNITS = "(mg|mcg|µg|g|kg|ml|l|iu|IU|%)";
+  const FORM_WORDS = "(tab(?:let)?|cap(?:sule)?|syp|syrup|susp(?:ension)?|drop|solution|soln|inj(?:ection)?|gel|cream|ointment|oint|lotion|spray|paint|inhaler|dt|od|xr|mr|sr|er)";
+  return String(s || "")
+    .replace(new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*${UNITS}\\b`, "ig"), "")
+    .replace(/\b\d+\s*(k)\b/ig, "")  // 60k, 1k etc
+    .replace(new RegExp(`\\b${FORM_WORDS}s?\\b`, "ig"), "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[.,;:/\-]+$/g, "")
+    .trim();
+}
+
 function loadDict() {
   if (DICT) return DICT;
+
   const p = (process.env.PHARMA_DICTIONARY_PATH || "").trim();
   let list = [];
   if (p) {
@@ -43,7 +57,17 @@ function loadDict() {
   }
   if (!list.length) list = FALLBACK;
 
-  const uniq = Array.from(new Set(list.map(s => s.trim()).filter(Boolean)));
+  // add base tokens so plain brand/generic hits (e.g., "Thyronorm")
+  const augmented = [];
+  for (const s of list) {
+    const t = String(s || "").trim();
+    if (!t) continue;
+    augmented.push(t);
+    const base = baseToken(t);
+    if (base && /[A-Za-z]{3,}/.test(base)) augmented.push(base);
+  }
+
+  const uniq = Array.from(new Set(augmented.map(s => s.trim()).filter(Boolean)));
   // sort by length for slightly better fuzzy pruning
   uniq.sort((a, b) => a.length - b.length);
   DICT = uniq;
@@ -65,7 +89,8 @@ async function primeFromDB(MedicineModel) {
       .filter(s => s && /[A-Za-z]/.test(s));
 
     const base = loadDict();
-    const merged = Array.from(new Set([...base, ...pool]));
+    const withBases = pool.concat(pool.map(baseToken));
+    const merged = Array.from(new Set([...base, ...withBases].filter(Boolean)));
     merged.sort((a, b) => a.length - b.length);
     DICT = merged;
     LOWER_SET = new Set(merged.map(s => s.toLowerCase()));
@@ -158,7 +183,6 @@ function correctDrugName(name) {
   const cacheKey = clean.toLowerCase();
   if (NAME_CACHE.has(cacheKey)) return NAME_CACHE.get(cacheKey);
 
-  // try exact/fuzzy (adaptive thresholds inside bestMatch)
   const hit = bestMatch(clean);
   if (hit) {
     const out = { name: hit.word, corrected: hit.word.toLowerCase() !== clean.toLowerCase() };
@@ -166,7 +190,7 @@ function correctDrugName(name) {
     return out;
   }
 
-  // token-by-token rebuild as last resort
+  // token-by-token as last resort
   const tokens = clean.split(/\s+/);
   const fixed = tokens.map(t => {
     if (!/[A-Za-z]/.test(t)) return t;
@@ -197,10 +221,7 @@ function dictSize() { loadDict(); return (DICT ? DICT.length : 0); }
 function dictLoadedFromFile() { return !!(process.env.PHARMA_DICTIONARY_PATH || "").trim(); }
 
 module.exports = {
-  // existing
   correctDrugName, normalizeForm, primeFromDB,
-  // new
   hasDrug, bestMatch, suggestByPrefix,
-  // health
   dictSize, dictLoadedFromFile,
 };

@@ -76,8 +76,7 @@ async function preprocess(buf) {
   const kind = sniffMime(buf);
   if (kind !== "image") return buf; // PDFs/TIFFs as-is
   try {
-    // Optional downscale to speed up remote OCRs without changing logic
-    const maxDim = Number(process.env.OCR_MAX_DIM || 0); // e.g. 1600–2000
+    const maxDim = Number(process.env.OCR_MAX_DIM || 1800); // speed knob (1200–2000 is fine)
     const s = sharp(buf).rotate();
     const chain = maxDim
       ? s.resize({ width: maxDim, height: maxDim, fit: "inside", withoutEnlargement: true })
@@ -96,14 +95,12 @@ const splitToLines = (text) => (text || "").split(/\r?\n/).map(s => s.trim()).fi
 
 async function ocrGoogle(buf) {
   if (!visionClient) return null;
-  for (let i = 0; i < 2; i++) {
-    try {
-      const [result] = await visionClient.documentTextDetection({ image: { content: buf } });
-      const text = result?.fullTextAnnotation?.text || result?.textAnnotations?.[0]?.description;
-      if (text) return { text, lines: splitToLines(text).map(t => ({ text: t })), engine: "google-vision" };
-    } catch (err) {
-      if (process.env.DEBUG_OCR) console.warn("[OCR] google-vision attempt failed:", err?.message || err);
-    }
+  try {
+    const [result] = await visionClient.documentTextDetection({ image: { content: buf } });
+    const text = result?.fullTextAnnotation?.text || result?.textAnnotations?.[0]?.description;
+    if (text) return { text, lines: splitToLines(text).map(t => ({ text: t })), engine: "google-vision" };
+  } catch (err) {
+    if (process.env.DEBUG_OCR) console.warn("[OCR] google-vision failed:", err?.message || err);
   }
   return null;
 }
@@ -131,7 +128,8 @@ async function ocrAzure(buf) {
     const op = submit.headers.get("operation-location");
     if (!op) return null;
 
-    for (let i = 0; i < 28; i++) {
+    const maxPoll = Number(process.env.AZURE_MAX_POLL || 24); // ~24*0.8s ≈ 19s
+    for (let i = 0; i < maxPoll; i++) {
       await sleep(800);
       const res = await fetchWithUA(op, { headers: { "Ocp-Apim-Subscription-Key": key } });
       const j = await res.json().catch(() => ({}));
@@ -148,10 +146,7 @@ async function ocrAzure(buf) {
         const text = lines.map(l => l.text).join("\n");
         return { text, lines, engine: "azure-vision-read" };
       }
-      if (j.status === "failed") {
-        if (process.env.DEBUG_OCR) console.warn("[OCR] azure status=failed");
-        return null;
-      }
+      if (j.status === "failed") return null;
     }
   } catch (e) {
     if (process.env.DEBUG_OCR) console.warn("[OCR] azure error:", e?.message || e);
@@ -186,7 +181,7 @@ async function ocrTesseract(buf) {
   const kill = async () => { clearTimeout(timeout); try { await worker?.terminate(); } catch {} };
 
   try {
-    worker = await createWorker(); // no logger (avoids DataCloneError)
+    worker = await createWorker();
     timeout = setTimeout(() => { kill(); }, 30_000);
     await worker.loadLanguage("eng");
     await worker.initialize("eng");
@@ -201,6 +196,37 @@ async function ocrTesseract(buf) {
   }
 }
 
+/* -------------- Fast gather: run engines in parallel & pick best ---------- */
+
+async function runEnginesFast(buf, wantLines = true) {
+  // Stagger Tesseract by a couple seconds (CPU heavy) so cloud OCRs win if available
+  const tesseractLater = new Promise(res => setTimeout(async () => res(await ocrTesseract(buf)), 2000));
+
+  const tasks = [
+    ocrAzure(buf),
+    ocrGoogle(buf),
+    ocrTextract(buf),
+    tesseractLater,
+  ].map(p => p.catch(() => null));
+
+  // Wait for first decent result; if all come back, pick the longest text
+  const deadlineMs = Number(process.env.OCR_DEADLINE_MS || 45000);
+  const timeout = new Promise(res => setTimeout(() => res(null), deadlineMs));
+
+  const all = await Promise.race([
+    (async () => {
+      const results = await Promise.all(tasks);
+      const good = results.filter(r => r && (r.text || "").trim().length > 10);
+      if (!good.length) return null;
+      good.sort((a, b) => (b.text || "").length - (a.text || "").length);
+      return good[0];
+    })(),
+    timeout
+  ]);
+
+  return all || null;
+}
+
 /* ------------------- Sectioning + Filtering + Parsing -------------------- */
 
 const STOPWORDS = [
@@ -210,7 +236,6 @@ const STOPWORDS = [
   "INSCRIPTION","SUBSCRIPTION","SIGNA","DIRECTION","DIRECTIONS"
 ];
 
-// slice lines between “Inscription” and “Signa/Directions” when those markers exist
 function slicePrescriptionSection(lines) {
   const L = lines.map(l => l.text ?? l);
   const upper = L.map(s => s.toUpperCase());
@@ -219,7 +244,7 @@ function slicePrescriptionSection(lines) {
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
     return L.slice(startIdx + 1, endIdx);
   }
-  return L; // fallback: whole page
+  return L;
 }
 
 function looksLikeDateOrSerial(s) {
@@ -231,7 +256,6 @@ function looksLikeDateOrSerial(s) {
 
 // UNITS (+ add µg + IU variations)
 const UNITS = "(mg|mcg|µg|g|ml|l|iu|IU|%)";
-// classic “number + unit”
 const STRENGTH_RE = new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*${UNITS}\\b`, "i");
 
 // Add support for “unitless number with release code” (e.g., Dicorate ER 250)
@@ -240,12 +264,10 @@ const RELEASE_RE = /\b(ER|SR|CR|MR|XL|XR)\b/i;
 // include short forms like "T.", "C.", "Syp."
 const FORM_RE = /\b(t\.?|tab(?:let)?|c\.?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|ointment|cream|gel|lotion|spray|paint|drop|solution|soln|inj(?:ection)?|tablet|capsule)s?\b/i;
 
-// schedule/instruction patterns
-const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;           // 1-0-1
-const DURATION_RE = /\b[x×]\s*\d+\s*(day|days|week|weeks)\b/i;    // x5 days
-const MEAL_RE = /\b(after|before)\s+meals?\b|\b(?:ac|pc)\b/i;      // after/before meals, AC/PC
+const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;
+const DURATION_RE = /\b[x×]\s*\d+\s*(day|days|week|weeks)\b/i;
+const MEAL_RE = /\b(after|before)\s+meals?\b|\b(?:ac|pc)\b/i;
 
-// obvious non-medicine phrases
 const JUNK_PHRASES = [
   "smile designing","teeth whitening","dental implants","general dentistry",
   "rx","patient","mr.","mrs.","ms.","age","date","www.","email:","ph:","phone:","@",
@@ -258,42 +280,31 @@ function looksLikeDrugLine(s) {
 
   for (const w of STOPWORDS) if (U.includes(w)) return false;
   if (looksLikeDateOrSerial(s)) return false;
-  // hard-drop known junk
   if (JUNK_PHRASES.some(p => s.toLowerCase().includes(p))) return false;
-
-  // very common non-medicine lines
   if (/^dr\.|\bdoctor\b|\bsignature\b|\breg\.?\s?no\b|\bregistration\b/i.test(s)) return false;
 
-  // instruction/schedule-only lines are not medicines
-  if (DOSE_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
-  if (DURATION_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
-  if (/^(after|before|meals?|massage)\b/i.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return false;
-
-  // ✅ Require a real medicine “signal”
+  // must show any strong “medicine” signal
   return STRENGTH_RE.test(s) || FORM_RE.test(s) || /\bTr\.?\b/i.test(s);
 }
 
 function parseDrugLine(s) {
-  // belt & suspenders—reject instruction-only at parse stage too
   if (DOSE_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
   if (DURATION_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
   if (/^(after|before|meals?|massage)\b/i.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
 
-  // normalize common OCR slips (mq→mg, O→0)
   const norm = s
     .replace(/\b(\d{1,4})\s*mq\b/ig, "$1 mg")
     .replace(/\bO\b/g, "0");
 
-  // Common “Tr Belladonna 15 ml”, “Amphogel qs ad 120 ml”, “Paracetamol 500 mg”
   const tincture = norm.match(/\bTr\.?\s*([A-Za-z][\w\.\-]+(?:\s+[A-Za-z][\w\.\-]+){0,2})\b/i);
   const dose     = norm.match(STRENGTH_RE);
 
-  // vitamin D “60k” style → map to 60000 IU (heuristic)
+  // vitamin D “60k” → 60000 IU
   let dose2 = null;
   const kHit = norm.match(/\b(\d{2,3})\s*k\b/i);
   if (kHit) dose2 = `${parseInt(kHit[1], 10) * 1000} IU`;
 
-  // unitless number with release code (treat as mg)
+  // number + release code (mg)
   let dose3 = null;
   if (RELEASE_RE.test(norm)) {
     const m = norm.match(/\b(\d{2,4})\b/);
@@ -302,7 +313,7 @@ function parseDrugLine(s) {
 
   const formHit  = norm.match(FORM_RE);
   const qtyToken =
-    norm.match(/\b(\d{1,3})\s*(?:tab(?:let)?|cap(?:sule)?|caps?)\b/i) || // “1 tab”, “2 caps”
+    norm.match(/\b(\d{1,3})\s*(?:tab(?:let)?|cap(?:sule)?|caps?)\b/i) ||
     norm.match(/\bx\s*([1-9]\d?)\b/i) ||
     norm.match(/\bqty[:\s]*([1-9]\d?)\b/i);
 
@@ -312,10 +323,9 @@ function parseDrugLine(s) {
   else if (dose2) name = norm.replace(kHit[0], "").trim();
   else if (dose3) name = norm.replace(/\b(\d{2,4})\b/, "").trim();
 
-  // strip obvious junk
   name = name
     .replace(/\b(qty|quantity)[:\s]*\d+\b/i, "")
-    .replace(/\b(qs\s*ad?)\b.*$/i, "") // drop “qs ad 120 ml”
+    .replace(/\b(qs\s*ad?)\b.*$/i, "")
     .replace(/\b(sig|signa|directions?)\b.*$/i, "")
     .replace(/\b(mfgr|lot|exp|s\/n)\b.*$/i, "")
     .replace(/[-–:,]+/g, " ")
@@ -325,7 +335,6 @@ function parseDrugLine(s) {
   const strength = dose ? dose[0] : (dose2 || dose3 || "");
   const qty = qtyToken ? parseInt(qtyToken[1], 10) : 1;
 
-  // sanity: must contain strength or form to qualify; name must be pronounceable
   if (!dose && !formHit) return null;
   if (!/[A-Za-z]{3,}/.test(name) || !/[aeiou]/i.test(name)) return null;
 
@@ -338,16 +347,7 @@ async function extractTextPlus(urlOrPath) {
   const raw = await loadBuffer(urlOrPath);
   const buf = await preprocess(raw);
 
-  let out = await ocrGoogle(buf);
-  if (out?.text) return { text: out.text.trim(), engine: out.engine };
-
-  out = await ocrAzure(buf);
-  if (out?.text) return { text: out.text.trim(), engine: out.engine };
-
-  out = await ocrTextract(buf);
-  if (out?.text) return { text: out.text.trim(), engine: out.engine };
-
-  out = await ocrTesseract(buf);
+  const out = await runEnginesFast(buf, false);
   if (out?.text) return { text: out.text.trim(), engine: out.engine };
 
   if (process.env.DEBUG_OCR) console.warn("[OCR] all engines returned null/empty");
@@ -358,16 +358,7 @@ async function extractTextPlusDetailed(urlOrPath) {
   const raw = await loadBuffer(urlOrPath);
   const buf = await preprocess(raw);
 
-  let out = await ocrAzure(buf);
-  if (out) return { text: out.text.trim(), lines: out.lines, engine: out.engine };
-
-  out = await ocrGoogle(buf);
-  if (out) return { text: out.text.trim(), lines: out.lines, engine: out.engine };
-
-  out = await ocrTextract(buf);
-  if (out) return { text: out.text.trim(), lines: out.lines, engine: out.engine };
-
-  out = await ocrTesseract(buf);
+  const out = await runEnginesFast(buf, true);
   if (out) return { text: out.text.trim(), lines: out.lines, engine: out.engine };
 
   return { text: "", lines: [], engine: "none" };
@@ -378,11 +369,11 @@ async function extractPrescriptionItems(urlOrPath) {
   const detailed = await extractTextPlusDetailed(urlOrPath);
   const lines = (detailed.lines || []).map(l => (typeof l === "string" ? { text: l } : l));
 
-  // 1) Isolate likely Rx body (between Inscription..Signa if present)
+  // 1) Isolate likely Rx body
   const bodyLines = slicePrescriptionSection(lines);
   const bodyText  = bodyLines.map(l => (l.text || "").trim()).filter(Boolean).join("\n");
 
-  // 2) Heuristic filter & parse (current logic)
+  // 2) Heuristic filter & parse
   const items = [];
   for (const raw of bodyLines) {
     const s = (raw.text || raw).trim();
@@ -393,20 +384,35 @@ async function extractPrescriptionItems(urlOrPath) {
     items.push({ ...parsed, confidence: typeof raw.confidence === "number" ? raw.confidence : 0.5 });
   }
 
+  // Fallback: if nothing parsed, try simple NLPish parser (kept in repo)
+  let mergedHeur = items;
+  if (!mergedHeur.length) {
+    try {
+      const { parse } = require("./ai/medParser");
+      const coarse = parse(bodyText);
+      mergedHeur = coarse.map(c => ({
+        name: c.name,
+        strength: c.strength || "",
+        form: c.form || "",
+        qty: c.quantity || 1,
+        confidence: c.confidence ?? 0.5
+      }));
+    } catch {}
+  }
+
   // de-dupe by normalized name
   const seen = new Set();
   const uniqueHeur = [];
-  for (const it of items) {
-    const key = it.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  for (const it of mergedHeur) {
+    const key = (it.name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
     if (seen.has(key)) continue;
     seen.add(key);
     uniqueHeur.push(it);
   }
 
-  // 3) OPTIONAL GPT post-filter/normalizer
+  // 3) OPTIONAL GPT post-filter
   let gptItems = [];
   try {
-    // Changed condition: run when API key exists and not explicitly disabled
     if (process.env.OPENAI_API_KEY && process.env.GPT_MED_STAGE !== "0") {
       const { gptFilterMedicines } = require("./ai/gptMeds");
       const out = await gptFilterMedicines(bodyText);
@@ -416,7 +422,7 @@ async function extractPrescriptionItems(urlOrPath) {
           strength: i.strength || "",
           form: i.form || "",
           qty: i.qty || 1,
-          confidence: 0.85, // trust post-filter baseline more than OCR conf
+          confidence: 0.85,
         }));
       }
     }
@@ -424,7 +430,7 @@ async function extractPrescriptionItems(urlOrPath) {
     if (process.env.DEBUG_OCR) console.warn("[OCR] GPT post-filter failed:", e.message);
   }
 
-  // 4) Merge GPT + heuristic (prefer GPT rows; then add missing heuristic uniques)
+  // 4) Merge GPT + heuristic
   const byKey = new Map();
   const keyOf = (x) => (x.name || "").toLowerCase().replace(/[^a-z0-9]/g, "") + "|" + (x.strength || "") + "|" + (x.form || "");
   for (const it of gptItems) byKey.set(keyOf(it), it);
@@ -433,36 +439,27 @@ async function extractPrescriptionItems(urlOrPath) {
     if (!byKey.has(k)) byKey.set(k, it);
   }
 
-  // Keep only sensible rows (no tiny/no-vowel names)
+  // sanity
   const merged = Array.from(byKey.values()).filter(it => {
     const n = (it.name || "").replace(/[^A-Za-z]/g, "");
     return n.length >= 3 && /[aeiou]/i.test(n);
   });
 
-  // 4.5) Hard-check against dictionary first; then fuzzy-correct; normalize forms
+  // 4.5) Snap to dictionary; normalize forms
   const corrected = merged.map(i => {
     const formNorm = normalizeForm(i.form || "");
     let chosen = String(i.name || "").trim();
-
     if (!hasDrug(chosen)) {
-      const bm = bestMatch(chosen); // adaptive thresholds inside
+      const bm = bestMatch(chosen);
       if (bm && bm.word) chosen = bm.word;
-      else {
-        const fixLegacy = correctDrugName(chosen);
-        chosen = fixLegacy.name;
-      }
+      else chosen = correctDrugName(chosen).name;
     }
-
     const bumped = hasDrug(chosen);
-
     return {
       ...i,
       name: chosen,
       form: formNorm || "",
-      confidence: Math.min(
-        0.98,
-        (typeof i.confidence === "number" ? i.confidence : 0.7) + (bumped ? 0.08 : 0)
-      )
+      confidence: Math.min(0.98, (typeof i.confidence === "number" ? i.confidence : 0.7) + (bumped ? 0.08 : 0))
     };
   });
 
@@ -472,7 +469,7 @@ async function extractPrescriptionItems(urlOrPath) {
       composition: "",
       strength: i.strength || "",
       form: i.form || "",
-      qty: i.qty || i.quantity || 1,
+      qty: i.qty || 1,
       confidence: typeof i.confidence === "number" ? i.confidence : 0.75
     })),
     engine: gptItems.length ? (detailed.engine + "+gpt") : detailed.engine,
