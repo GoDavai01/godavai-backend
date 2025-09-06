@@ -9,24 +9,26 @@ function buildPrompt(ocrBodyText) {
     {
       role: "system",
       content:
-        "You convert noisy OCR’d prescription text into ONLY medicines as JSON. " +
-        "Discard patient/doctor/headers/directions/schedules/durations. " +
-        "Correct obvious spelling errors of medicine names (brand or generic) when unambiguous; " +
-        "prefer known pharma spellings; if ambiguous, keep as-is. Do not invent new drugs."
+        "You convert noisy OCR’d prescription text into ONLY medicines as JSON.\n" +
+        "Discard patient/doctor/headers/directions/durations (e.g., 1-0-1, x5 days, morning/night).\n" +
+        "Correct obvious brand/generic spellings when unambiguous; do NOT invent drugs.\n" +
+        "Names must NOT be just form words (tab, tablet, cap, capsule, syrup, vial, drop, solution, injection, gel, cream, ointment, lotion, spray) " +
+        "and must not be bullets like '1' or 'x'."
     },
     {
       role: "user",
       content:
         "Return STRICT JSON with key 'items' (array). Each item has:\n" +
-        "- name: corrected brand OR generic (string)\n" +
-        "- strength: '650 mg', '5 ml', '' if missing\n" +
+        "- name: corrected brand OR generic (string, NOT starting with 'Tab ' or 'Cap ', and not a form word)\n" +
+        "- strength: e.g., '650 mg', '5 ml', '' if missing\n" +
         "- form: one of tablet/capsule/syrup/drop/solution/injection/gel/cream/ointment/lotion/spray or ''\n" +
         "- qty: integer >= 1 (default 1)\n" +
-        "Do not include directions like 1-0-1, x5 days, after meals.\n\n" +
+        "Do not include directions like 1-0-1 / x5 days / after meals.\n\n" +
         "TEXT:\n" + ocrBodyText
     }
   ];
 }
+
 
 async function gptFilterMedicines(ocrBodyText) {
   if (!process.env.OPENAI_API_KEY) {
@@ -57,14 +59,20 @@ async function gptFilterMedicines(ocrBodyText) {
   if (!parsed || !Array.isArray(parsed.items)) return null;
 
   // Sanitize & coerce
+    const FORM_WORD = /^(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|drop|solution|soln|injection|gel|cream|ointment|lotion|spray|vial)$/i;
+
   const items = parsed.items
     .map(it => ({
-      name: String(it.name || "").trim(),
+      name: String(it.name || "").trim().replace(/^\s*(tab(?:let)?|cap(?:sule)?)\b[.\s:-]*/i, ""),
       strength: String(it.strength || "").trim(),
       form: String(it.form || "").trim(),
       qty: Math.max(1, parseInt(it.qty || 1, 10) || 1),
     }))
-    .filter(it => it.name && /[A-Za-z]{2,}/.test(it.name));
+    .filter(it =>
+      it.name &&
+      !FORM_WORD.test(it.name) &&
+      /[A-Za-z]{3,}/.test(it.name)
+    );
 
   return { items };
 }

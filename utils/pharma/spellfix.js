@@ -199,14 +199,16 @@ function bestMatch(name, minScore) {
     : (L <= 5 ? 0.92 : L <= 7 ? 0.88 : 0.70); // looser for long words
 
   // strong pruning
-  const fc = clean[0]?.toLowerCase();
-  const baseClean = baseToken(clean).toLowerCase();
+    const baseClean = baseToken(clean).toLowerCase();
+  const fc = (baseClean[0] || clean[0] || "").toLowerCase();
 
   let best = { word: null, score: 0 };
 
   for (const w of dict) {
     if (!w) continue;
-    if (fc && w[0]?.toLowerCase() !== fc) continue;                     // first-letter prune
+    // only prune if we actually have a meaningful first char (not 't' from "tab")
+    if (fc && !/^[tc]$/.test(clean[0] || "") && w[0]?.toLowerCase() !== fc) continue;
+
     const wl = w.length;
     if (Math.abs(wl - L) > Math.ceil(L * 0.7)) continue;                // length guard (looser)
 

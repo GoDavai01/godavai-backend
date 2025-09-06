@@ -72,6 +72,12 @@ function sniffMime(buf) {
   return "image";
 }
 
+function stripLeadingFormWord(s) {
+  return String(s || "")
+    .replace(/^\s*(tab(?:let)?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|inj(?:ection)?|ointment|cream|gel|lotion|spray|drop|solution|soln)\b[.\s:-]*/i, "")
+    .trim();
+}
+
 async function preprocess(buf) {
   const kind = sniffMime(buf);
   if (kind !== "image") return buf; // PDFs/TIFFs as-is
@@ -338,7 +344,7 @@ function parseDrugLine(s) {
   if (!dose && !formHit) return null;
   if (!/[A-Za-z]{3,}/.test(name) || !/[aeiou]/i.test(name)) return null;
 
-  return { name, strength, qty, form: formHit ? formHit[0].toLowerCase() : "" };
+  return { name: stripLeadingFormWord(name), strength, qty, form: formHit ? formHit[0].toLowerCase() : "" };
 }
 
 /* --------------------------- Public functions ---------------------------- */
@@ -440,17 +446,27 @@ async function extractPrescriptionItems(urlOrPath) {
   }
 
   // sanity
-  const merged = Array.from(byKey.values()).filter(it => {
-    const n = (it.name || "").replace(/[^A-Za-z]/g, "");
+  const merged = Array.from(byKey.values())
+  .map(it => ({ ...it, name: stripLeadingFormWord(it.name) }))
+  .filter(it => {
+    const n0 = String(it.name || "");
+    // dump pure form words or bullets like "1", "x", etc.
+    if (/^(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|inj(?:ection)?|ointment|cream|gel|lotion|spray|drop|solution|soln)$/i.test(n0)) return false;
+    const n = n0.replace(/[^A-Za-z]/g, "");
     return n.length >= 3 && /[aeiou]/i.test(n);
   });
+
 
   // 4.5) Snap to dictionary; normalize forms
   const corrected = merged.map(i => {
     const formNorm = normalizeForm(i.form || "");
-    let chosen = String(i.name || "").trim();
-    if (!hasDrug(chosen)) {
-      const bm = bestMatch(chosen);
+    let chosen = stripLeadingFormWord(i.name || "").trim();
+
+// If the name started with a form word originally, demand a stronger fuzzy score.
+const preferStrict = /^(tab|tablet|cap|capsule)\b/i.test(i.name || "");
+if (!hasDrug(chosen)) {
+  const bm = bestMatch(chosen, preferStrict ? 0.93 : undefined);
+
       if (bm && bm.word) chosen = bm.word;
       else chosen = correctDrugName(chosen).name;
     }
