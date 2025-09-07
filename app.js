@@ -100,28 +100,38 @@ function isOriginAllowed(origin) {
 }
 
 // --- CORS: keep this BEFORE any routes ---
-
+const ORIGIN_REGEXES = [/\.vercel\.app$/i];
+const ORIGINS = new Set([
+  "https://app.godavaii.com",
+  "https://www.godavaii.com",
+  "https://godavaii.com",
+  "http://localhost:3000",
+]);
 
 const corsOptions = {
-  origin: [
-    'https://godavaii.com',
-    'https://www.godavaii.com',
-    /\.vercel\.app$/i,         // allow your preview apps
-    'http://localhost:3000'    // keep for local dev if you use it
-  ],
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // Postman/cURL/server-to-server
+    if (ORIGINS.has(origin) || ORIGIN_REGEXES.some(rx => rx.test(origin))) {
+      return cb(null, true);
+    }
+    return cb(new Error("Not allowed by CORS: " + origin));
+  },
   credentials: true,
-  methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+  methods: ["GET","HEAD","PUT","PATCH","POST","DELETE","OPTIONS"],
   allowedHeaders: [
-    'Origin','X-Requested-With','Content-Type','Accept','Authorization',
-    'deliverypartnerid','pharmacyid','adminid','userid',
-    'x-access-token','x-refresh-token','x-csrf-token'
+    "Origin","X-Requested-With","Content-Type","Accept","Authorization",
+    "deliverypartnerid","pharmacyid","adminid","userid",
+    "x-access-token","x-refresh-token","x-csrf-token"
   ],
-  exposedHeaders: ['Authorization','x-access-token']
+  exposedHeaders: ["Authorization","x-access-token"]
 };
 
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // respond to all preflights
+// Helpful for CDNs/proxies so cached responses vary by Origin
+app.use((req, res, next) => { res.header("Vary", "Origin"); next(); });
 
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // respond to all preflights
+// --- end CORS ---
 
 // Upload folders
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
