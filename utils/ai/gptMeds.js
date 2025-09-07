@@ -2,6 +2,7 @@
 // Post-filter OCR text with GPT-4o-mini to keep ONLY medicines.
 // Safe to skip if OPENAI_API_KEY missing or GPT_MED_STAGE disabled.
 
+const { hasDrug, bestMatch } = require("../pharma/spellfix");
 const OPENAI_MODEL = process.env.GPT_MED_MODEL || "gpt-4o-mini";
 
 function buildPrompt(ocrBodyText) {
@@ -28,7 +29,6 @@ function buildPrompt(ocrBodyText) {
     }
   ];
 }
-
 
 async function gptFilterMedicines(ocrBodyText) {
   if (!process.env.OPENAI_API_KEY) {
@@ -59,7 +59,7 @@ async function gptFilterMedicines(ocrBodyText) {
   if (!parsed || !Array.isArray(parsed.items)) return null;
 
   // Sanitize & coerce
-    const FORM_WORD = /^(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|drop|solution|soln|injection|gel|cream|ointment|lotion|spray|vial)$/i;
+  const FORM_WORD = /^(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|drop|solution|soln|injection|gel|cream|ointment|lotion|spray|vial)$/i;
 
   const items = parsed.items
     .map(it => ({
@@ -74,7 +74,16 @@ async function gptFilterMedicines(ocrBodyText) {
       /[A-Za-z]{3,}/.test(it.name)
     );
 
-  return { items };
+  // ——— Validate against dictionary (DROP unknowns) ———
+  const items2 = items.map(i => {
+    if (hasDrug(i.name)) return i;
+    const bm = bestMatch(i.name, 0.93);  // strict for GPT outputs
+    return (bm && bm.word) ? { ...i, name: bm.word } : null;
+  }).filter(Boolean);
+
+  if (!items2.length) return null;
+
+  return { items: items2 };
 }
 
 module.exports = { gptFilterMedicines };

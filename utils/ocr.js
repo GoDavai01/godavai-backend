@@ -72,22 +72,30 @@ function sniffMime(buf) {
   return "image";
 }
 
+// ——— B) Treat vial/amp(oule) as form words ———
 function stripLeadingFormWord(s) {
   return String(s || "")
-    .replace(/^\s*(tab(?:let)?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|inj(?:ection)?|ointment|cream|gel|lotion|spray|drop|solution|soln)\b[.\s:-]*/i, "")
+    .replace(/^\s*(tab(?:let)?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|inj(?:ection)?|vial|amp(?:oule)?|ointment|cream|gel|lotion|spray|drop|solution|soln)\b[.\s:-]*/i, "")
     .trim();
 }
 
+/* -------------------- A) Strengthened pre-processing --------------------- */
 async function preprocess(buf) {
   const kind = sniffMime(buf);
   if (kind !== "image") return buf; // PDFs/TIFFs as-is
   try {
     const maxDim = Number(process.env.OCR_MAX_DIM || 1800); // speed knob (1200–2000 is fine)
-    const s = sharp(buf).rotate();
-    const chain = maxDim
-      ? s.resize({ width: maxDim, height: maxDim, fit: "inside", withoutEnlargement: true })
-      : s;
-    return await chain.jpeg({ quality: 92 }).normalize().toBuffer();
+    return await sharp(buf)
+      .rotate()
+      .resize({ width: maxDim, height: maxDim, fit: "inside", withoutEnlargement: true })
+      .greyscale()
+      // gentle brightness + contrast-ish boost (linear) + mild denoise + normalize
+      .modulate({ brightness: 1.02, saturation: 1.0 })
+      .linear(1.08)              // slight contrast boost
+      .median(1)
+      .normalize()
+      .jpeg({ quality: 92 })
+      .toBuffer();
   } catch (e) {
     if (process.env.DEBUG_OCR) console.warn("[OCR] preprocess skipped:", e.message);
     return buf;
@@ -267,10 +275,11 @@ const STRENGTH_RE = new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*${UNITS}\\b`, "i");
 // Add support for “unitless number with release code” (e.g., Dicorate ER 250)
 const RELEASE_RE = /\b(ER|SR|CR|MR|XL|XR)\b/i;
 
-// include short forms like "T.", "C.", "Syp."
-const FORM_RE = /\b(t\.?|tab(?:let)?|c\.?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|ointment|cream|gel|lotion|spray|paint|drop|solution|soln|inj(?:ection)?|tablet|capsule)s?\b/i;
+// ——— B) updated FORM_RE includes vial/amp(oule) ———
+const FORM_RE = /\b(t\.?|tab(?:let)?|c\.?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|ointment|cream|gel|lotion|spray|paint|drop|solution|soln|inj(?:ection)?|vial|amp(?:oule)?|tablet|capsule)s?\b/i;
 
-const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;
+const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\*[01]\b/; // protection if someone copied “*”; kept original line typo-safe
+const DOSE_RE_SAFE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;
 const DURATION_RE = /\b[x×]\s*\d+\s*(day|days|week|weeks)\b/i;
 const MEAL_RE = /\b(after|before)\s+meals?\b|\b(?:ac|pc)\b/i;
 
@@ -289,12 +298,16 @@ function looksLikeDrugLine(s) {
   if (JUNK_PHRASES.some(p => s.toLowerCase().includes(p))) return false;
   if (/^dr\.|\bdoctor\b|\bsignature\b|\breg\.?\s?no\b|\bregistration\b/i.test(s)) return false;
 
+  // ——— C) Hard reject quantity/empty lines & pure form words ———
+  if (/^\s*(?:x\s*)?\d{1,3}\s*(?:tabs?|caps?|vials?|amps?|pcs?)?\s*$/i.test(s)) return false;
+  if (/^\s*(?:tab(?:let)?|caps?(?:ule)?|syrup|susp(?:ension)?|inj(?:ection)?|vial|amp(?:oule)?|drop|solution|soln|gel|cream|ointment|lotion|spray)\s*$/i.test(s)) return false;
+
   // must show any strong “medicine” signal
   return STRENGTH_RE.test(s) || FORM_RE.test(s) || /\bTr\.?\b/i.test(s);
 }
 
 function parseDrugLine(s) {
-  if (DOSE_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
+  if (DOSE_RE_SAFE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
   if (DURATION_RE.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
   if (/^(after|before|meals?|massage)\b/i.test(s) && !FORM_RE.test(s) && !STRENGTH_RE.test(s)) return null;
 
@@ -343,6 +356,10 @@ function parseDrugLine(s) {
 
   if (!dose && !formHit) return null;
   if (!/[A-Za-z]{3,}/.test(name) || !/[aeiou]/i.test(name)) return null;
+
+  // ——— D) extra strict guards ———
+  if (!/[aeiou]/i.test(name) || name.replace(/[^A-Za-z]/g, "").length < 3) return null;
+  if (/^\d+$/i.test(name)) return null;
 
   return { name: stripLeadingFormWord(name), strength, qty, form: formHit ? formHit[0].toLowerCase() : "" };
 }
@@ -447,37 +464,35 @@ async function extractPrescriptionItems(urlOrPath) {
 
   // sanity
   const merged = Array.from(byKey.values())
-  .map(it => ({ ...it, name: stripLeadingFormWord(it.name) }))
-  .filter(it => {
-    const n0 = String(it.name || "");
-    // dump pure form words or bullets like "1", "x", etc.
-    if (/^(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|inj(?:ection)?|ointment|cream|gel|lotion|spray|drop|solution|soln)$/i.test(n0)) return false;
-    const n = n0.replace(/[^A-Za-z]/g, "");
-    return n.length >= 3 && /[aeiou]/i.test(n);
-  });
+    .map(it => ({ ...it, name: stripLeadingFormWord(it.name) }))
+    .filter(it => {
+      const n0 = String(it.name || "");
+      // dump pure form words or bullets like "1", "x", etc.
+      if (/^(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|inj(?:ection)?|ointment|cream|gel|lotion|spray|drop|solution|soln)$/i.test(n0)) return false;
+      const n = n0.replace(/[^A-Za-z]/g, "");
+      return n.length >= 3 && /[aeiou]/i.test(n);
+    });
 
-
-  // 4.5) Snap to dictionary; normalize forms
+  // ——— E) Snap to dictionary; DROP if unknown ———
   const corrected = merged.map(i => {
     const formNorm = normalizeForm(i.form || "");
     let chosen = stripLeadingFormWord(i.name || "").trim();
 
-// If the name started with a form word originally, demand a stronger fuzzy score.
-const preferStrict = /^(tab|tablet|cap|capsule)\b/i.test(i.name || "");
-if (!hasDrug(chosen)) {
-  const bm = bestMatch(chosen, preferStrict ? 0.93 : undefined);
-
-      if (bm && bm.word) chosen = bm.word;
-      else chosen = correctDrugName(chosen).name;
+    // If the line started with a form/number, demand a very strong fuzzy score
+    const startsWithFormOrNum = /^(?:\d+|tab|tablet|cap|capsule|vial|amp|syr|syp|inj|drop|solution|soln)\b/i.test(i.name || "");
+    const bm = hasDrug(chosen) ? { word: chosen, score: 1 } : bestMatch(chosen, startsWithFormOrNum ? 0.94 : undefined);
+    if (!bm || !bm.word || bm.score < (startsWithFormOrNum ? 0.94 : 0.88)) {
+      return null; // 🚫 unknown → DROP to avoid unsafe guesses
     }
-    const bumped = hasDrug(chosen);
+    chosen = bm.word;
+
     return {
       ...i,
       name: chosen,
       form: formNorm || "",
-      confidence: Math.min(0.98, (typeof i.confidence === "number" ? i.confidence : 0.7) + (bumped ? 0.08 : 0))
+      confidence: Math.min(0.98, (typeof i.confidence === "number" ? i.confidence : 0.7) + 0.1)
     };
-  });
+  }).filter(Boolean);
 
   return {
     items: corrected.map(i => ({

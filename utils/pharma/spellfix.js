@@ -29,7 +29,8 @@ let PRIMED = false;
 // strip dose + forms → base brand/generic (e.g., "Thyronorm 50mcg Tablet" → "Thyronorm")
 function baseToken(s) {
   const UNITS = "(mg|mcg|µg|g|kg|ml|l|iu|IU|%)";
-  const FORM_WORDS = "(tab(?:let)?|cap(?:sule)?|syp|syrup|susp(?:ension)?|drop|solution|soln|inj(?:ection)?|gel|cream|ointment|oint|lotion|spray|paint|inhaler|dt|od|xr|mr|sr|er)";
+  // ——— include vial/amp/ampoule here ———
+  const FORM_WORDS = "(tab(?:let)?|cap(?:sule)?|syp|syrup|susp(?:ension)?|drop|solution|soln|inj(?:ection)?|vial|amp(?:oule)?|gel|cream|ointment|oint|lotion|spray|paint|inhaler|dt|od|xr|mr|sr|er)";
   return String(s || "")
     .replace(new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*${UNITS}\\b`, "ig"), "")
     .replace(/\b\d+\s*(k)\b/ig, "")  // 60k, 1k etc
@@ -193,13 +194,13 @@ function bestMatch(name, minScore) {
   if (hasDrug(clean)) return { word: DICT.find(w => w.toLowerCase() === clean.toLowerCase()), score: 1 };
 
   const L = clean.length;
-  // adaptive minimum; longer words tolerate lower scores
+  // ——— A) slightly higher adaptive minimums ———
   const need = (typeof minScore === "number")
     ? minScore
-    : (L <= 5 ? 0.92 : L <= 7 ? 0.88 : 0.70); // looser for long words
+    : (L <= 5 ? 0.93 : L <= 7 ? 0.89 : 0.72); // looser for long words
 
   // strong pruning
-    const baseClean = baseToken(clean).toLowerCase();
+  const baseClean = baseToken(clean).toLowerCase();
   const fc = (baseClean[0] || clean[0] || "").toLowerCase();
 
   let best = { word: null, score: 0 };
@@ -258,15 +259,8 @@ function correctDrugName(name) {
     return out;
   }
 
-  // token-by-token as last resort
-  const tokens = clean.split(/\s+/);
-  const fixed = tokens.map(t => {
-    if (!/[A-Za-z]/.test(t)) return t;
-    const m = bestMatch(t);
-    return m ? m.word.split(/\s+/)[0] : t;
-  });
-  const rebuilt = fixed.join(" ");
-  const out = { name: rebuilt, corrected: rebuilt.toLowerCase() !== clean.toLowerCase() };
+  // ——— B) If we didn't find a match, return original (no fabrication) ———
+  const out = { name, corrected: false };
   NAME_CACHE.set(cacheKey, out);
   return out;
 }
