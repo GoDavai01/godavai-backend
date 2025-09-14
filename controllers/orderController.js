@@ -1,9 +1,28 @@
 // controllers/orderController.js
-const s3 = require("../utils/s3-setup");
-const generateInvoice = require("../uploads/generateInvoice"); // <- path matches the file above
-const Order = require("../models/Order");
-const Pharmacy = require("../models/Pharmacy");
-const User = require("../models/User");
+const path = require('path');
+const fs = require('fs');
+
+const Order = require('../models/Order');
+const Pharmacy = require('../models/Pharmacy');
+const User = require('../models/User');
+
+// Helper to require a file if it exists (tries uploads/ then utils/)
+function reqMaybe(...segments) {
+  const p = path.resolve(__dirname, ...segments);
+  if (fs.existsSync(p) || fs.existsSync(p + '.js')) return require(p);
+  return null;
+}
+
+const s3 =
+  reqMaybe('..', 'uploads', 's3-setup') ||
+  reqMaybe('..', 'utils', 's3-setup');
+
+const generateInvoice =
+  reqMaybe('..', 'uploads', 'generateInvoice') ||
+  reqMaybe('..', 'utils', 'generateInvoice');
+
+if (!s3) throw new Error('Cannot find s3-setup.js in uploads/ or utils/');
+if (!generateInvoice) throw new Error('Cannot find generateInvoice.js in uploads/ or utils/');
 
 exports.markOrderDelivered = async (req, res) => {
   try {
