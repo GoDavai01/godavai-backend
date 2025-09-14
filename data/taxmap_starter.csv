@@ -1,0 +1,321 @@
+key,displayName,hsn,gstRate,source,confidence,approved
+human insulin 40 iu/ml injection,Human Insulin 40 IU/ml Injection,3004,5,static,0.92,True
+human insulin 100 iu/ml injection,Human Insulin 100 IU/ml Injection,3004,5,static,0.92,True
+insulin glargine 100 iu/ml injection,Insulin Glargine 100 IU/ml Injection,3004,5,static,0.92,True
+anti-rabies vaccine im,Anti-Rabies Vaccine IM,3004,5,static,0.92,True
+bcg vaccine,BCG Vaccine,3004,5,static,0.92,True
+polio vaccine opv,Polio Vaccine OPV,3004,5,static,0.92,True
+tetanus toxoid vaccine,Tetanus Toxoid Vaccine,3004,5,static,0.92,True
+diphtheria pertussis tetanus vaccine,Diphtheria Pertussis Tetanus Vaccine,3004,5,static,0.92,True
+hepatitis b vaccine,Hepatitis B Vaccine,3004,5,static,0.92,True
+dialysis fluid 5l,Dialysis Fluid 5L,3004,5,static,0.92,True
+cancer chemotherapy injection doxorubicin 50 mg,Cancer Chemotherapy Injection Doxorubicin 50 mg,3004,5,static,0.92,True
+cancer chemotherapy injection paclitaxel 100 mg,Cancer Chemotherapy Injection Paclitaxel 100 mg,3004,5,static,0.92,True
+anti-cancer tablet imatinib 400 mg,Anti-Cancer Tablet Imatinib 400 mg,3004,5,static,0.92,True
+paracetamol 500 mg tablet,Paracetamol 500 mg Tablet,3004,12,static,0.9,True
+paracetamol 500 mg capsule,Paracetamol 500 mg Capsule,3004,12,static,0.9,True
+paracetamol 650 mg tablet,Paracetamol 650 mg Tablet,3004,12,static,0.9,True
+paracetamol 650 mg capsule,Paracetamol 650 mg Capsule,3004,12,static,0.9,True
+ibuprofen 200 mg tablet,Ibuprofen 200 mg Tablet,3004,12,static,0.9,True
+ibuprofen 200 mg capsule,Ibuprofen 200 mg Capsule,3004,12,static,0.9,True
+ibuprofen 400 mg tablet,Ibuprofen 400 mg Tablet,3004,12,static,0.9,True
+ibuprofen 400 mg capsule,Ibuprofen 400 mg Capsule,3004,12,static,0.9,True
+diclofenac 50 mg tablet,Diclofenac 50 mg Tablet,3004,12,static,0.9,True
+diclofenac 50 mg capsule,Diclofenac 50 mg Capsule,3004,12,static,0.9,True
+amoxicillin 250 mg tablet,Amoxicillin 250 mg Tablet,3004,12,static,0.9,True
+amoxicillin 250 mg capsule,Amoxicillin 250 mg Capsule,3004,12,static,0.9,True
+amoxicillin 500 mg tablet,Amoxicillin 500 mg Tablet,3004,12,static,0.9,True
+amoxicillin 500 mg capsule,Amoxicillin 500 mg Capsule,3004,12,static,0.9,True
+azithromycin 250 mg tablet,Azithromycin 250 mg Tablet,3004,12,static,0.9,True
+azithromycin 250 mg capsule,Azithromycin 250 mg Capsule,3004,12,static,0.9,True
+azithromycin 500 mg tablet,Azithromycin 500 mg Tablet,3004,12,static,0.9,True
+azithromycin 500 mg capsule,Azithromycin 500 mg Capsule,3004,12,static,0.9,True
+cefixime 200 mg tablet,Cefixime 200 mg Tablet,3004,12,static,0.9,True
+cefixime 200 mg capsule,Cefixime 200 mg Capsule,3004,12,static,0.9,True
+ciprofloxacin 500 mg tablet,Ciprofloxacin 500 mg Tablet,3004,12,static,0.9,True
+ciprofloxacin 500 mg capsule,Ciprofloxacin 500 mg Capsule,3004,12,static,0.9,True
+doxycycline 100 mg tablet,Doxycycline 100 mg Tablet,3004,12,static,0.9,True
+doxycycline 100 mg capsule,Doxycycline 100 mg Capsule,3004,12,static,0.9,True
+metformin 500 mg tablet,Metformin 500 mg Tablet,3004,12,static,0.9,True
+metformin 500 mg capsule,Metformin 500 mg Capsule,3004,12,static,0.9,True
+metformin 1000 mg tablet,Metformin 1000 mg Tablet,3004,12,static,0.9,True
+metformin 1000 mg capsule,Metformin 1000 mg Capsule,3004,12,static,0.9,True
+glimepiride 1 mg tablet,Glimepiride 1 mg Tablet,3004,12,static,0.9,True
+glimepiride 1 mg capsule,Glimepiride 1 mg Capsule,3004,12,static,0.9,True
+glimepiride 2 mg tablet,Glimepiride 2 mg Tablet,3004,12,static,0.9,True
+glimepiride 2 mg capsule,Glimepiride 2 mg Capsule,3004,12,static,0.9,True
+sitagliptin 50 mg tablet,Sitagliptin 50 mg Tablet,3004,12,static,0.9,True
+sitagliptin 50 mg capsule,Sitagliptin 50 mg Capsule,3004,12,static,0.9,True
+sitagliptin 100 mg tablet,Sitagliptin 100 mg Tablet,3004,12,static,0.9,True
+sitagliptin 100 mg capsule,Sitagliptin 100 mg Capsule,3004,12,static,0.9,True
+acarbose 25 mg tablet,Acarbose 25 mg Tablet,3004,12,static,0.9,True
+acarbose 25 mg capsule,Acarbose 25 mg Capsule,3004,12,static,0.9,True
+acarbose 50 mg tablet,Acarbose 50 mg Tablet,3004,12,static,0.9,True
+acarbose 50 mg capsule,Acarbose 50 mg Capsule,3004,12,static,0.9,True
+gliclazide 60 mg tablet,Gliclazide 60 mg Tablet,3004,12,static,0.9,True
+gliclazide 60 mg capsule,Gliclazide 60 mg Capsule,3004,12,static,0.9,True
+amlodipine 5 mg tablet,Amlodipine 5 mg Tablet,3004,12,static,0.9,True
+amlodipine 5 mg capsule,Amlodipine 5 mg Capsule,3004,12,static,0.9,True
+amlodipine 10 mg tablet,Amlodipine 10 mg Tablet,3004,12,static,0.9,True
+amlodipine 10 mg capsule,Amlodipine 10 mg Capsule,3004,12,static,0.9,True
+losartan 25 mg tablet,Losartan 25 mg Tablet,3004,12,static,0.9,True
+losartan 25 mg capsule,Losartan 25 mg Capsule,3004,12,static,0.9,True
+losartan 50 mg tablet,Losartan 50 mg Tablet,3004,12,static,0.9,True
+losartan 50 mg capsule,Losartan 50 mg Capsule,3004,12,static,0.9,True
+telmisartan 20 mg tablet,Telmisartan 20 mg Tablet,3004,12,static,0.9,True
+telmisartan 20 mg capsule,Telmisartan 20 mg Capsule,3004,12,static,0.9,True
+telmisartan 40 mg tablet,Telmisartan 40 mg Tablet,3004,12,static,0.9,True
+telmisartan 40 mg capsule,Telmisartan 40 mg Capsule,3004,12,static,0.9,True
+hydrochlorothiazide 12.5 mg tablet,Hydrochlorothiazide 12.5 mg Tablet,3004,12,static,0.9,True
+hydrochlorothiazide 12.5 mg capsule,Hydrochlorothiazide 12.5 mg Capsule,3004,12,static,0.9,True
+hydrochlorothiazide 25 mg tablet,Hydrochlorothiazide 25 mg Tablet,3004,12,static,0.9,True
+hydrochlorothiazide 25 mg capsule,Hydrochlorothiazide 25 mg Capsule,3004,12,static,0.9,True
+atorvastatin 10 mg tablet,Atorvastatin 10 mg Tablet,3004,12,static,0.9,True
+atorvastatin 10 mg capsule,Atorvastatin 10 mg Capsule,3004,12,static,0.9,True
+atorvastatin 20 mg tablet,Atorvastatin 20 mg Tablet,3004,12,static,0.9,True
+atorvastatin 20 mg capsule,Atorvastatin 20 mg Capsule,3004,12,static,0.9,True
+atorvastatin 40 mg tablet,Atorvastatin 40 mg Tablet,3004,12,static,0.9,True
+atorvastatin 40 mg capsule,Atorvastatin 40 mg Capsule,3004,12,static,0.9,True
+rosuvastatin 5 mg tablet,Rosuvastatin 5 mg Tablet,3004,12,static,0.9,True
+rosuvastatin 5 mg capsule,Rosuvastatin 5 mg Capsule,3004,12,static,0.9,True
+rosuvastatin 10 mg tablet,Rosuvastatin 10 mg Tablet,3004,12,static,0.9,True
+rosuvastatin 10 mg capsule,Rosuvastatin 10 mg Capsule,3004,12,static,0.9,True
+rosuvastatin 20 mg tablet,Rosuvastatin 20 mg Tablet,3004,12,static,0.9,True
+rosuvastatin 20 mg capsule,Rosuvastatin 20 mg Capsule,3004,12,static,0.9,True
+levothyroxine 25 mcg tablet,Levothyroxine 25 mcg Tablet,3004,12,static,0.9,True
+levothyroxine 25 mcg capsule,Levothyroxine 25 mcg Capsule,3004,12,static,0.9,True
+levothyroxine 50 mcg tablet,Levothyroxine 50 mcg Tablet,3004,12,static,0.9,True
+levothyroxine 50 mcg capsule,Levothyroxine 50 mcg Capsule,3004,12,static,0.9,True
+levothyroxine 100 mcg tablet,Levothyroxine 100 mcg Tablet,3004,12,static,0.9,True
+levothyroxine 100 mcg capsule,Levothyroxine 100 mcg Capsule,3004,12,static,0.9,True
+omeprazole 20 mg tablet,Omeprazole 20 mg Tablet,3004,12,static,0.9,True
+omeprazole 20 mg capsule,Omeprazole 20 mg Capsule,3004,12,static,0.9,True
+pantoprazole 40 mg tablet,Pantoprazole 40 mg Tablet,3004,12,static,0.9,True
+pantoprazole 40 mg capsule,Pantoprazole 40 mg Capsule,3004,12,static,0.9,True
+esomeprazole 40 mg tablet,Esomeprazole 40 mg Tablet,3004,12,static,0.9,True
+esomeprazole 40 mg capsule,Esomeprazole 40 mg Capsule,3004,12,static,0.9,True
+ranitidine 150 mg tablet,Ranitidine 150 mg Tablet,3004,12,static,0.9,True
+ranitidine 150 mg capsule,Ranitidine 150 mg Capsule,3004,12,static,0.9,True
+ondansetron 4 mg tablet,Ondansetron 4 mg Tablet,3004,12,static,0.9,True
+ondansetron 4 mg capsule,Ondansetron 4 mg Capsule,3004,12,static,0.9,True
+ondansetron 8 mg tablet,Ondansetron 8 mg Tablet,3004,12,static,0.9,True
+ondansetron 8 mg capsule,Ondansetron 8 mg Capsule,3004,12,static,0.9,True
+montelukast 10 mg tablet,Montelukast 10 mg Tablet,3004,12,static,0.9,True
+montelukast 10 mg capsule,Montelukast 10 mg Capsule,3004,12,static,0.9,True
+cetirizine 10 mg tablet,Cetirizine 10 mg Tablet,3004,12,static,0.9,True
+cetirizine 10 mg capsule,Cetirizine 10 mg Capsule,3004,12,static,0.9,True
+fexofenadine 120 mg tablet,Fexofenadine 120 mg Tablet,3004,12,static,0.9,True
+fexofenadine 120 mg capsule,Fexofenadine 120 mg Capsule,3004,12,static,0.9,True
+fexofenadine 180 mg tablet,Fexofenadine 180 mg Tablet,3004,12,static,0.9,True
+fexofenadine 180 mg capsule,Fexofenadine 180 mg Capsule,3004,12,static,0.9,True
+salbutamol 2 mg tablet,Salbutamol 2 mg Tablet,3004,12,static,0.9,True
+salbutamol 2 mg capsule,Salbutamol 2 mg Capsule,3004,12,static,0.9,True
+budesonide 200 mcg tablet,Budesonide 200 mcg Tablet,3004,12,static,0.9,True
+budesonide 200 mcg capsule,Budesonide 200 mcg Capsule,3004,12,static,0.9,True
+ivermectin 12 mg tablet,Ivermectin 12 mg Tablet,3004,12,static,0.9,True
+ivermectin 12 mg capsule,Ivermectin 12 mg Capsule,3004,12,static,0.9,True
+albendazole 400 mg tablet,Albendazole 400 mg Tablet,3004,12,static,0.9,True
+albendazole 400 mg capsule,Albendazole 400 mg Capsule,3004,12,static,0.9,True
+metronidazole 400 mg tablet,Metronidazole 400 mg Tablet,3004,12,static,0.9,True
+metronidazole 400 mg capsule,Metronidazole 400 mg Capsule,3004,12,static,0.9,True
+tinidazole 500 mg tablet,Tinidazole 500 mg Tablet,3004,12,static,0.9,True
+tinidazole 500 mg capsule,Tinidazole 500 mg Capsule,3004,12,static,0.9,True
+clarithromycin 500 mg tablet,Clarithromycin 500 mg Tablet,3004,12,static,0.9,True
+clarithromycin 500 mg capsule,Clarithromycin 500 mg Capsule,3004,12,static,0.9,True
+levofloxacin 500 mg tablet,Levofloxacin 500 mg Tablet,3004,12,static,0.9,True
+levofloxacin 500 mg capsule,Levofloxacin 500 mg Capsule,3004,12,static,0.9,True
+linezolid 600 mg tablet,Linezolid 600 mg Tablet,3004,12,static,0.9,True
+linezolid 600 mg capsule,Linezolid 600 mg Capsule,3004,12,static,0.9,True
+amphotericin b 50 mg tablet,Amphotericin B 50 mg Tablet,3004,12,static,0.9,True
+amphotericin b 50 mg capsule,Amphotericin B 50 mg Capsule,3004,12,static,0.9,True
+fluconazole 150 mg tablet,Fluconazole 150 mg Tablet,3004,12,static,0.9,True
+fluconazole 150 mg capsule,Fluconazole 150 mg Capsule,3004,12,static,0.9,True
+itraconazole 100 mg tablet,Itraconazole 100 mg Tablet,3004,12,static,0.9,True
+itraconazole 100 mg capsule,Itraconazole 100 mg Capsule,3004,12,static,0.9,True
+itraconazole 200 mg tablet,Itraconazole 200 mg Tablet,3004,12,static,0.9,True
+itraconazole 200 mg capsule,Itraconazole 200 mg Capsule,3004,12,static,0.9,True
+vitamin d3 60000 iu tablet,Vitamin D3 60000 IU Tablet,3004,12,static,0.9,True
+vitamin d3 60000 iu capsule,Vitamin D3 60000 IU Capsule,3004,12,static,0.9,True
+vitamin b complex tablet,Vitamin B Complex Tablet,3004,12,static,0.9,True
+vitamin b complex capsule,Vitamin B Complex Capsule,3004,12,static,0.9,True
+ferrous ascorbate 100 mg tablet,Ferrous Ascorbate 100 mg Tablet,3004,12,static,0.9,True
+ferrous ascorbate 100 mg capsule,Ferrous Ascorbate 100 mg Capsule,3004,12,static,0.9,True
+folic acid 5 mg tablet,Folic Acid 5 mg Tablet,3004,12,static,0.9,True
+folic acid 5 mg capsule,Folic Acid 5 mg Capsule,3004,12,static,0.9,True
+calcium carbonate 500 mg tablet,Calcium Carbonate 500 mg Tablet,3004,12,static,0.9,True
+calcium carbonate 500 mg capsule,Calcium Carbonate 500 mg Capsule,3004,12,static,0.9,True
+zinc sulphate 20 mg tablet,Zinc Sulphate 20 mg Tablet,3004,12,static,0.9,True
+zinc sulphate 20 mg capsule,Zinc Sulphate 20 mg Capsule,3004,12,static,0.9,True
+ors 21 g/l tablet,ORS 21 g/L Tablet,3004,12,static,0.9,True
+ors 21 g/l capsule,ORS 21 g/L Capsule,3004,12,static,0.9,True
+paracetamol phenylephrine cpm tablet tablet,Paracetamol Phenylephrine CPM Tablet Tablet,3004,12,static,0.9,True
+paracetamol phenylephrine cpm tablet capsule,Paracetamol Phenylephrine CPM Tablet Capsule,3004,12,static,0.9,True
+aspirin 75 mg tablet,Aspirin 75 mg Tablet,3004,12,static,0.9,True
+aspirin 75 mg capsule,Aspirin 75 mg Capsule,3004,12,static,0.9,True
+clopidogrel 75 mg tablet,Clopidogrel 75 mg Tablet,3004,12,static,0.9,True
+clopidogrel 75 mg capsule,Clopidogrel 75 mg Capsule,3004,12,static,0.9,True
+warfarin 5 mg tablet,Warfarin 5 mg Tablet,3004,12,static,0.9,True
+warfarin 5 mg capsule,Warfarin 5 mg Capsule,3004,12,static,0.9,True
+paracetamol syrup 120 mg/5 ml,Paracetamol Syrup 120 mg/5 ml,3004,12,static,0.9,True
+ibuprofen suspension 100 mg/5 ml,Ibuprofen Suspension 100 mg/5 ml,3004,12,static,0.9,True
+cough syrup dextromethorphan,Cough Syrup Dextromethorphan,3004,12,static,0.9,True
+antacid suspension,Antacid Suspension,3004,12,static,0.9,True
+ors solution,ORS Solution,3004,12,static,0.9,True
+saline nasal drops,Saline Nasal Drops,3004,12,static,0.9,True
+ofloxacin ornidazole suspension,Ofloxacin Ornidazole Suspension,3004,12,static,0.9,True
+diclofenac gel 30 g,Diclofenac Gel 30 g,3004,12,static,0.9,True
+clotrimazole cream 1% 15 g,Clotrimazole Cream 1% 15 g,3004,12,static,0.9,True
+mupirocin ointment 2% 5 g,Mupirocin Ointment 2% 5 g,3004,12,static,0.9,True
+hydrocortisone cream 1% 15 g,Hydrocortisone Cream 1% 15 g,3004,12,static,0.9,True
+povidone iodine ointment 5% 25 g,Povidone Iodine Ointment 5% 25 g,3004,12,static,0.9,True
+ceftriaxone injection 1 g,Ceftriaxone Injection 1 g,3004,12,static,0.9,True
+amikacin injection 500 mg,Amikacin Injection 500 mg,3004,12,static,0.9,True
+pantoprazole injection 40 mg,Pantoprazole Injection 40 mg,3004,12,static,0.9,True
+ondansetron injection 4 mg/2 ml,Ondansetron Injection 4 mg/2 ml,3004,12,static,0.9,True
+diclofenac injection 75 mg/3 ml,Diclofenac Injection 75 mg/3 ml,3004,12,static,0.9,True
+vitamin d3 drops 400 iu/ml,Vitamin D3 Drops 400 IU/ml,3004,12,static,0.9,True
+paracetamol drops 125 mg/5 ml,Paracetamol Drops 125 mg/5 ml,3004,12,static,0.9,True
+zinc drops 10 mg/5 ml,Zinc Drops 10 mg/5 ml,3004,12,static,0.9,True
+iron drops 15 mg/1 ml,Iron Drops 15 mg/1 ml,3004,12,static,0.9,True
+crepe bandage 10 cm x 4 m,Crepe Bandage 10 cm x 4 m,3005,12,static,0.9,True
+gauze roll 10 m,Gauze Roll 10 m,3005,12,static,0.9,True
+adhesive bandage strip (pack of 100),Adhesive Bandage Strip (Pack of 100),3005,12,static,0.9,True
+surgical tape 1 inch x 9 m,Surgical Tape 1 inch x 9 m,3005,12,static,0.9,True
+cotton wadding 100 g,Cotton Wadding 100 g,3005,12,static,0.9,True
+sterile gauze swab 10x10 cm (pack of 10),Sterile Gauze Swab 10x10 cm (Pack of 10),3005,12,static,0.9,True
+elastic adhesive bandage 8 cm x 4 m,Elastic Adhesive Bandage 8 cm x 4 m,3005,12,static,0.9,True
+disposable syringe 5 ml,Disposable Syringe 5 ml,9018,12,static,0.88,True
+disposable syringe 2 ml,Disposable Syringe 2 ml,9018,12,static,0.88,True
+hypodermic needle 22g,Hypodermic Needle 22G,9018,12,static,0.88,True
+iv cannula 20g,IV Cannula 20G,9018,12,static,0.88,True
+foley catheter 16 fr,Foley Catheter 16 Fr,9018,12,static,0.88,True
+nebulizer machine,Nebulizer Machine,9018,12,static,0.88,True
+bp monitor digital,BP Monitor Digital,9018,12,static,0.88,True
+stethoscope,Stethoscope,9018,12,static,0.88,True
+pulse oximeter finger,Pulse Oximeter Finger,9018,12,static,0.88,True
+digital thermometer,Digital Thermometer,9025,18,static,0.88,True
+infrared thermometer,Infrared Thermometer,9025,18,static,0.88,True
+glucometer,Glucometer,9027,18,static,0.88,True
+glucometer test strips (50),Glucometer Test Strips (50),9027,18,static,0.88,True
+lancets (100),Lancets (100),9027,18,static,0.88,True
+loperamide 2 mg tablet,Loperamide 2 mg Tablet,3004,12,static,0.88,True
+domperidone 10 mg tablet,Domperidone 10 mg Tablet,3004,12,static,0.88,True
+rabeprazole 20 mg tablet,Rabeprazole 20 mg Tablet,3004,12,static,0.88,True
+amoxicillin clavulanate 625 mg tablet,Amoxicillin Clavulanate 625 mg Tablet,3004,12,static,0.88,True
+ofloxacin 200 mg tablet,Ofloxacin 200 mg Tablet,3004,12,static,0.88,True
+ornidazole 500 mg tablet,Ornidazole 500 mg Tablet,3004,12,static,0.88,True
+levocetirizine 5 mg tablet,Levocetirizine 5 mg Tablet,3004,12,static,0.88,True
+desloratadine 5 mg tablet,Desloratadine 5 mg Tablet,3004,12,static,0.88,True
+budesonide nasal spray 100 mcg,Budesonide Nasal Spray 100 mcg,3004,12,static,0.88,True
+fluticasone nasal spray 50 mcg,Fluticasone Nasal Spray 50 mcg,3004,12,static,0.88,True
+carbamazepine 200 mg tablet,Carbamazepine 200 mg Tablet,3004,12,static,0.88,True
+valproate 500 mg tablet,Valproate 500 mg Tablet,3004,12,static,0.88,True
+sertraline 50 mg tablet,Sertraline 50 mg Tablet,3004,12,static,0.88,True
+escitalopram 10 mg tablet,Escitalopram 10 mg Tablet,3004,12,static,0.88,True
+olanzapine 10 mg tablet,Olanzapine 10 mg Tablet,3004,12,static,0.88,True
+quetiapine 50 mg tablet,Quetiapine 50 mg Tablet,3004,12,static,0.88,True
+alprazolam 0.5 mg tablet,Alprazolam 0.5 mg Tablet,3004,12,static,0.88,True
+clonazepam 0.5 mg tablet,Clonazepam 0.5 mg Tablet,3004,12,static,0.88,True
+tamsulosin 0.4 mg capsule,Tamsulosin 0.4 mg Capsule,3004,12,static,0.88,True
+dutasteride 0.5 mg capsule,Dutasteride 0.5 mg Capsule,3004,12,static,0.88,True
+sildenafil 50 mg tablet,Sildenafil 50 mg Tablet,3004,12,static,0.88,True
+tadalafil 10 mg tablet,Tadalafil 10 mg Tablet,3004,12,static,0.88,True
+nifedipine 10 mg tablet,Nifedipine 10 mg Tablet,3004,12,static,0.88,True
+propranolol 40 mg tablet,Propranolol 40 mg Tablet,3004,12,static,0.88,True
+atenolol 50 mg tablet,Atenolol 50 mg Tablet,3004,12,static,0.88,True
+bisoprolol 5 mg tablet,Bisoprolol 5 mg Tablet,3004,12,static,0.88,True
+enalapril 5 mg tablet,Enalapril 5 mg Tablet,3004,12,static,0.88,True
+ramipril 5 mg capsule,Ramipril 5 mg Capsule,3004,12,static,0.88,True
+lisinopril 10 mg tablet,Lisinopril 10 mg Tablet,3004,12,static,0.88,True
+spironolactone 25 mg tablet,Spironolactone 25 mg Tablet,3004,12,static,0.88,True
+furosemide 40 mg tablet,Furosemide 40 mg Tablet,3004,12,static,0.88,True
+hydroxychloroquine 200 mg tablet,Hydroxychloroquine 200 mg Tablet,3004,12,static,0.88,True
+allopurinol 100 mg tablet,Allopurinol 100 mg Tablet,3004,12,static,0.88,True
+colchicine 0.5 mg tablet,Colchicine 0.5 mg Tablet,3004,12,static,0.88,True
+nitroglycerin 2.6 mg tablet,Nitroglycerin 2.6 mg Tablet,3004,12,static,0.88,True
+isosorbide mononitrate 30 mg tablet,Isosorbide Mononitrate 30 mg Tablet,3004,12,static,0.88,True
+amiodarone 200 mg tablet,Amiodarone 200 mg Tablet,3004,12,static,0.88,True
+ivabradine 5 mg tablet,Ivabradine 5 mg Tablet,3004,12,static,0.88,True
+clindamycin 300 mg capsule,Clindamycin 300 mg Capsule,3004,12,static,0.88,True
+nitrofurantoin 100 mg capsule,Nitrofurantoin 100 mg Capsule,3004,12,static,0.88,True
+dicyclomine 10 mg tablet,Dicyclomine 10 mg Tablet,3004,12,static,0.88,True
+mefenamic acid 500 mg tablet,Mefenamic Acid 500 mg Tablet,3004,12,static,0.88,True
+tranexamic acid 500 mg tablet,Tranexamic Acid 500 mg Tablet,3004,12,static,0.88,True
+tranexamic acid + mefenamic acid tablet,Tranexamic Acid + Mefenamic Acid Tablet,3004,12,static,0.88,True
+thyroxine 75 mcg tablet,Thyroxine 75 mcg Tablet,3004,12,static,0.88,True
+b complex syrup,B Complex Syrup,3004,12,static,0.88,True
+calcium + vitamin d3 tablet,Calcium + Vitamin D3 Tablet,3004,12,static,0.88,True
+cholecalciferol 60000 iu capsule,Cholecalciferol 60000 IU Capsule,3004,12,static,0.88,True
+gabapentin 300 mg capsule,Gabapentin 300 mg Capsule,3004,12,static,0.88,True
+pregabalin 75 mg capsule,Pregabalin 75 mg Capsule,3004,12,static,0.88,True
+amitriptyline 10 mg tablet,Amitriptyline 10 mg Tablet,3004,12,static,0.88,True
+nortriptyline 10 mg tablet,Nortriptyline 10 mg Tablet,3004,12,static,0.88,True
+betahistine 16 mg tablet,Betahistine 16 mg Tablet,3004,12,static,0.88,True
+tramadol 50 mg capsule,Tramadol 50 mg Capsule,3004,12,static,0.88,True
+codeine phosphate 10 mg tablet,Codeine Phosphate 10 mg Tablet,3004,12,static,0.88,True
+ipratropium bromide inhaler 20 mcg,Ipratropium Bromide Inhaler 20 mcg,3004,12,static,0.88,True
+formoterol budesonide inhaler 200 mcg,Formoterol Budesonide Inhaler 200 mcg,3004,12,static,0.88,True
+tiotropium inhaler 18 mcg,Tiotropium Inhaler 18 mcg,3004,12,static,0.88,True
+salbutamol inhaler 100 mcg,Salbutamol Inhaler 100 mcg,3004,12,static,0.88,True
+sodium bicarbonate 500 mg tablet,Sodium Bicarbonate 500 mg Tablet,3004,12,static,0.88,True
+potassium chloride 600 mg tablet,Potassium Chloride 600 mg Tablet,3004,12,static,0.88,True
+magnesium hydroxide syrup,Magnesium Hydroxide Syrup,3004,12,static,0.88,True
+lactulose syrup 200 ml,Lactulose Syrup 200 ml,3004,12,static,0.88,True
+ors powder sachet 21 g,ORS Powder Sachet 21 g,3004,12,static,0.88,True
+amoxicillin 125 mg/5 ml suspension,Amoxicillin 125 mg/5 ml Suspension,3004,12,static,0.88,True
+amoxicillin dry syrup 250 mg/5 ml,Amoxicillin Dry Syrup 250 mg/5 ml,3004,12,static,0.88,True
+cefixime 100 mg/5 ml dry syrup,Cefixime 100 mg/5 ml Dry Syrup,3004,12,static,0.88,True
+azithromycin suspension 200 mg/5 ml,Azithromycin Suspension 200 mg/5 ml,3004,12,static,0.88,True
+metformin sr 500 mg tablet,Metformin SR 500 mg Tablet,3004,12,static,0.88,True
+metformin sr 750 mg tablet,Metformin SR 750 mg Tablet,3004,12,static,0.88,True
+glimepiride 3 mg tablet,Glimepiride 3 mg Tablet,3004,12,static,0.88,True
+losartan 100 mg tablet,Losartan 100 mg Tablet,3004,12,static,0.88,True
+telmisartan 80 mg tablet,Telmisartan 80 mg Tablet,3004,12,static,0.88,True
+atorvastatin 80 mg tablet,Atorvastatin 80 mg Tablet,3004,12,static,0.88,True
+levothyroxine 125 mcg tablet,Levothyroxine 125 mcg Tablet,3004,12,static,0.88,True
+pantoprazole 20 mg tablet,Pantoprazole 20 mg Tablet,3004,12,static,0.88,True
+pantoprazole 40 mg + domperidone capsule,Pantoprazole 40 mg + Domperidone Capsule,3004,12,static,0.88,True
+vitamin d3 nano shot 5 ml,Vitamin D3 Nano Shot 5 ml,3004,12,static,0.88,True
+calcium carbonate 1000 mg tablet,Calcium Carbonate 1000 mg Tablet,3004,12,static,0.88,True
+paracetamol 500 mg tablet (strip of 10),Paracetamol 500 mg Tablet (Strip of 10),3004,12,static,0.9,True
+paracetamol 500 mg capsule (strip of 10),Paracetamol 500 mg Capsule (Strip of 10),3004,12,static,0.9,True
+paracetamol 650 mg tablet (strip of 10),Paracetamol 650 mg Tablet (Strip of 10),3004,12,static,0.9,True
+paracetamol 650 mg capsule (strip of 10),Paracetamol 650 mg Capsule (Strip of 10),3004,12,static,0.9,True
+ibuprofen 200 mg tablet (strip of 10),Ibuprofen 200 mg Tablet (Strip of 10),3004,12,static,0.9,True
+ibuprofen 200 mg capsule (strip of 10),Ibuprofen 200 mg Capsule (Strip of 10),3004,12,static,0.9,True
+ibuprofen 400 mg tablet (strip of 10),Ibuprofen 400 mg Tablet (Strip of 10),3004,12,static,0.9,True
+ibuprofen 400 mg capsule (strip of 10),Ibuprofen 400 mg Capsule (Strip of 10),3004,12,static,0.9,True
+diclofenac 50 mg tablet (strip of 10),Diclofenac 50 mg Tablet (Strip of 10),3004,12,static,0.9,True
+diclofenac 50 mg capsule (strip of 10),Diclofenac 50 mg Capsule (Strip of 10),3004,12,static,0.9,True
+amoxicillin 250 mg tablet (strip of 10),Amoxicillin 250 mg Tablet (Strip of 10),3004,12,static,0.9,True
+amoxicillin 250 mg capsule (strip of 10),Amoxicillin 250 mg Capsule (Strip of 10),3004,12,static,0.9,True
+amoxicillin 500 mg tablet (strip of 10),Amoxicillin 500 mg Tablet (Strip of 10),3004,12,static,0.9,True
+amoxicillin 500 mg capsule (strip of 10),Amoxicillin 500 mg Capsule (Strip of 10),3004,12,static,0.9,True
+azithromycin 250 mg tablet (strip of 10),Azithromycin 250 mg Tablet (Strip of 10),3004,12,static,0.9,True
+azithromycin 250 mg capsule (strip of 10),Azithromycin 250 mg Capsule (Strip of 10),3004,12,static,0.9,True
+azithromycin 500 mg tablet (strip of 10),Azithromycin 500 mg Tablet (Strip of 10),3004,12,static,0.9,True
+azithromycin 500 mg capsule (strip of 10),Azithromycin 500 mg Capsule (Strip of 10),3004,12,static,0.9,True
+cefixime 200 mg tablet (strip of 10),Cefixime 200 mg Tablet (Strip of 10),3004,12,static,0.9,True
+cefixime 200 mg capsule (strip of 10),Cefixime 200 mg Capsule (Strip of 10),3004,12,static,0.9,True
+ciprofloxacin 500 mg tablet (strip of 10),Ciprofloxacin 500 mg Tablet (Strip of 10),3004,12,static,0.9,True
+ciprofloxacin 500 mg capsule (strip of 10),Ciprofloxacin 500 mg Capsule (Strip of 10),3004,12,static,0.9,True
+doxycycline 100 mg tablet (strip of 10),Doxycycline 100 mg Tablet (Strip of 10),3004,12,static,0.9,True
+doxycycline 100 mg capsule (strip of 10),Doxycycline 100 mg Capsule (Strip of 10),3004,12,static,0.9,True
+metformin 500 mg tablet (strip of 10),Metformin 500 mg Tablet (Strip of 10),3004,12,static,0.9,True
+metformin 500 mg capsule (strip of 10),Metformin 500 mg Capsule (Strip of 10),3004,12,static,0.9,True
+metformin 1000 mg tablet (strip of 10),Metformin 1000 mg Tablet (Strip of 10),3004,12,static,0.9,True
+metformin 1000 mg capsule (strip of 10),Metformin 1000 mg Capsule (Strip of 10),3004,12,static,0.9,True
+glimepiride 1 mg tablet (strip of 10),Glimepiride 1 mg Tablet (Strip of 10),3004,12,static,0.9,True
+glimepiride 1 mg capsule (strip of 10),Glimepiride 1 mg Capsule (Strip of 10),3004,12,static,0.9,True
+glimepiride 2 mg tablet (strip of 10),Glimepiride 2 mg Tablet (Strip of 10),3004,12,static,0.9,True
+glimepiride 2 mg capsule (strip of 10),Glimepiride 2 mg Capsule (Strip of 10),3004,12,static,0.9,True
+sitagliptin 50 mg tablet (strip of 10),Sitagliptin 50 mg Tablet (Strip of 10),3004,12,static,0.9,True
+sitagliptin 50 mg capsule (strip of 10),Sitagliptin 50 mg Capsule (Strip of 10),3004,12,static,0.9,True
+sitagliptin 100 mg tablet (strip of 10),Sitagliptin 100 mg Tablet (Strip of 10),3004,12,static,0.9,True
+sitagliptin 100 mg capsule (strip of 10),Sitagliptin 100 mg Capsule (Strip of 10),3004,12,static,0.9,True
+acarbose 25 mg tablet (strip of 10),Acarbose 25 mg Tablet (Strip of 10),3004,12,static,0.9,True
+acarbose 25 mg capsule (strip of 10),Acarbose 25 mg Capsule (Strip of 10),3004,12,static,0.9,True
+acarbose 50 mg tablet (strip of 10),Acarbose 50 mg Tablet (Strip of 10),3004,12,static,0.9,True
+acarbose 50 mg capsule (strip of 10),Acarbose 50 mg Capsule (Strip of 10),3004,12,static,0.9,True
+gliclazide 60 mg tablet (strip of 10),Gliclazide 60 mg Tablet (Strip of 10),3004,12,static,0.9,True
+gliclazide 60 mg capsule (strip of 10),Gliclazide 60 mg Capsule (Strip of 10),3004,12,static,0.9,True

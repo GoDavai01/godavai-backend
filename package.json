@@ -32,11 +32,13 @@
     "onesignal-node": "^3.4.0",
     "openai": "^5.17.0",
     "pdfkit": "^0.17.1",
+    "playwright": "^1.55.0",
     "razorpay": "^2.9.6",
     "sharp": "^0.33.5",
     "string-similarity": "^4.0.4",
     "tesseract.js": "^6.0.1",
-    "twilio": "^5.7.1"
+    "twilio": "^5.7.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

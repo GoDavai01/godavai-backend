@@ -1,32 +1,30 @@
 // controllers/orderController.js
-const AWS = require('aws-sdk');
-const s3 = require('../utils/s3-setup');
-const generateInvoice = require('../utils/generateInvoice');
-const Order = require('../models/Order');
-const Pharmacy = require('../models/Pharmacy');
-const User = require('../models/User');
+const s3 = require("../utils/s3-setup");
+const generateInvoice = require("../uploads/generateInvoice"); // <- path matches the file above
+const Order = require("../models/Order");
+const Pharmacy = require("../models/Pharmacy");
+const User = require("../models/User");
 
 exports.markOrderDelivered = async (req, res) => {
   try {
     const orderId = req.params.id;
     const order = await Order.findById(orderId);
-    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (!order) return res.status(404).json({ error: "Order not found" });
 
-    order.status = 'delivered';
+    order.status = "delivered";
     await order.save();
 
     const pharmacy = await Pharmacy.findById(order.pharmacyId || order.pharmacy);
     const customer = await User.findById(order.customerId || order.userId);
 
-    // --- Company details for Platform Fee page (env-driven) ---
+    // Company details for Platform Fee page
     const company = {
-      name: process.env.COMPANY_NAME || 'Karniva Private Limited (GoDavaii)',
-      address: process.env.COMPANY_ADDRESS || 'Sector 62, Noida, Uttar Pradesh',
-      gstin: process.env.COMPANY_GSTIN || ''
+      name: process.env.COMPANY_NAME || "Karniva Private Limited (GoDavaii)",
+      address: process.env.COMPANY_ADDRESS || "Sector 62, Noida, Uttar Pradesh",
+      gstin: process.env.COMPANY_GSTIN || "",
     };
 
-    // --- Platform fee (GROSS, tax-inclusive) to display in Platform Fee page ---
-    // Priority: order.fees.platform.gross -> order.platformFee -> ENV -> fallback 10
+    // Platform fee shown is gross (tax-inclusive)
     const platformFeeGross =
       Number(order?.fees?.platform?.gross) ||
       Number(order?.platformFee) ||
@@ -39,36 +37,36 @@ exports.markOrderDelivered = async (req, res) => {
         date: new Date(order.createdAt).toLocaleDateString(),
         deliveryDate: new Date().toLocaleDateString(),
         items: order.items,
-        paymentMode: order.paymentMethod
+        paymentMode: order.paymentMethod,
       },
       pharmacy: {
         name: pharmacy?.name,
         address: pharmacy?.address,
-        gstin: pharmacy?.gstin
+        gstin: pharmacy?.gstin,
       },
       customer: {
         name: customer?.name,
-        address: order.address
+        address: order.address,
       },
       company,
-      platformFeeGross
+      platformFeeGross,
     });
 
-    // --- S3 Upload ---
+    // Upload to S3
     const s3Key = `invoices/invoice-${order._id}.pdf`;
     const s3Res = await s3.upload({
       Bucket: process.env.AWS_BUCKET_NAME,
       Key: s3Key,
       Body: invoiceBuffer,
-      ContentType: 'application/pdf',
+      ContentType: "application/pdf",
     }).promise();
 
     order.invoiceFile = s3Res.Location;
     await order.save();
 
-    res.status(200).json({ message: 'Order marked as delivered', invoice: order.invoiceFile });
+    res.status(200).json({ message: "Order marked as delivered", invoice: order.invoiceFile });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ error: "Internal Server Error" });
   }
 };
