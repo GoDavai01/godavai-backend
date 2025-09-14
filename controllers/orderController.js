@@ -1,7 +1,5 @@
 // controllers/orderController.js
-
 const AWS = require('aws-sdk');
-// controllers/orderController.js
 const s3 = require('../utils/s3-setup');
 const generateInvoice = require('../utils/generateInvoice');
 const Order = require('../models/Order');
@@ -20,6 +18,20 @@ exports.markOrderDelivered = async (req, res) => {
     const pharmacy = await Pharmacy.findById(order.pharmacyId || order.pharmacy);
     const customer = await User.findById(order.customerId || order.userId);
 
+    // --- Company details for Platform Fee page (env-driven) ---
+    const company = {
+      name: process.env.COMPANY_NAME || 'Karniva Private Limited (GoDavaii)',
+      address: process.env.COMPANY_ADDRESS || 'Sector 62, Noida, Uttar Pradesh',
+      gstin: process.env.COMPANY_GSTIN || ''
+    };
+
+    // --- Platform fee (GROSS, tax-inclusive) to display in Platform Fee page ---
+    // Priority: order.fees.platform.gross -> order.platformFee -> ENV -> fallback 10
+    const platformFeeGross =
+      Number(order?.fees?.platform?.gross) ||
+      Number(order?.platformFee) ||
+      Number(process.env.PLATFORM_FEE_GROSS || 10);
+
     const invoiceBuffer = await generateInvoice({
       order: {
         invoiceNo: `GV-MED-${order._id}`,
@@ -37,7 +49,9 @@ exports.markOrderDelivered = async (req, res) => {
       customer: {
         name: customer?.name,
         address: order.address
-      }
+      },
+      company,
+      platformFeeGross
     });
 
     // --- S3 Upload ---
@@ -47,7 +61,6 @@ exports.markOrderDelivered = async (req, res) => {
       Key: s3Key,
       Body: invoiceBuffer,
       ContentType: 'application/pdf',
-       // acl: 'public-read',  // <-- Gone!
     }).promise();
 
     order.invoiceFile = s3Res.Location;
