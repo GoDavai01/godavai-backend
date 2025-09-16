@@ -1,5 +1,5 @@
 // utils/tax/webLookup.js
-// Bing + Google CSE → fetch HTML → extract HSN/GST → consensus with domain weighting.
+// Google CSE → fetch HTML → extract HSN/GST → consensus with domain weighting.
 
 const axios = require("axios");
 const cheerio = require("cheerio");
@@ -12,7 +12,6 @@ const FETCH_PAGES     = process.env.TAX_WEB_FETCH_PAGES !== "0";  // default ON
 const TIMEOUT_MS      = Number(process.env.TAX_WEB_TIMEOUT_MS || 4500);
 const MAX_RESULTS     = Number(process.env.TAX_WEB_MAX_RESULTS || 10);
 
-const BING_KEY        = process.env.BING_V7_KEY || process.env.BING_SUBSCRIPTION_KEY;
 const GOOGLE_CSE_KEY  = process.env.GOOGLE_CSE_KEY;
 const GOOGLE_CSE_ID   = process.env.GOOGLE_CSE_ID;
 
@@ -62,15 +61,13 @@ function extractFromHtml(html) {
   const $ = cheerio.load(html);
   const text = $("body").text().replace(/\s+/g, " ");
 
-  // try obvious patterns first
-  let hsn = normHSN(pick(/\bHSN(?:\s*code)?\s*[:\-]?\s*([0-9]{4,8})\b/i, text));
+  let hsn  = normHSN(pick(/\bHSN(?:\s*code)?\s*[:\-]?\s*([0-9]{4,8})\b/i, text));
   let rate = normRate(pick(/\b(?:GST|IGST|CGST|SGST|tax)\s*(?:rate)?\s*[:\-]?\s*([0-9]{1,2}(?:\.\d+)?)\s?%/i, text));
 
-  // scan small tables
   if ((!hsn || rate == null) && $("table").length) {
     $("table").each((_i, tbl) => {
       const t = $(tbl).text().replace(/\s+/g, " ");
-      if (!hsn)  hsn  = normHSN(pick(/\bHSN(?:\s*code)?\s*[:\-]?\s*([0-9]{4,8})\b/i, t));
+      if (!hsn)    hsn  = normHSN(pick(/\bHSN(?:\s*code)?\s*[:\-]?\s*([0-9]{4,8})\b/i, t));
       if (rate==null) rate = normRate(pick(/\b(?:GST|IGST|CGST|SGST|tax)\s*(?:rate)?\s*[:\-]?\s*([0-9]{1,2}(?:\.\d+)?)\s?%/i, t));
     });
   }
@@ -100,7 +97,7 @@ function consensus(cands) {
   const rateOut = rateStr === "?" ? null : Number(rateStr);
 
   // confidence = normalized weight + bonus for gov presence + having both fields + multiple hits
-  const govBonus = cands.some(c => c.isGov) ? 0.15 : 0.0;
+  const govBonus  = cands.some(c => c.isGov) ? 0.15 : 0.0;
   const bothBonus = (hsnOut && rateOut != null) ? 0.15 : 0.0;
   const hitsBonus = Math.min(0.15, (best.hits - 1) * 0.05);
   let conf = Math.max(0, Math.min(1, (best.weight / 3) + govBonus + bothBonus + hitsBonus));
@@ -108,20 +105,7 @@ function consensus(cands) {
   return { hsn: hsnOut, gstRate: rateOut, confidence: conf, any: best.any };
 }
 
-// ---- Search engines ----
-async function bing(q) {
-  if (!BING_KEY) return [];
-  const url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(q)}&mkt=en-IN`;
-  try {
-    const { data } = await axios.get(url, {
-      headers: { "Ocp-Apim-Subscription-Key": BING_KEY },
-      timeout: TIMEOUT_MS
-    });
-    const arr = (data.webPages && data.webPages.value) || [];
-    return arr.slice(0, MAX_RESULTS).map(v => ({ url: v.url, title: v.name, snippet: v.snippet }));
-  } catch { return []; }
-}
-
+// ---- Google CSE only ----
 async function google(q) {
   if (!GOOGLE_CSE_KEY || !GOOGLE_CSE_ID) return [];
   const url = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_CSE_KEY}&cx=${GOOGLE_CSE_ID}&q=${encodeURIComponent(q)}`;
@@ -129,20 +113,24 @@ async function google(q) {
     const { data } = await axios.get(url, { timeout: TIMEOUT_MS });
     const arr = data.items || [];
     return arr.slice(0, MAX_RESULTS).map(v => ({ url: v.link, title: v.title, snippet: v.snippet }));
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 async function fetchHtml(u) {
   try {
     const { data, headers } = await axios.get(u, {
       timeout: TIMEOUT_MS,
-      maxContentLength: 512 * 1024, // 512 KB
+      maxContentLength: 512 * 1024,
       headers: { "User-Agent": "Mozilla/5.0 (compatible; GodavaiiBot/1.0)" }
     });
     const ct = String(headers["content-type"] || "");
     if (!/text\/html|application\/xhtml\+xml/i.test(ct)) return null;
     return String(data);
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 function queryList(name) {
@@ -162,8 +150,7 @@ async function webLookup(name) {
   const candidates = [];
 
   for (const q of queries) {
-    const [b, g] = await Promise.all([bing(q), google(q)]);
-    const results = [...b, ...g];
+    const results = await google(q);
 
     for (const r of results) {
       const h = host(r.url);
@@ -193,7 +180,7 @@ async function webLookup(name) {
       }
     }
 
-    // if we already have several gov hits, stop early
+    // stop early if several gov hits already
     if (candidates.filter(c => c.isGov).length >= 3) break;
   }
 
@@ -202,8 +189,12 @@ async function webLookup(name) {
   const best = consensus(candidates);
   if (!best) return null;
 
-  // choose the best evidence (prefer gov + html-parsed)
-  candidates.sort((a,b) => (Number(b.isGov)-Number(a.isGov)) || (b.from==="html")-(a.from==="html") || (b.domainWeight - a.domainWeight));
+  // choose best evidence (prefer gov + html)
+  candidates.sort((a,b) =>
+    (Number(b.isGov)-Number(a.isGov)) ||
+    ((b.from==="html") - (a.from==="html")) ||
+    (b.domainWeight - a.domainWeight)
+  );
   const ev = candidates[0];
 
   return {
