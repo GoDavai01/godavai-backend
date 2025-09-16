@@ -1,0 +1,57 @@
+{
+  "hsn": "3004",
+  "gstRate": 0,
+  "since": "2025-09-22",
+  "source": "GST Council zero-rate list (Sep 2025)",
+  "items": [
+    "Agalsidase Beta",
+    "Imiglucerase",
+    "Eptacog alfa (activated recombinant coagulation factor VIIa)",
+
+    "Onasemnogene abeparvovec",
+    "Asciminib",
+    "Mepolizumab",
+    "Pegylated Liposomal Irinotecan",
+    "Daratumumab",
+    "Daratumumab subcutaneous",
+    "Teclistamab",
+    "Amivantamab",
+    "Alectinib",
+    "Risdiplam",
+    "Obinutuzumab",
+    "Polatuzumab vedotin",
+    "Entrectinib",
+    "Atezolizumab",
+    "Spesolimab",
+    "Velaglucerase Alpha",
+    "Agalsidase Alfa",
+    "Rurioctocog Alpha Pegol",
+    "Idursulphatase",
+    "Alglucosidase Alfa",
+    "Laronidase",
+    "Olipudase Alfa",
+    "Tepotinib",
+    "Avelumab",
+    "Emicizumab",
+    "Belumosudil",
+    "Miglustat",
+    "Velmanase Alfa",
+    "Alirocumab",
+    "Evolocumab",
+    "Cystamine Bitartrate",
+    "C1-Inhibitor injection",
+    "Inclisiran"
+  ],
+  "aliases": {
+    "Eptacog alfa (activated recombinant coagulation factor VIIa)":[
+      "Eptacog alfa","rFVIIa","factor VIIa"
+    ],
+    "Velaglucerase Alpha": ["Velaglucerase Alfa"],
+    "Agalsidase Alfa": ["Agalsidase Alpha"],
+    "Olipudase Alfa": ["Olipudase Alpha"],
+    "Alglucosidase Alfa": ["Alglucosidase Alpha"],
+    "Rurioctocog Alpha Pegol": ["Rurioctocog alfa pegol","ReFacto AF","Eloctate"],
+    "Idursulphatase": ["Iduronate-2-sulfatase","Idursulfase"],
+    "C1-Inhibitor injection": ["C1 inhibitor injection","C1 esterase inhibitor"]
+  }
+}

@@ -75,7 +75,6 @@ function extractFromHtml(html) {
 }
 
 function consensus(cands) {
-  // cluster by pair (hsn|null, rate|null) and weight by domain trust * extraction source
   const key = (h, r) => `${h||"?"}|${r??"?"}`;
   const buckets = new Map();
   for (const c of cands) {
@@ -86,17 +85,16 @@ function consensus(cands) {
     prev.hits += 1;
     buckets.set(k, prev);
   }
-  let best = null, bestKey = null;
+  let best = null;
   for (const [k, v] of buckets) {
-    if (!best || v.weight > best.weight) { best = v; bestKey = k; }
+    if (!best || v.weight > best.weight) { best = v; }
   }
   if (!best) return null;
 
-  const [hsn, rateStr] = bestKey.split("|");
-  const hsnOut = hsn === "?" ? null : hsn;
-  const rateOut = rateStr === "?" ? null : Number(rateStr);
+  const [hsn, rateStr] = (best.any.hsn || "?") + "|" + (best.any.gstRate ?? "?");
+  const hsnOut = best.any.hsn || null;
+  const rateOut = best.any.gstRate ?? null;
 
-  // confidence = normalized weight + bonus for gov presence + having both fields + multiple hits
   const govBonus  = cands.some(c => c.isGov) ? 0.15 : 0.0;
   const bothBonus = (hsnOut && rateOut != null) ? 0.15 : 0.0;
   const hitsBonus = Math.min(0.15, (best.hits - 1) * 0.05);
@@ -105,7 +103,7 @@ function consensus(cands) {
   return { hsn: hsnOut, gstRate: rateOut, confidence: conf, any: best.any };
 }
 
-// ---- Google CSE only ----
+// ---- Google CSE ----
 async function google(q) {
   if (!GOOGLE_CSE_KEY || !GOOGLE_CSE_ID) return [];
   const url = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_CSE_KEY}&cx=${GOOGLE_CSE_ID}&q=${encodeURIComponent(q)}`;
@@ -180,16 +178,13 @@ async function webLookup(name) {
       }
     }
 
-    // stop early if several gov hits already
     if (candidates.filter(c => c.isGov).length >= 3) break;
   }
 
   if (!candidates.length) return null;
-
   const best = consensus(candidates);
   if (!best) return null;
 
-  // choose best evidence (prefer gov + html)
   candidates.sort((a,b) =>
     (Number(b.isGov)-Number(a.isGov)) ||
     ((b.from==="html") - (a.from==="html")) ||
