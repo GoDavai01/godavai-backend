@@ -147,15 +147,12 @@ async function pageMedicines(doc, { order, pharmacy, customer }) {
   // next section starts after the taller column
   let curY = Math.max(yL, yR) + 6;
 
-  // Customer
-  doc.font("Helvetica-Bold").text("Customer:", 40, curY, { continued: true })
-     .font("Helvetica").text(" " + (order.customerName || customer?.name || ""));
-  curY = doc.y;
-  doc.font("Helvetica-Bold").text("Address:", 40, curY, { continued: true })
-     .font("Helvetica").text(" " + getPrintableAddress(order.customerAddress || customer?.address));
+  // Customer (consistent spacing using drawKV)
+  const custLabelW = 120;
+  curY = drawKV(doc, { x:40, y:curY, label:"Customer:", value:(order.customerName || customer?.name || ""), labelW:custLabelW, colW:515, gapY:4 });
+  curY = drawKV(doc, { x:40, y:curY, label:"Address:",  value:getPrintableAddress(order.customerAddress || customer?.address), labelW:custLabelW, colW:515, gapY:6 });
   if (order.customerGSTIN || customer?.gstin) {
-    doc.font("Helvetica-Bold").text("Customer GSTIN:", 40, doc.y, { continued: true })
-       .font("Helvetica").text(" " + (order.customerGSTIN || customer?.gstin));
+    curY = drawKV(doc, { x:40, y:curY, label:"Customer GSTIN:", value:(order.customerGSTIN || customer?.gstin), labelW:custLabelW, colW:515, gapY:6 });
   }
 
   // rule
@@ -307,12 +304,12 @@ function addSignatureBlock(doc, company) {
     doc.rect(signLeft + 25, signTop + 5, 120, 45).strokeColor("#CCCCCC").lineWidth(1).stroke();
   }
 
-  // line + name/title
+  // line + name/title (tidy caption)
   doc.moveTo(signLeft + 25, lineY).lineTo(signLeft + 170, lineY).strokeColor("#000").lineWidth(0.7).stroke();
   const nm = company.signatoryName || "Authorized Signatory";
-  const tl = company.signatoryTitle || "";
+  const tl = company.signatoryTitle || "Authorized Signatory";
   doc.font("Helvetica").fontSize(9).text(nm, signLeft + 25, lineY + 4);
-  if (tl) doc.text(tl, signLeft + 25, lineY + 16);
+  if (tl && tl !== nm) doc.text(tl, signLeft + 25, lineY + 16);
 }
 
 // ============================================================
@@ -375,15 +372,12 @@ function pagePlatformFee(doc, { order, company = {}, customer = {}, platformFeeG
   // ensure next section starts below the taller column
   let curY = Math.max(yL, yR) + 6;
 
-  // Customer (falls back to page-1 data)
-  doc.font("Helvetica-Bold").text("Customer:", 40, curY, { continued: true })
-     .font("Helvetica").text(" " + (order.customerName || customer?.name || ""));
-  curY = doc.y;
-  doc.font("Helvetica-Bold").text("Customer Address:", 40, curY, { continued: true })
-     .font("Helvetica").text(" " + getPrintableAddress(order.customerAddress || customer?.address));
+  // Customer (falls back to page-1 data) — consistent spacing
+  const custLabelW = 140;
+  curY = drawKV(doc, { x:40, y:curY, label:"Customer:", value:(order.customerName || customer?.name || ""), labelW:custLabelW, colW:515, gapY:4 });
+  curY = drawKV(doc, { x:40, y:curY, label:"Customer Address:", value:getPrintableAddress(order.customerAddress || customer?.address), labelW:custLabelW, colW:515, gapY:6 });
   if (order.customerGSTIN || customer?.gstin) {
-    doc.font("Helvetica-Bold").text("Customer GSTIN:", 40, doc.y, { continued: true })
-       .font("Helvetica").text(" " + (order.customerGSTIN || customer?.gstin));
+    curY = drawKV(doc, { x:40, y:curY, label:"Customer GSTIN:", value:(order.customerGSTIN || customer?.gstin), labelW:custLabelW, colW:515, gapY:6 });
   }
 
   // rule
@@ -405,7 +399,7 @@ function pagePlatformFee(doc, { order, company = {}, customer = {}, platformFeeG
 
   if (isInterState) {
     // IGST: S.No | Description | SAC | Taxable INR | IGST % | IGST INR | Total INR
-    const col = { sno:30, desc:235, code:60, taxable:70, igstPct:32, igstAmt:44, total:44 }; // =515
+    const col = { sno:30, desc:235, code:60, taxable:70, igstPct:32, igstAmt:44, total:44 }; // 515
     const x = {
       sno:40,
       desc:40+col.sno,
@@ -441,7 +435,7 @@ function pagePlatformFee(doc, { order, company = {}, customer = {}, platformFeeG
     doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor("#E0E0E0").lineWidth(0.5).stroke();
   } else {
     // CGST/SGST: widths sum EXACTLY 515 (prevents overflow)
-    const col = { sno:30, desc:190, code:55, taxable:70, cgstPct:30, cgstAmt:40, sgstPct:30, sgstAmt:40, total:30 }; // =515
+    const col = { sno:30, desc:190, code:55, taxable:70, cgstPct:30, cgstAmt:40, sgstPct:30, sgstAmt:40, total:30 }; // 515
     const x = {
       sno:40,
       desc:40+col.sno,
@@ -494,6 +488,11 @@ function pagePlatformFee(doc, { order, company = {}, customer = {}, platformFeeG
   doc.moveDown(0.6);
   if (order.paymentRef) doc.font("Helvetica").fontSize(10).text(`Payment Ref: ${order.paymentRef}`);
   doc.font("Helvetica").fontSize(10).text(`Payment Mode: ${formatPaymentMode(order.paymentMode)}`, 40, doc.y);
+
+  // Amount in Words for Platform page
+  doc.moveDown(0.6);
+  doc.font("Helvetica-Bold").fontSize(10).text("Amount in Words: ", 40, doc.y, { continued: true });
+  doc.font("Helvetica").fontSize(10).text(amountInWords(gross));
 
   // Signature block (image or fallback)
   addSignatureBlock(doc, company);
