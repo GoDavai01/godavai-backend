@@ -1,6 +1,6 @@
 // uploads/generateInvoice.js
-// Page 1: Pharmacy invoice (compact table with "Item(s) Total" row; no right-side totals box)
-// Page 2: Platform Fee invoice (18% tax-inclusive)
+// Page 1: Product (pharmacy) invoice – compact table + inline Amount in Words
+// Page 2: Platform Fee invoice – compact table (no extra summary box)
 // Contact: support@godavaii.com
 
 const PDFDocument = require("pdfkit");
@@ -21,10 +21,9 @@ function getPrintableAddress(addr) {
   return rest.length ? rest.join(", ") : JSON.stringify(addr);
 }
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
-const fmtINR = (n) => (r2(n)).toFixed(2);               // numbers only in table cells
-const money = (n) => "INR " + (r2(n)).toFixed(2);       // text blocks
+const fmtINR = (n) => (r2(n)).toFixed(2);          // table cells
+const money  = (n) => "INR " + (r2(n)).toFixed(2); // narrative text
 
-// Given a GROSS amount (inclusive) and rate%, return base+tax
 function splitInclusive(lineTotal, ratePct) {
   const denom = 1 + (ratePct || 0) / 100;
   const base = lineTotal / denom;
@@ -32,25 +31,21 @@ function splitInclusive(lineTotal, ratePct) {
   return { base, tax };
 }
 
-// Amount in words (Indian numbering; rupees only, no paise)
+// Amount in words (Indian numbering; rupees only)
 function amountInWords(num) {
   num = Math.round(Number(num) || 0);
   if (num === 0) return "Zero Rupees Only";
   const a = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
   const b = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
-  const toWords = (n, s) => n ? (n < 20 ? a[n] : b[Math.floor(n/10)] + (n%10 ? " " + a[n%10] : "")) + (s ? " " + s : "") : "";
-  const crore = Math.floor(num / 10000000);
-  const lakh = Math.floor((num / 100000) % 100);
-  const thousand = Math.floor((num / 1000) % 100);
-  const hundred = Math.floor((num / 100) % 10);
-  const rest = Math.floor(num % 100);
-  let str = "";
-  str += toWords(crore, "Crore");
-  str += (str && lakh ? " " : "") + toWords(lakh, "Lakh");
-  str += (str && thousand ? " " : "") + toWords(thousand, "Thousand");
-  str += (str && hundred ? " " : "") + (hundred ? a[hundred] + " Hundred" : "");
-  if (rest) str += (str ? " and " : "") + toWords(rest, "");
-  return str + " Rupees Only";
+  const tw = (n,s)=>n?(n<20?a[n]:b[Math.floor(n/10)]+(n%10?" "+a[n%10]:""))+(s?" "+s:""):"";
+  const c = Math.floor(num/1e7), l = Math.floor((num/1e5)%100), t = Math.floor((num/1e3)%100), h = Math.floor((num/100)%10), r = Math.floor(num%100);
+  let s = "";
+  s += tw(c,"Crore");
+  s += (s&&l?" ":"")+tw(l,"Lakh");
+  s += (s&&t?" ":"")+tw(t,"Thousand");
+  s += (s&&h?" ":"")+(h? a[h]+" Hundred":"");
+  if (r) s += (s?" and ":"")+tw(r,"");
+  return s+" Rupees Only";
 }
 
 function header(doc, subtitleLeft) {
@@ -68,13 +63,13 @@ function header(doc, subtitleLeft) {
 function formatPaymentMode(mode) {
   const m = String(mode || "").toLowerCase();
   if (["cod","cash_on_delivery","cash on delivery"].includes(m)) return "CASH ON DELIVERY";
-  if (["upi"].includes(m)) return "UPI";
+  if (m.includes("upi")) return "UPI";
   if (["card","cards","debit","credit"].includes(m)) return "CARD";
   if (["netbanking","net_banking","nb"].includes(m)) return "NET BANKING";
   return m ? m.toUpperCase() : "";
 }
 
-// ---------- Page 1: Medicines (pharmacy invoice) ----------
+// ---------- Page 1: Pharmacy products ----------
 async function pageMedicines(doc, { order, pharmacy, customer }) {
   const primary = "#13C0A2";
   const tableHeaderBG = "#EAF7F2";
@@ -82,16 +77,16 @@ async function pageMedicines(doc, { order, pharmacy, customer }) {
 
   header(doc, "Invoice for Medicine Purchase");
 
-  // Invoice & Pharmacy Info (two columns)
+  // Invoice & Pharmacy Info
   doc.moveDown(0.7).font("Helvetica").fontSize(10).fillColor("black");
   const startY = doc.y;
 
-  // Left column
+  // Left
   doc.font("Helvetica-Bold").text(`Invoice No:`, 40, startY, { continued: true }).font("Helvetica").text(` ${order.invoiceNo || ""}`);
   doc.font("Helvetica-Bold").text(`Order ID:`, 40, doc.y, { continued: true }).font("Helvetica").text(` ${order.orderId || ""}`);
   doc.font("Helvetica-Bold").text(`Invoice Date:`, 40, doc.y, { continued: true }).font("Helvetica").text(` ${order.date || ""}`);
 
-  // Right column
+  // Right
   const rightColX = 320;
   let pharmacyY = startY;
   doc.font("Helvetica-Bold").text(`Pharmacy:`, rightColX, pharmacyY);
@@ -108,19 +103,18 @@ async function pageMedicines(doc, { order, pharmacy, customer }) {
   doc.font("Helvetica-Bold").text(`Customer:`, 40, doc.y, { continued: true }).font("Helvetica").text(` ${order.customerName || customer?.name || ""}`);
   doc.font("Helvetica-Bold").text(`Address:`, 40, doc.y, { continued: true }).font("Helvetica").text(` ${getPrintableAddress(order.customerAddress || customer?.address)}`);
 
-  // Table header line
+  // Table header rule
   doc.moveDown(0.6);
   doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor(tableHeaderBG).lineWidth(1.5).stroke();
 
   const tableY = doc.y + 8;
 
-  // Column widths (sum = 515px)
-  // S.No(30) | Name(170) | HSN(44) | Qty(28) | Taxable INR(60) | CGST %(32) | CGST INR(44) | SGST %(32) | SGST INR(44) | Total INR(31)
+  // Column widths (sum = 515)
+  // S.No(30) | Product(170) | HSN(44) | Qty(28) | Taxable INR(60) | CGST %(32) | CGST INR(44) | SGST %(32) | SGST INR(44) | Total INR(31)
   const col = {
     sno: 30, name: 170, hsn: 44, qty: 28, taxable: 60,
     cgstPct: 32, cgstAmt: 44, sgstPct: 32, sgstAmt: 44, total: 31, x: 40,
   };
-
   const x = {
     sno: col.x,
     name: col.x + col.sno,
@@ -134,26 +128,24 @@ async function pageMedicines(doc, { order, pharmacy, customer }) {
     total:   col.x + col.sno + col.name + col.hsn + col.qty + col.taxable + col.cgstPct + col.cgstAmt + col.sgstPct + col.sgstAmt,
   };
 
-  // Header row (taller = no clipping)
-  const headerH = 26;
+  // Header (two-line labels for INR and %)
+  const headerH = 28;
   doc.rect(40, tableY, 515, headerH).fill(tableHeaderBG).stroke();
   doc.font("Helvetica-Bold").fontSize(9).fillColor(primary)
-    .text("S.No",        x.sno,     tableY + 7, { width: col.sno,   align: "left" })
-    .text("Medicine",    x.name,    tableY + 7, { width: col.name })
-    .text("HSN",         x.hsn,     tableY + 7, { width: col.hsn,   align: "center" })
-    .text("Qty",         x.qty,     tableY + 7, { width: col.qty,   align: "center" })
-    .text("Taxable INR", x.taxable, tableY + 7, { width: col.taxable, align: "right" })
-    .text("CGST %",      x.cgstPct, tableY + 7, { width: col.cgstPct, align: "center" })
-    .text("CGST INR",    x.cgstAmt, tableY + 7, { width: col.cgstAmt, align: "right" })
-    .text("SGST %",      x.sgstPct, tableY + 7, { width: col.sgstPct, align: "center" })
-    .text("SGST INR",    x.sgstAmt, tableY + 7, { width: col.sgstAmt, align: "right" })
-    .text("Total INR",   x.total,   tableY + 7, { width: col.total, align: "right" });
+    .text("S.No",        x.sno,     tableY + 6, { width: col.sno,   align: "left" })
+    .text("Product",     x.name,    tableY + 6, { width: col.name })
+    .text("HSN",         x.hsn,     tableY + 6, { width: col.hsn,   align: "center" })
+    .text("Qty",         x.qty,     tableY + 6, { width: col.qty,   align: "center" })
+    .text("Taxable\nINR",x.taxable, tableY + 4, { width: col.taxable, align: "center" })
+    .text("CGST\n%",     x.cgstPct, tableY + 4, { width: col.cgstPct, align: "center" })
+    .text("CGST\nINR",   x.cgstAmt, tableY + 4, { width: col.cgstAmt, align: "center" })
+    .text("SGST\n%",     x.sgstPct, tableY + 4, { width: col.sgstPct, align: "center" })
+    .text("SGST\nINR",   x.sgstAmt, tableY + 4, { width: col.sgstAmt, align: "center" })
+    .text("Total\nINR",  x.total,   tableY + 4, { width: col.total, align: "center" });
 
-  // Classify all items first
+  // Classify items
   const items = Array.isArray(order.items) ? order.items : [];
-  const cls = await Promise.all(items.map(async (it) => {
-    try { return await classifyHSNandGST(it); } catch { return null; }
-  }));
+  const cls = await Promise.all(items.map(async (it) => { try { return await classifyHSNandGST(it); } catch { return null; } }));
 
   // Totals
   let grossSum = 0, baseSum = 0, cgstSum = 0, sgstSum = 0;
@@ -175,7 +167,6 @@ async function pageMedicines(doc, { order, pharmacy, customer }) {
 
     grossSum += lineGross; baseSum += base; cgstSum += cgstAmt; sgstSum += sgstAmt;
 
-    // row
     doc.text(String(i + 1), x.sno, rowY + 6, { width: col.sno });
     doc.text((it.name || ""), x.name, rowY + 6, { width: col.name });
     doc.text((cls[i]?.hsn ? String(cls[i].hsn) : (it.hsn || "")), x.hsn, rowY + 6, { width: col.hsn, align: "center" });
@@ -190,26 +181,25 @@ async function pageMedicines(doc, { order, pharmacy, customer }) {
     rowY += rowH;
     doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor(lightGrey).lineWidth(0.5).stroke();
 
-    // page break
     if (rowY > 680) {
       doc.addPage(); header(doc, "Medicines (contd.)"); rowY = doc.y + 16;
       doc.rect(40, rowY, 515, headerH).fill(tableHeaderBG).stroke();
       doc.font("Helvetica-Bold").fontSize(9).fillColor(primary)
-        .text("S.No", x.sno, rowY + 7, { width: col.sno })
-        .text("Medicine", x.name, rowY + 7, { width: col.name })
-        .text("HSN", x.hsn, rowY + 7, { width: col.hsn, align: "center" })
-        .text("Qty", x.qty, rowY + 7, { width: col.qty, align: "center" })
-        .text("Taxable INR", x.taxable, rowY + 7, { width: col.taxable, align: "right" })
-        .text("CGST %", x.cgstPct, rowY + 7, { width: col.cgstPct, align: "center" })
-        .text("CGST INR", x.cgstAmt, rowY + 7, { width: col.cgstAmt, align: "right" })
-        .text("SGST %", x.sgstPct, rowY + 7, { width: col.sgstPct, align: "center" })
-        .text("SGST INR", x.sgstAmt, rowY + 7, { width: col.sgstAmt, align: "right" })
-        .text("Total INR", x.total, rowY + 7, { width: col.total, align: "right" });
+        .text("S.No", x.sno, rowY + 6, { width: col.sno })
+        .text("Product", x.name, rowY + 6, { width: col.name })
+        .text("HSN", x.hsn, rowY + 6, { width: col.hsn, align: "center" })
+        .text("Qty", x.qty, rowY + 6, { width: col.qty, align: "center" })
+        .text("Taxable\nINR", x.taxable, rowY + 4, { width: col.taxable, align: "center" })
+        .text("CGST\n%", x.cgstPct, rowY + 4, { width: col.cgstPct, align: "center" })
+        .text("CGST\nINR", x.cgstAmt, rowY + 4, { width: col.cgstAmt, align: "center" })
+        .text("SGST\n%", x.sgstPct, rowY + 4, { width: col.sgstPct, align: "center" })
+        .text("SGST\nINR", x.sgstAmt, rowY + 4, { width: col.sgstAmt, align: "center" })
+        .text("Total\nINR", x.total, rowY + 4, { width: col.total, align: "center" });
       rowY += headerH;
     }
   }
 
-  // --- "Item(s) Total" final row inside the table ---
+  // Item(s) Total row
   if (rowY > 680) { doc.addPage(); header(doc, "Medicines (contd.)"); rowY = doc.y + 16; }
   doc.rect(40, rowY, 515, rowH).fill("#F7F7F7").strokeColor("#E0E0E0").lineWidth(0.5).stroke();
   doc.font("Helvetica-Bold").fontSize(9).fillColor("black")
@@ -222,13 +212,12 @@ async function pageMedicines(doc, { order, pharmacy, customer }) {
 
   rowY += rowH;
 
-  // --- Bottom: Amount in Words (left), nothing on right ---
+  // Bottom: Amount in Words (inline, left)
   doc.moveTo(40, rowY + 8).lineTo(555, rowY + 8).strokeColor(primary).lineWidth(1).stroke();
   const words = amountInWords(grossSum);
   doc.font("Helvetica-Bold").fontSize(10).fillColor("black")
-    .text("Amount in Words:", 40, rowY + 16, { width: 160, align: "left" });
-  doc.font("Helvetica").fontSize(10)
-    .text(words, 40 + 160 + 8, rowY + 16, { width: 300, align: "left" });
+    .text("Amount in Words: ", 40, rowY + 16, { continued: true });
+  doc.font("Helvetica").fontSize(10).text(words);
 
   // Payment + footer
   doc.moveDown(1.8);
@@ -239,16 +228,13 @@ async function pageMedicines(doc, { order, pharmacy, customer }) {
   doc.fontSize(8).fillColor("#888").font("Helvetica")
     .text("Note: This invoice page is issued by the pharmacy for medicines.", 40, 730)
     .text("GoDavaii acts as a facilitator for orders and delivery.", 40, 742);
-
   doc.fontSize(10).fillColor(primary).font("Helvetica-Bold")
     .text("Thank you for choosing GODAVAII", 40, 760, { align: "center" });
   doc.fontSize(9).fillColor("black").font("Helvetica")
     .text("www.godavaii.com | support@godavaii.com", { align: "center" });
-
-  return { totalPayable: grossSum };
 }
 
-// ---------- Page 2: Platform Fee ----------
+// ---------- Page 2: Platform Fee (compact box) ----------
 function pagePlatformFee(doc, { order, company, platformFeeGross }) {
   const primary = "#13C0A2";
   const tableHeaderBG = "#EAF7F2";
@@ -256,7 +242,7 @@ function pagePlatformFee(doc, { order, company, platformFeeGross }) {
   doc.addPage();
   header(doc, "Platform Fee Tax Invoice");
 
-  // Left: Company (platform/service provider)
+  // Left: Company (service provider)
   doc.moveDown(0.7).font("Helvetica").fontSize(10).fillColor("black");
   const startY = doc.y;
   doc.font("Helvetica-Bold").text(`Platform (Service Provider):`, 40, startY);
@@ -276,50 +262,66 @@ function pagePlatformFee(doc, { order, company, platformFeeGross }) {
   doc.moveDown(0.6);
   doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor(tableHeaderBG).lineWidth(1.5).stroke();
 
-  // Line item (tax inclusive 18%)
-  const gross = Number(platformFeeGross || 0);
-  const { base, tax } = splitInclusive(gross, 18);
-
-  // Table header
+  // Table header (S.No | Description | HSN (SAC) | Qty | Taxable INR | CGST % | CGST INR | SGST % | SGST INR | Line Total INR)
   const tY = doc.y + 8;
-  const col = { sno: 50, desc: 90, gst: 420, amt: 480 };
-  doc.rect(40, tY, 515, 22).fill(tableHeaderBG).stroke();
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(primary)
-    .text("S.No", col.sno, tY + 6, { width: 35 })
-    .text("Description", col.desc, tY + 6, { width: 300 })
-    .text("GST %", col.gst, tY + 6, { width: 50, align: "center" })
-    .text("Amount (Incl. GST)", col.amt, tY + 6, { width: 75, align: "center" });
-
-  // Row
-  let rowY = tY + 22;
-  doc.font("Helvetica").fontSize(10).fillColor("black");
-  doc.text(1, col.sno, rowY + 6, { width: 35 });
-  doc.text("Platform Fee (tax inclusive)", col.desc, rowY + 6, { width: 300 });
-  doc.text("18%", col.gst, rowY + 6, { width: 50, align: "center" });
-  doc.text(money(gross), col.amt, rowY + 6, { width: 75, align: "center" });
-
-  rowY += 22;
-  doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor("#F4F4F4").lineWidth(0.5).stroke();
-
-  // Summary (base + included GST + total)
-  const summaryX = 340, labelW = 170, valueW = 95;
-  let sumY = rowY + 16;
-
-  const line = (label, value) => {
-    doc.font("Helvetica-Bold").fontSize(11).text(label, summaryX, sumY, { width: labelW, align: "right" });
-    doc.font("Helvetica").text(money(value), summaryX + labelW + 5, sumY, { width: valueW, align: "right" });
-    sumY += 17;
+  const col = {
+    sno: 30, desc: 190, hsn: 60, qty: 28, taxable: 60, cgstPct: 32, cgstAmt: 44, sgstPct: 32, sgstAmt: 44, total: 35
+  };
+  const x = {
+    sno: 40,
+    desc: 40 + col.sno,
+    hsn: 40 + col.sno + col.desc,
+    qty: 40 + col.sno + col.desc + col.hsn,
+    taxable: 40 + col.sno + col.desc + col.hsn + col.qty,
+    cgstPct: 40 + col.sno + col.desc + col.hsn + col.qty + col.taxable,
+    cgstAmt: 40 + col.sno + col.desc + col.hsn + col.qty + col.taxable + col.cgstPct,
+    sgstPct: 40 + col.sno + col.desc + col.hsn + col.qty + col.taxable + col.cgstPct + col.cgstAmt,
+    sgstAmt: 40 + col.sno + col.desc + col.hsn + col.qty + col.taxable + col.cgstPct + col.cgstAmt + col.sgstPct,
+    total:   40 + col.sno + col.desc + col.hsn + col.qty + col.taxable + col.cgstPct + col.cgstAmt + col.sgstPct + col.sgstAmt,
   };
 
-  line("Taxable Value (Platform Fee):", base);
-  line("GST @ 18% (included):", tax);
+  const headerH = 28;
+  doc.rect(40, tY, 515, headerH).fill(tableHeaderBG).stroke();
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(primary)
+    .text("S.No",          x.sno,     tY + 6, { width: col.sno })
+    .text("Description",   x.desc,    tY + 6, { width: col.desc })
+    .text("HSN (SAC)",     x.hsn,     tY + 6, { width: col.hsn, align: "center" })
+    .text("Qty",           x.qty,     tY + 6, { width: col.qty, align: "center" })
+    .text("Taxable\nINR",  x.taxable, tY + 4, { width: col.taxable, align: "center" })
+    .text("CGST\n%",       x.cgstPct, tY + 4, { width: col.cgstPct, align: "center" })
+    .text("CGST\nINR",     x.cgstAmt, tY + 4, { width: col.cgstAmt, align: "center" })
+    .text("SGST\n%",       x.sgstPct, tY + 4, { width: col.sgstPct, align: "center" })
+    .text("SGST\nINR",     x.sgstAmt, tY + 4, { width: col.sgstAmt, align: "center" })
+    .text("Line Total\nINR", x.total, tY + 4, { width: col.total, align: "center" });
 
-  // Divider + total
-  doc.moveTo(summaryX, sumY + 4).lineTo(summaryX + labelW + valueW + 20, sumY + 4).strokeColor(primary).lineWidth(1).stroke();
-  sumY += 12;
-  doc.font("Helvetica-Bold").fontSize(13).fillColor(primary)
-    .text("Platform Fee Total:", summaryX, sumY, { width: labelW, align: "right" })
-    .text(money(gross), summaryX + labelW + 5, sumY, { width: valueW, align: "right" });
+  // Row (assume intra-state by default → CGST+SGST; set order.isInterState = true to switch to IGST)
+  const gross = Number(platformFeeGross || 0);
+  const GST_RATE = 18;
+  const { base, tax } = splitInclusive(gross, GST_RATE);
+  const isInterState = !!order?.isInterState;
+
+  const cgstPct = isInterState ? 0 : GST_RATE / 2;
+  const sgstPct = isInterState ? 0 : GST_RATE / 2;
+  const cgstAmt = isInterState ? 0 : tax / 2;
+  const sgstAmt = isInterState ? 0 : tax / 2;
+
+  let rowY = tY + headerH;
+  const rowH = 22;
+  doc.font("Helvetica").fontSize(9).fillColor("black");
+  doc.text("1", x.sno, rowY + 6, { width: col.sno });
+  doc.text("Platform/Delivery Fee", x.desc, rowY + 6, { width: col.desc });
+  doc.text("9969", x.hsn, rowY + 6, { width: col.hsn, align: "center" }); // 9969 covers other support services; change if you classify differently
+  doc.text("1", x.qty, rowY + 6, { width: col.qty, align: "center" });
+  doc.text(fmtINR(base), x.taxable, rowY + 6, { width: col.taxable, align: "right" });
+  doc.text(cgstPct.toFixed(1), x.cgstPct, rowY + 6, { width: col.cgstPct, align: "center" });
+  doc.text(fmtINR(cgstAmt), x.cgstAmt, rowY + 6, { width: col.cgstAmt, align: "right" });
+  doc.text(sgstPct.toFixed(1), x.sgstPct, rowY + 6, { width: col.sgstPct, align: "center" });
+  doc.text(fmtINR(sgstAmt), x.sgstAmt, rowY + 6, { width: col.sgstAmt, align: "right" });
+  doc.text(fmtINR(gross), x.total, rowY + 6, { width: col.total, align: "right" });
+
+  // underline
+  rowY += rowH;
+  doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor("#E0E0E0").lineWidth(0.5).stroke();
 
   // Payment + footer
   doc.moveDown(1.0);
@@ -330,7 +332,6 @@ function pagePlatformFee(doc, { order, company, platformFeeGross }) {
   doc.fontSize(8).fillColor("#888").font("Helvetica")
     .text("Note: This invoice page is issued by GoDavaii for platform/service fee.", 40, 730)
     .text("For medicines, please refer to the previous page issued by the pharmacy.", 40, 742);
-
   doc.fontSize(10).fillColor(primary).font("Helvetica-Bold")
     .text("Thank you for choosing GODAVAII", 40, 760, { align: "center" });
   doc.fontSize(9).fillColor("black").font("Helvetica")
