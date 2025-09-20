@@ -7,7 +7,12 @@ const MasterBrand = require("../models/MasterBrand");
 const MasterComposition = require("../models/MasterComposition");
 const { toNameKey, parseTypeStrengthPack } = require("../utils/text");
 
-const MONGO_URL = process.env.MONGO_URL || process.env.MONGODB_URI || "mongodb://localhost:27017/yourdb";
+// 👇 add MONGO_URI and a 127.0.0.1 fallback
+const MONGO_URL =
+  process.env.MONGO_URI ||
+  process.env.MONGODB_URI ||
+  process.env.MONGO_URL ||
+  "mongodb://127.0.0.1:27017/godavaii";
 
 (async () => {
   await mongoose.connect(MONGO_URL);
