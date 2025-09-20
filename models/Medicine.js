@@ -33,7 +33,7 @@ const MedicineSchema = new mongoose.Schema(
 
     // NEW: taxation (kept server-side; do NOT show to customers)
     hsn: { type: String, trim: true, default: "" },              // e.g., "3004"
-    gstRate: { type: Number, enum: [0, 5, 12, 18], default: 0 }, // keep default 0 to be safe
+    gstRate: { type: Number, enum: [0, 5, 12, 18], default: 5 }, // keep default 0 to be safe
 
     // NEW: pack size
     packCount: { type: Number, min: 0, default: 0 },             // e.g., 10
