@@ -379,7 +379,9 @@ router.get("/all", async (req, res) => {
       ...filter,
       status: { $ne: "unavailable" },
       available: { $ne: false },
-    }).populate(
+    })
+    .select("-hsn -gstRate")
+    .populate(
       "pharmacy",
       "name area city"
     );
@@ -603,6 +605,11 @@ router.get("/medicines", async (req, res) => {
           }
         }))
       );
+    }
+    // PRIVACY: strip tax fields before sending to clients
+    for (const m of meds) {
+      delete m.hsn;
+      delete m.gstRate;
     }
 
     res.json(meds);

@@ -552,7 +552,6 @@ app.get("/api/admin/stats", async (req, res) => {
 });
 
 // ======= ADMIN PENDING PHARMACIES =======
-// GET /api/admin/pending-pharmacies (admin only)
 app.get("/api/admin/pending-pharmacies", async (req, res) => {
   try {
     // Only show pharmacies that are not yet approved
@@ -563,7 +562,6 @@ app.get("/api/admin/pending-pharmacies", async (req, res) => {
   }
 });
 // ======= ADMIN APPROVE PHARMACY =======
-// POST /api/admin/approve-pharmacy
 app.post("/api/admin/approve-pharmacy", async (req, res) => {
   try {
     const { pharmacyId } = req.body;
@@ -794,7 +792,9 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
       // tolerate brand-only (UI sets name from brand)
       const {
         name, brand, price, mrp, stock,
-        category, discount, composition, company, type, customType, prescriptionRequired
+        category, discount, composition, company, type, customType, prescriptionRequired,
+        // NEW:
+        productKind, hsn, gstRate, packCount, packUnit
       } = req.body || {};
 
       if (!pharmacyId || (!name && !brand) || price === undefined || mrp === undefined || stock === undefined || !category) {
@@ -842,11 +842,34 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
             : "/uploads/medicines/" + (f.filename || f.key)
         );
 
-      const mergedName = (name && name.toString().trim()) || (brand && brand.toString().trim());
+      // NEW parsers for productKind/HSN/GST/pack fields + merged name logic
+      const S  = v => (v ?? "").toString().trim();
+      const N  = v => (v === "" || v == null) ? undefined : Number(v);
+      const D4 = s => S(s).replace(/[^\d]/g, "");
+
+      const kind     = (S(productKind) === "generic") ? "generic" : "branded";
+      const hsnCode  = D4(hsn || "3004");
+      const gstVal   = [0,5,12,18].includes(N(gstRate)) ? N(gstRate) : 0;
+      const pCount   = N(packCount) ?? 0;
+      const pUnit    = S(packUnit);
+
+      const mergedName =
+        S(name) ||
+        (kind === "generic"
+          ? (S(composition) || S(brand))
+          : (S(brand) || S(name)));
 
       const med = new Medicine({
         name: mergedName,
-        brand: (brand || mergedName),
+        brand: kind === "generic" ? "" : (S(brand) || mergedName),
+
+        // NEW fields
+        productKind: kind,
+        hsn: hsnCode,
+        gstRate: gstVal,
+        packCount: Number.isFinite(pCount) ? pCount : 0,
+        packUnit: pUnit,
+
         composition: (composition ?? "").toString().trim(),
         company: (company ?? "").toString().trim(),
         price: priceNum,
@@ -910,7 +933,20 @@ app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
       if (!med) return res.status(404).json({ message: "Medicine not found" });
 
       const b = req.body || {};
-      const S = v => (v ?? "").toString().trim();
+      const S  = v => (v ?? "").toString().trim();
+      const N  = v => (v === "" || v == null) ? undefined : Number(v);
+      const D4 = s => S(s).replace(/[^\d]/g, "");
+
+      if (b.productKind !== undefined) {
+        const kind = S(b.productKind) === "generic" ? "generic" : "branded";
+        med.productKind = kind;
+        if (kind === "generic") med.brand = "";
+      }
+
+      if (b.hsn !== undefined)     med.hsn     = D4(b.hsn || "3004");
+      if (b.gstRate !== undefined) med.gstRate = [0,5,12,18].includes(N(b.gstRate)) ? N(b.gstRate) : 0;
+      if (b.packCount !== undefined) med.packCount = Number.isFinite(N(b.packCount)) ? N(b.packCount) : 0;
+      if (b.packUnit !== undefined)  med.packUnit  = S(b.packUnit);
 
       if (b.name !== undefined)        med.name        = S(b.name);
       if (b.brand !== undefined)       med.brand       = S(b.brand);
@@ -919,7 +955,7 @@ app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
       if (b.prescriptionRequired !== undefined) med.prescriptionRequired = toBool(b.prescriptionRequired);
 
       if (!med.name && med.brand) med.name = med.brand;
-      if (!med.brand && med.name) med.brand = med.name;
+      if (!med.brand && med.name && med.productKind !== "generic") med.brand = med.name;
 
       if (b.price   !== undefined) med.price   = Number(b.price);
       if (b.mrp     !== undefined) med.mrp     = Number(b.mrp);
@@ -1247,6 +1283,12 @@ app.get("/api/medicines", async (req, res) => {
         const workers = Array(Math.min(slots, queue.length)).fill(0).map(runOne);
         await Promise.all(workers);
       }
+    }
+
+    // C) Public responses — hide GST/HSN
+    for (const m of meds) {
+      delete m.hsn;
+      delete m.gstRate;
     }
 
     res.json(meds);
@@ -1752,4 +1794,3 @@ app.use((err, req, res, next) => {
 });
 
 module.exports = app;
- 

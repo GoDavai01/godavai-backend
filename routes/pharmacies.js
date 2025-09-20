@@ -92,14 +92,14 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
   try {
     if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
 
-    const { name, brand, composition, company } = req.body;
+    const { name, brand, composition, company, productKind, hsn, gstRate, packCount, packUnit } = req.body;
     if (!brand && !composition) {
       return res.status(400).json({ error: "Provide at least Brand or Composition." });
     }
 
     let doc = await Medicine.create({
       name: name || brand || composition || "Draft",
-      brand: brand || "",
+      brand: (String(productKind).toLowerCase() === "generic") ? "" : (brand || ""),
       composition: composition || "",
       company: company || "",
       price: 0,
@@ -112,6 +112,12 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
       prescriptionRequired: false,
       pharmacy: req.user.pharmacyId,
       status: "draft",
+      // NEW FIELDS
+      productKind: (String(productKind).toLowerCase() === "generic") ? "generic" : "branded",
+      hsn: (hsn && String(hsn).replace(/[^\d]/g,"")) || "3004",
+      gstRate: [0,5,12,18].includes(Number(gstRate)) ? Number(gstRate) : 0,
+      packCount: Number(packCount) || 0,
+      packUnit: packUnit || "",
     });
 
     // EAGER: generate & persist description immediately
@@ -146,7 +152,8 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
   try {
     if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
 
-    const { price, mrp, stock, category, type, prescriptionRequired } = req.body;
+    const { price, mrp, stock, category, type, prescriptionRequired,
+            productKind, hsn, gstRate, packCount, packUnit } = req.body;
     if (price == null || mrp == null) {
       return res.status(400).json({ error: "price and mrp are required to activate." });
     }
@@ -162,12 +169,24 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
           type: type || "Tablet",
           prescriptionRequired: !!prescriptionRequired,
           status: "active",
+          // NEW OPTIONAL FIELD UPDATES
+          ...(productKind != null ? { productKind: String(productKind).toLowerCase() === "generic" ? "generic" : "branded" } : {}),
+          ...(hsn != null ? { hsn: String(hsn).replace(/[^\d]/g,"") || "3004" } : {}),
+          ...(gstRate != null ? { gstRate: [0,5,12,18].includes(Number(gstRate)) ? Number(gstRate) : 0 } : {}),
+          ...(packCount != null ? { packCount: Number(packCount) || 0 } : {}),
+          ...(packUnit != null ? { packUnit: String(packUnit) } : {}),
         },
       },
       { new: true }
     );
 
     if (!med) return res.status(404).json({ error: "Medicine not found." });
+
+    // If switching to generic, ensure brand is blank
+    if (productKind && String(productKind).toLowerCase() === "generic") {
+      med.brand = "";
+      await med.save();
+    }
 
     // EAGER: fill description if empty
     if (!med.description) {
