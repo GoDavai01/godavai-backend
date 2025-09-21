@@ -63,4 +63,10 @@ MedicineSchema.index({ brand: 1 });
 MedicineSchema.index({ company: 1 });
 MedicineSchema.index({ composition: 1 });
 
+// Compound index: speeds up alternatives lookups inside a pharmacy
+MedicineSchema.index(
+  { pharmacy: 1, composition: 1, productKind: 1, stock: 1 },
+  { name: "pharmacy_comp_kind_stock" }
+);
+
 module.exports = mongoose.model("Medicine", MedicineSchema);

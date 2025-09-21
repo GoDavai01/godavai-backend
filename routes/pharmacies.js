@@ -373,5 +373,95 @@ router.patch("/set-location", auth, async (req, res) => {
   }
 });
 
+// GET /api/pharmacies/:pharmacyId/alternatives?compositionKey=...&brandId=...
+router.get("/:pharmacyId/alternatives", async (req, res) => {
+  try {
+    const { pharmacyId } = req.params;
+    let { compositionKey = "", brandId = "" } = req.query;
+
+    if (!mongoose.Types.ObjectId.isValid(pharmacyId)) {
+      return res.status(400).json({ error: "Invalid pharmacyId" });
+    }
+
+    const pid = new mongoose.Types.ObjectId(pharmacyId);
+
+    // Helper to sanitize public fields (hide tax fields)
+    const scrub = (m) => {
+      if (!m) return null;
+      const o = { ...m };
+      delete o.hsn;
+      delete o.gstRate;
+      return o;
+    };
+
+    // Escape regex
+    const escapeRegex = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    // Optional: fetch the branded item (if brandId is provided) and use its composition if needed
+    let brand = null;
+    if (brandId && mongoose.Types.ObjectId.isValid(brandId)) {
+      brand = await Medicine.findOne({
+        _id: brandId,
+        pharmacy: pid,
+        status: { $ne: "unavailable" },
+        available: { $ne: false },
+        stock: { $gt: 0 },
+      })
+        .select(
+          "_id name brand composition company price mrp discount stock img images packCount packUnit productKind"
+        )
+        .lean();
+      if (brand && !compositionKey) compositionKey = brand.composition || "";
+    }
+
+    // Need a composition key one way or another
+    compositionKey = String(compositionKey || "").trim();
+    if (!compositionKey) {
+      return res.json({ brand: scrub(brand), generics: [] });
+    }
+
+    const compEq = new RegExp(`^${escapeRegex(compositionKey)}$`, "i");
+
+    // Fetch generics for same composition within the pharmacy
+    const generics = await Medicine.find({
+      pharmacy: pid,
+      productKind: "generic",
+      composition: { $regex: compEq },
+      status: { $ne: "unavailable" },
+      available: { $ne: false },
+      stock: { $gt: 0 },
+    })
+      .select(
+        "_id name brand composition company price mrp discount stock img images packCount packUnit productKind"
+      )
+      .sort({ price: 1, mrp: 1, _id: 1 })
+      .lean();
+
+    // If brandId wasn’t provided, try to pick a branded counterpart (cheapest) for context
+    if (!brand) {
+      brand = await Medicine.findOne({
+        pharmacy: pid,
+        productKind: "branded",
+        composition: { $regex: compEq },
+        status: { $ne: "unavailable" },
+        available: { $ne: false },
+        stock: { $gt: 0 },
+      })
+        .select(
+          "_id name brand composition company price mrp discount stock img images packCount packUnit productKind"
+        )
+        .sort({ price: 1, mrp: 1, _id: 1 })
+        .lean();
+    }
+
+    res.json({
+      brand: scrub(brand),
+      generics: generics.map(scrub),
+    });
+  } catch (err) {
+    console.error("GET /:pharmacyId/alternatives error:", err);
+    res.status(500).json({ error: "Failed to fetch alternatives" });
+  }
+});
 
 module.exports = router;
