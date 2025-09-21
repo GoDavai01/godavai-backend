@@ -783,6 +783,70 @@ app.get("/api/pharmacy/medicines", auth, async (req, res) => {
 app.options("/api/pharmacy/medicines", cors());
 app.options("/api/pharmacy/medicines/:id", cors());
 
+// CORS preflight for the alias
+app.options("/api/pharmacy/medicines/:id/remove-image", cors());
+
+// Alias so the frontend URL works: /api/pharmacy/medicines/:id/remove-image
+app.patch("/api/pharmacy/medicines/:id/remove-image", auth, async (req, res) => {
+  try {
+    const { image } = req.body;
+    if (!image) return res.status(400).json({ error: "Image path required." });
+
+    const id = req.params.id;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid id" });
+    }
+
+    const med = await Medicine.findById(id);
+    if (!med) return res.status(404).json({ error: "Medicine not found" });
+
+    // Remove from images array
+    med.images = (med.images || []).filter((img) => img !== image);
+
+    // Reset main img if needed
+    if (med.img === image) med.img = med.images[0] || "";
+
+    // Best-effort physical delete (S3 or local)
+    try {
+      const haveS3Creds =
+        !!process.env.AWS_BUCKET_NAME &&
+        !!process.env.AWS_ACCESS_KEY_ID &&
+        !!process.env.AWS_SECRET_ACCESS_KEY;
+      const useS3 = process.env.USE_S3 === "1" && haveS3Creds;
+
+      if (useS3) {
+        const bucket = process.env.AWS_BUCKET_NAME;
+        let key = image;
+        const m1 = image.match(/\.amazonaws\.com\/(.+)$/);
+        const m2 = image.match(/^https?:\/\/[^/]+\/(.+)$/);
+        if (m1) key = decodeURIComponent(m1[1]);
+        else if (m2) key = decodeURIComponent(m2[1]);
+        if (key && !key.startsWith("http")) {
+          const AWS = require("aws-sdk");
+          const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-south-1" });
+          await s3.deleteObject({ Bucket: bucket, Key: key }).promise();
+        }
+      } else {
+        const base = process.env.UPLOADS_DIR || require("path").join(__dirname, "uploads");
+        let rel = image;
+        const cut = image.indexOf("/uploads/");
+        if (cut !== -1) rel = image.substring(cut + "/uploads/".length);
+        const full = require("path").join(base, rel);
+        if (require("fs").existsSync(full)) require("fs").unlinkSync(full);
+      }
+    } catch (e) {
+      console.error("remove-image physical delete failed:", e.message);
+    }
+
+    await med.save();
+    res.json({ success: true, images: med.images, img: med.img });
+  } catch (err) {
+    console.error("Remove medicine image error (alias):", err);
+    res.status(500).json({ error: "Failed to remove image" });
+  }
+});
+
+
 /** POST: add medicine — now always writes composition & company */
 // app.js  — replace the whole POST /api/pharmacy/medicines with this
 
