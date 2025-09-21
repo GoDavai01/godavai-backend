@@ -134,24 +134,9 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions)); // respond to all preflights
 // --- end CORS ---
 
-// Upload folders (ALWAYS inside the project; never filesystem root)
-const safeUploadsBase = (() => {
-  const wanted = process.env.UPLOADS_DIR?.trim(); // e.g. "uploads", "./uploads" or "/abs/path"
-  const base = wanted
-    ? (path.isAbsolute(wanted) ? wanted : path.join(process.cwd(), wanted))
-    : path.join(process.cwd(), "uploads");
-  try {
-    fs.mkdirSync(base, { recursive: true });
-    fs.accessSync(base, fs.constants.W_OK);
-    return base;
-  } catch (e) {
-    console.warn("[uploads] Path not writable:", base, "— falling back to ./uploads");
-    const fallback = path.join(process.cwd(), "uploads");
-    fs.mkdirSync(fallback, { recursive: true });
-    return fallback;
-  }
-})();
-const UPLOADS_DIR = safeUploadsBase;
+// Upload folders
+const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
+if (!isS3 && !fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
