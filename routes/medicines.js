@@ -118,19 +118,67 @@ router.post("/medicines/:id/ensure-description", async (req, res) => {
    - JSON (no images)
 ------------------------------------------------------------------- */
 
-// Remove a single image from a medicine (keep this for the UI dialog)
+// Remove a single image from a medicine (UI dialog + also delete from S3/local)
 router.patch("/pharmacy/medicines/:id/remove-image", async (req, res) => {
-  const { image } = req.body; // pass the image URL/path to remove
+  const { image } = req.body;
   if (!image) return res.status(400).json({ error: "Image path required." });
+
   try {
     const med = await Medicine.findById(req.params.id);
     if (!med) return res.status(404).json({ error: "Medicine not found." });
 
+    // Remove from images array
     med.images = (med.images || []).filter((img) => img !== image);
 
-    // If main img is the one being deleted, set a new one
-    if (med.img === image) med.img = med.images[0] || "";
+    // Reset main img if needed
+    if (med.img === image) {
+      med.img = med.images[0] || "";
+    }
 
+    // --- Physically delete from storage (best effort) ---
+    const tryDeletePhysical = async () => {
+      try {
+        const haveS3Creds =
+          !!process.env.AWS_BUCKET_NAME &&
+          !!process.env.AWS_ACCESS_KEY_ID &&
+          !!process.env.AWS_SECRET_ACCESS_KEY;
+        const useS3 = process.env.USE_S3 === "1" && haveS3Creds;
+
+        if (useS3) {
+          // Parse key from S3 URL
+          const bucket = process.env.AWS_BUCKET_NAME;
+          let key = image;
+
+          // typical patterns → extract after domain
+          const m1 = image.match(/\.amazonaws\.com\/(.+)$/);
+          const m2 = image.match(/^https?:\/\/[^/]+\/(.+)$/);
+          if (m1) key = decodeURIComponent(m1[1]);
+          else if (m2) key = decodeURIComponent(m2[1]);
+
+          if (key && !key.startsWith("http")) {
+            const AWS = require("aws-sdk");
+            const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-south-1" });
+            await s3.deleteObject({ Bucket: bucket, Key: key }).promise();
+          }
+        } else {
+          // Local uploads fallback
+          const fs = require("fs");
+          const path = require("path");
+          const base = process.env.UPLOADS_DIR || path.join(__dirname, "..", "uploads");
+
+          let relPath = image;
+          const cut = image.indexOf("/uploads/");
+          if (cut !== -1) relPath = image.substring(cut + "/uploads/".length);
+
+          const fullPath = path.join(base, relPath);
+          if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+        }
+      } catch (err) {
+        console.error("remove-image: physical delete failed:", err.message);
+      }
+    };
+
+    await tryDeletePhysical();
     await med.save();
 
     res.json({ success: true, images: med.images, img: med.img });
