@@ -6,6 +6,7 @@ const Medicine = require("../models/Medicine");
 const auth = require("../middleware/auth");
 const mongoose = require("mongoose");
 const generateMedicineDescription = require("../utils/generateDescription");
+const buildCompositionKey = require("../utils/buildCompositionKey");
 
 /**
  * POST /api/pharmacies/available-for-cart
@@ -394,10 +395,7 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
       return o;
     };
 
-    // Escape regex
-    const escapeRegex = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-    // Optional: fetch the branded item (if brandId is provided) and use its composition if needed
+    // 1) If brandId present, fetch it for context (and fallback comp)
     let brand = null;
     if (brandId && mongoose.Types.ObjectId.isValid(brandId)) {
       brand = await Medicine.findOne({
@@ -407,61 +405,55 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
         available: { $ne: false },
         stock: { $gt: 0 },
       })
-        .select(
-          "_id name brand composition company price mrp discount stock img images packCount packUnit productKind"
-        )
+        .select("_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind")
         .lean();
+
       if (brand && !compositionKey) compositionKey = brand.composition || "";
     }
 
-    // Need a composition key one way or another
-    compositionKey = String(compositionKey || "").trim();
+    // 2) Normalize key on server (even if client sent it)
+    compositionKey = buildCompositionKey(String(compositionKey || "").trim());
     if (!compositionKey) {
       return res.json({ brand: scrub(brand), generics: [] });
     }
 
-    const compEq = new RegExp(`^${escapeRegex(compositionKey)}$`, "i");
-
-    // Fetch generics for same composition within the pharmacy
+    // 3) Fetch generics by exact normalized key in SAME pharmacy
     const generics = await Medicine.find({
       pharmacy: pid,
       productKind: "generic",
-      composition: { $regex: compEq },
+      compositionKey,
       status: { $ne: "unavailable" },
       available: { $ne: false },
       stock: { $gt: 0 },
     })
-      .select(
-        "_id name brand composition company price mrp discount stock img images packCount packUnit productKind"
-      )
+      .select("_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind")
       .sort({ price: 1, mrp: 1, _id: 1 })
       .lean();
 
-    // If brandId wasn’t provided, try to pick a branded counterpart (cheapest) for context
+    // 4) If no brand passed in, try to pick a branded counterpart (cheapest)
     if (!brand) {
       brand = await Medicine.findOne({
         pharmacy: pid,
         productKind: "branded",
-        composition: { $regex: compEq },
+        compositionKey,
         status: { $ne: "unavailable" },
         available: { $ne: false },
         stock: { $gt: 0 },
       })
-        .select(
-          "_id name brand composition company price mrp discount stock img images packCount packUnit productKind"
-        )
+        .select("_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind")
         .sort({ price: 1, mrp: 1, _id: 1 })
         .lean();
     }
 
     res.json({
       brand: scrub(brand),
-      generics: generics.map(scrub),
+      generics: (generics || []).map(scrub),
     });
   } catch (err) {
     console.error("GET /:pharmacyId/alternatives error:", err);
     res.status(500).json({ error: "Failed to fetch alternatives" });
   }
 });
+
 
 module.exports = router;

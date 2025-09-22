@@ -54,6 +54,7 @@ const Offer = require("./models/Offer");
 const Admin = require("./models/Admin");
 const deliveryRoutes = require('./routes/deliveryRoutes');
 const generateMedicineDescription = require("./utils/generateDescription");
+const buildCompositionKey = require("./utils/buildCompositionKey");
 const { notifyUser, saveInAppNotification } = require("./utils/notify");
 const { sendSmsMSG91 } = require("./utils/sms");
 const passwordResetTokens = {};
@@ -925,6 +926,10 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
           ? (S(composition) || S(brand))
           : (S(brand) || S(name)));
 
+          // normalize composition once for both fields
+const rawComp = (composition ?? "").toString().trim();
+const compKey  = buildCompositionKey(rawComp);
+
       const med = new Medicine({
         name: mergedName,
         brand: kind === "generic" ? "" : (S(brand) || mergedName),
@@ -936,7 +941,8 @@ app.post("/api/pharmacy/medicines", auth, (req, res) => {
         packCount: Number.isFinite(pCount) ? pCount : 0,
         packUnit: pUnit,
 
-        composition: (composition ?? "").toString().trim(),
+        composition: rawComp,
+        compositionKey: compKey,
         company: (company ?? "").toString().trim(),
         price: priceNum,
         mrp: mrpNum,
@@ -1016,7 +1022,10 @@ app.patch("/api/pharmacy/medicines/:id", auth, (req, res) => {
 
       if (b.name !== undefined)        med.name        = S(b.name);
       if (b.brand !== undefined)       med.brand       = S(b.brand);
-      if (b.composition !== undefined) med.composition = S(b.composition);
+      if (b.composition !== undefined) {
+  med.composition = S(b.composition);
+  med.compositionKey = buildCompositionKey(med.composition);
+}
       if (b.company !== undefined)     med.company     = S(b.company);
       if (b.prescriptionRequired !== undefined) med.prescriptionRequired = toBool(b.prescriptionRequired);
 
