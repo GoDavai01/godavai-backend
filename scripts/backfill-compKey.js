@@ -5,7 +5,14 @@ const Medicine = require("../models/Medicine");
 const buildCompositionKey = require("../utils/buildCompositionKey");
 
 (async () => {
-  await mongoose.connect(process.env.MONGODB_URI);
+  const uri = process.env.MONGO_URI || process.env.MONGODB_URI;
+  if (!uri) {
+    console.error("❌ Missing MONGO_URI (or MONGODB_URI) in .env");
+    process.exit(1);
+  }
+
+  await mongoose.connect(uri);
+
   const cursor = Medicine.find({}).cursor();
   let n = 0;
   for await (const m of cursor) {
@@ -16,7 +23,7 @@ const buildCompositionKey = require("../utils/buildCompositionKey");
       n++;
     }
   }
-  await mongoose.model("Medicine").syncIndexes(); // <-- rebuild new compound index
-  console.log("Updated docs:", n);
+  await Medicine.syncIndexes(); // rebuild new compound index
+  console.log("✅ Updated docs:", n);
   process.exit(0);
 })();

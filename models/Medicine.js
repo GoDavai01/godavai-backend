@@ -1,5 +1,6 @@
 // models/Medicine.js
 const mongoose = require("mongoose");
+const buildCompositionKey = require("../utils/buildCompositionKey");
 
 const MedicineSchema = new mongoose.Schema(
   {
@@ -11,7 +12,7 @@ const MedicineSchema = new mongoose.Schema(
     composition: { type: String, default: "", trim: true },
 
     // NEW: normalized composition key for exact, order-independent lookups
-    compositionKey: { type: String, default: "", index: true },  // <-- ADD THIS
+    compositionKey: { type: String, default: "", index: true }, // <-- ADD THIS
 
     company: { type: String, default: "", trim: true },
 
@@ -51,6 +52,35 @@ const MedicineSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+/* Keep compositionKey in sync whenever composition changes */
+MedicineSchema.pre("save", function (next) {
+  this.compositionKey = buildCompositionKey(this.composition || "");
+  // If marked as generic, force blank brand for consistency
+  if (this.productKind === "generic" && this.brand) this.brand = "";
+  next();
+});
+
+MedicineSchema.pre("findOneAndUpdate", function (next) {
+  const update = this.getUpdate() || {};
+  const nextComp =
+    (update.$set && update.$set.composition) ??
+    update.composition;
+
+  if (nextComp !== undefined) {
+    update.$set = update.$set || {};
+    update.$set.compositionKey = buildCompositionKey(nextComp || "");
+    // If switching to generic via update, also blank brand
+    const nextKind =
+      (update.$set && update.$set.productKind) ??
+      update.productKind;
+    if (String(nextKind).toLowerCase() === "generic") {
+      update.$set.brand = "";
+    }
+    this.setUpdate(update);
+  }
+  next();
+});
+
 /* Indexes */
 MedicineSchema.index({ name: 1 });
 MedicineSchema.index({ brand: 1 });
@@ -60,7 +90,7 @@ MedicineSchema.index({ composition: 1 });
 
 // compound for alternatives
 MedicineSchema.index(
-  { pharmacy: 1, compositionKey: 1, productKind: 1, stock: 1 },  // <-- swap composition -> compositionKey
+  { pharmacy: 1, compositionKey: 1, productKind: 1, stock: 1 }, // <-- swap composition -> compositionKey
   { name: "pharmacy_compKey_kind_stock" }
 );
 
