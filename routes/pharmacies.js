@@ -8,6 +8,10 @@ const mongoose = require("mongoose");
 const generateMedicineDescription = require("../utils/generateDescription");
 const buildCompositionKey = require("../utils/buildCompositionKey");
 
+// ✅ Shared field list for /alternatives so results include `pharmacy`
+const ALT_PUBLIC_FIELDS =
+  "_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind pharmacy";
+
 /**
  * POST /api/pharmacies/available-for-cart
  * Expects: { city, area, medicines: [id, ...] }
@@ -405,7 +409,7 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
         available: { $ne: false },
         stock: { $gt: 0 },
       })
-        .select("_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind")
+        .select(ALT_PUBLIC_FIELDS) // ✅ include pharmacy
         .lean();
 
       if (brand && !compositionKey) compositionKey = brand.composition || "";
@@ -426,7 +430,7 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
       available: { $ne: false },
       stock: { $gt: 0 },
     })
-      .select("_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind")
+      .select(ALT_PUBLIC_FIELDS) // ✅ include pharmacy
       .sort({ price: 1, mrp: 1, _id: 1 })
       .lean();
 
@@ -440,7 +444,7 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
         available: { $ne: false },
         stock: { $gt: 0 },
       })
-        .select("_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind")
+        .select(ALT_PUBLIC_FIELDS) // ✅ include pharmacy
         .sort({ price: 1, mrp: 1, _id: 1 })
         .lean();
     }
@@ -454,6 +458,5 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch alternatives" });
   }
 });
-
 
 module.exports = router;
