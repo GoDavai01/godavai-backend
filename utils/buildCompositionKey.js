@@ -18,7 +18,7 @@ module.exports = function buildCompositionKey(raw = "") {
         .replace(/\s*ml\b/g, "ml")
         .replace(/\s*g\b/g, "g")
         .replace(/\s*mcg\b/g, "mcg")
-        .replace(/\s+/, " ")
+        .replace(/\s+/g, " ")
         .trim()
     )
     .filter(Boolean)
