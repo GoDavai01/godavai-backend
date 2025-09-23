@@ -422,17 +422,18 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
     }
 
     // 3) Fetch generics by exact normalized key in SAME pharmacy
-    const generics = await Medicine.find({
-      pharmacy: pid,
-      productKind: "generic",
-      compositionKey,
-      status: { $ne: "unavailable" },
-      available: { $ne: false },
-      stock: { $gt: 0 },
-    })
-      .select(ALT_PUBLIC_FIELDS) // ✅ include pharmacy
-      .sort({ price: 1, mrp: 1, _id: 1 })
-      .lean();
+const generics = await Medicine.find({
+  pharmacy: pid,
+  compositionKey,
+  // accept both properly-tagged generics and legacy rows with empty brand
+  $or: [{ productKind: "generic" }, { brand: "" }],
+  status: { $ne: "unavailable" },
+  available: { $ne: false },
+  stock: { $gt: 0 },
+})
+  .select(ALT_PUBLIC_FIELDS) // ✅ includes pharmacy
+  .sort({ price: 1, mrp: 1, _id: 1 })
+  .lean();
 
     // 4) If no brand passed in, try to pick a branded counterpart (cheapest)
     if (!brand) {
