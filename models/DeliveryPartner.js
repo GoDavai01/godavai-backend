@@ -41,6 +41,18 @@ const DeliveryPartnerSchema = new mongoose.Schema(
     status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
     active: { type: Boolean, default: false },
     autoAccept: { type: Boolean, default: false }, // partner opt-in for instant auto-accept
+
+    // NEW: push device tokens + simple prefs
+    deviceTokens: [
+      {
+        token: { type: String },
+        platform: { type: String, enum: ["android", "ios", "web"], default: "android" },
+        addedAt: { type: Date, default: Date.now },
+      },
+    ],
+    notificationPrefs: {
+      offers: { type: Boolean, default: true },
+    },
   },
   { timestamps: true }
 );

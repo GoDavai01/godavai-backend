@@ -7,6 +7,7 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const mongoose = require("mongoose");
 const fs = require("fs");
+const axios = require("axios"); // for FCM push
 
 const DeliveryPartner = require("../models/DeliveryPartner");
 const Order = require("../models/Order");
@@ -15,6 +16,7 @@ const Payment = require("../models/Payment");
 const upload = require("../utils/upload"); // replaces multer config
 const { markOrderDelivered } = require("../controllers/orderController");
 const { sendSmsMSG91 } = require("../utils/sms");
+const { sendPush } = require("../utils/fcm");
 
 const otpMap = new Map();
 
@@ -319,6 +321,7 @@ router.get("/partner/:id", async (req, res) => {
 
 /* ============================================================================
    8) Assign delivery partner to an order (after pharmacy accepts)
+   - Now also: publish SSE offer + send push to device tokens
 ============================================================================ */
 router.post("/assign", async (req, res) => {
   try {
@@ -333,6 +336,29 @@ router.post("/assign", async (req, res) => {
     }
     order.deliveryPartner = deliveryPartnerId;
     await order.save();
+
+    // Publish instant SSE offer
+    publishOffer(req.app, deliveryPartnerId, {
+      type: "assigned",
+      partnerId: deliveryPartnerId,
+      orderId: order._id,
+      pharmacy: order.pharmacy,
+      total: order.total,
+      createdAt: order.createdAt,
+    });
+
+    // Push notification to device tokens (HTTP v1 or legacy fallback via utils/fcm)
+try {
+  const partner = await DeliveryPartner.findById(deliveryPartnerId).lean();
+  const tokens = (partner?.deviceTokens || []).map(t => t.token).filter(Boolean);
+  await sendPush({
+    tokens,
+    title: "New delivery offer",
+    body: `Order ₹${order.total} from ${order.pharmacy?.name || "pharmacy"}`,
+    data: { type: "offer", orderId: String(order._id) },
+  });
+} catch (_) {}
+
     res.json({ msg: "Delivery partner assigned" });
   } catch (err) {
     console.error("Assign delivery partner error:", err);
@@ -457,7 +483,7 @@ router.post("/login", async (req, res) => {
         name: partner.name,
         mobile: partner.mobile,
       },
-        process.env.JWT_SECRET,
+      process.env.JWT_SECRET,
       { expiresIn: "30d" }
     );
 
@@ -740,6 +766,68 @@ router.get("/active-partner-nearby", async (req, res) => {
   } catch (err) {
     console.error("active-partner-nearby error:", err);
     res.json({ activePartnerExists: false });
+  }
+});
+
+/* ===================== 17) Server-Sent Events for instant offers ===================== */
+router.get("/stream/:partnerId", async (req, res) => {
+  const { partnerId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(partnerId)) return res.sendStatus(400);
+
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  res.flushHeaders();
+
+  const ping = setInterval(() => res.write(`event: ping\ndata: {}\n\n`), 15000);
+
+  // naive in-memory pubsub (replace with Redis in prod)
+  const bus = req.app.get("gd_bus") || new Map();
+  req.app.set("gd_bus", bus);
+
+  function onOffer(payload) {
+    if (payload.partnerId?.toString() === partnerId) {
+      res.write(`event: offer\ndata: ${JSON.stringify(payload)}\n\n`);
+    }
+  }
+  const key = `offer:${partnerId}`;
+  const subs = bus.get(key) || new Set();
+  subs.add(onOffer);
+  bus.set(key, subs);
+
+  req.on("close", () => {
+    clearInterval(ping);
+    const s = bus.get(key);
+    if (s) {
+      s.delete(onOffer);
+      if (!s.size) bus.delete(key);
+    }
+  });
+});
+
+/* helper to publish offers into SSE stream */
+function publishOffer(app, partnerId, payload) {
+  const bus = app.get("gd_bus");
+  if (!bus) return;
+  const subs = bus.get(`offer:${partnerId}`);
+  if (subs) subs.forEach((fn) => fn(payload));
+}
+
+/* ===================== 18) Save device token for push ===================== */
+router.post("/register-device-token", async (req, res) => {
+  try {
+    const { partnerId, token, platform } = req.body;
+    if (!isValidId(partnerId) || !token) return res.status(400).json({ error: "Bad payload" });
+    await DeliveryPartner.updateOne(
+      { _id: partnerId },
+      { $addToSet: { deviceTokens: { token, platform: platform || "android" } } }
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("register-device-token error:", err);
+    res.status(500).json({ error: "Failed to register device token" });
   }
 });
 
