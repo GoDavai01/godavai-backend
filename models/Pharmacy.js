@@ -1,3 +1,4 @@
+// models/Pharmacy.js
 const mongoose = require('mongoose'); 
 
 const PharmacySchema = new mongoose.Schema({
@@ -65,6 +66,14 @@ const PharmacySchema = new mongoose.Schema({
   otp: { type: String },
   otpExpiry: { type: Date }
 }, { timestamps: true }); // <-- replaces manual createdAt
+
+// Optional: store native push tokens (for Capacitor builds)
+PharmacySchema.add({
+  deviceTokens: [{
+    token: { type: String, trim: true },
+    platform: { type: String, trim: true } // "android" | "ios" | "web"
+  }]
+});
 
 PharmacySchema.index({ location: "2dsphere" });
 

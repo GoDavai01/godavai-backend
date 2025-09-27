@@ -378,6 +378,30 @@ router.patch("/set-location", auth, async (req, res) => {
   }
 });
 
+/**
+ * POST /api/pharmacies/register-device-token
+ * Body: { token, platform }
+ */
+router.post("/register-device-token", auth, async (req, res) => {
+  try {
+    if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
+    const { token, platform = "android" } = req.body || {};
+    if (!token) return res.status(400).json({ message: "token required" });
+
+    const doc = await Pharmacy.findById(req.user.pharmacyId);
+    if (!doc) return res.status(404).json({ message: "Pharmacy not found" });
+
+    doc.deviceTokens = Array.isArray(doc.deviceTokens) ? doc.deviceTokens : [];
+    const exists = doc.deviceTokens.some(t => t.token === token);
+    if (!exists) doc.deviceTokens.push({ token, platform });
+    await doc.save();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("register-device-token error:", e?.message || e);
+    res.status(500).json({ message: "Failed to register token" });
+  }
+});
+
 // GET /api/pharmacies/:pharmacyId/alternatives?compositionKey=...&brandId=...
 router.get("/:pharmacyId/alternatives", async (req, res) => {
   try {
@@ -422,18 +446,18 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
     }
 
     // 3) Fetch generics by exact normalized key in SAME pharmacy
-const generics = await Medicine.find({
-  pharmacy: pid,
-  compositionKey,
-  // accept both properly-tagged generics and legacy rows with empty brand
-  $or: [{ productKind: "generic" }, { brand: "" }],
-  status: { $ne: "unavailable" },
-  available: { $ne: false },
-  stock: { $gt: 0 },
-})
-  .select(ALT_PUBLIC_FIELDS) // ✅ includes pharmacy
-  .sort({ price: 1, mrp: 1, _id: 1 })
-  .lean();
+    const generics = await Medicine.find({
+      pharmacy: pid,
+      compositionKey,
+      // accept both properly-tagged generics and legacy rows with empty brand
+      $or: [{ productKind: "generic" }, { brand: "" }],
+      status: { $ne: "unavailable" },
+      available: { $ne: false },
+      stock: { $gt: 0 },
+    })
+      .select(ALT_PUBLIC_FIELDS) // ✅ includes pharmacy
+      .sort({ price: 1, mrp: 1, _id: 1 })
+      .lean();
 
     // 4) If no brand passed in, try to pick a branded counterpart (cheapest)
     if (!brand) {

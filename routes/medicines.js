@@ -203,6 +203,7 @@ router.get("/search", async (req, res) => {
     limit = 80,
     dedupe = "true",
   } = req.query;
+  const { pharmacyId } = req.query;
 
   q = String(q || "").trim();
   if (!q) return res.json([]);
@@ -210,11 +211,13 @@ router.get("/search", async (req, res) => {
   try {
     const rx = new RegExp(escapeRegex(q), "i");
 
-    // collect eligible pharmacies (nearby or by city/area)
+    // collect eligible pharmacies (specific pharmacy OR nearby OR by city/area)
     let pharmacyIds = [];
     const pharmacyBase = { active: true, status: "approved" };
 
-    if (lat && lng) {
+    if (pharmacyId && ObjectId.isValid(pharmacyId)) {
+      pharmacyIds = [new ObjectId(pharmacyId)];
+      } else if (lat && lng) {
       const nearby = await Pharmacy.aggregate([
         {
           $geoNear: {
@@ -679,7 +682,7 @@ router.get("/debug/gpt-med", (req, res) => {
 
 // --- Autocomplete for live search bar (name, brand, composition, category, company) ---
 router.get("/autocomplete", async (req, res) => {
-  let { q = "", limit = 10, city = "" } = req.query;
+  let { q = "", limit = 10, city = "", pharmacyId = "" } = req.query;
   q = String(q || "").trim();
   if (!q) return res.json([]);
 
@@ -688,7 +691,9 @@ router.get("/autocomplete", async (req, res) => {
 
     // optional: restrict to pharmacies in city
     let pharmacyIds = [];
-    if (city) {
+    if (pharmacyId && ObjectId.isValid(pharmacyId)) {
+      pharmacyIds = [new ObjectId(pharmacyId)];
+      } else if (city) {
       const phs = await Pharmacy.find({
         city: { $regex: city, $options: "i" },
         active: true,
