@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 
 const PharmacySchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
+  legalEntityName: { type: String, trim: true, maxlength: 140 }, // used only on invoice
   ownerName: { type: String, required: true, trim: true },
   city: { type: String, required: true, trim: true },
   area: { type: String, required: true, trim: true },

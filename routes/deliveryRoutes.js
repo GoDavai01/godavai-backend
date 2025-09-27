@@ -30,6 +30,24 @@ function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
 
+/* -----------------------------------------------------------------------------
+   keep-alive cron (every 2 min) to nudge stale active riders
+----------------------------------------------------------------------------- */
+let cronRegistered = global.__GD_DELIVERY_CRON__;
+if (!cronRegistered) {
+  const cron = require("node-cron");
+  const axiosCron = require("axios");
+  const SERVER_BASE = process.env.SERVER_BASE_URL || "http://localhost:5000";
+  cron.schedule("*/2 * * * *", async () => {
+    try {
+      await axiosCron.post(`${SERVER_BASE}/api/delivery/cron/nudge-stale-loc`);
+    } catch (e) {
+      console.error("[CRON] nudge-stale-loc failed:", e?.message || e);
+    }
+  });
+  global.__GD_DELIVERY_CRON__ = true;
+}
+
 /* ============================================================================
    1) Register Delivery Partner (pending)
 ============================================================================ */
@@ -766,6 +784,43 @@ router.get("/active-partner-nearby", async (req, res) => {
   } catch (err) {
     console.error("active-partner-nearby error:", err);
     res.json({ activePartnerExists: false });
+  }
+});
+
+/* -------------------------- Cron endpoint (nudge) --------------------------- */
+// POST /api/delivery/cron/nudge-stale-loc
+router.post("/cron/nudge-stale-loc", async (req, res) => {
+  try {
+    const staleBefore = new Date(Date.now() - 2 * 60 * 1000); // 2 min
+    const partners = await DeliveryPartner.find({
+      status: "approved",
+      active: true,
+      $or: [
+        { lastSeenAt: { $lt: staleBefore } },
+        { lastSeenAt: { $exists: false } },
+        { "location.lastUpdated": { $lt: staleBefore } },
+        { "location.lastUpdated": { $exists: false } },
+      ],
+    }).lean();
+
+    let notified = 0;
+    for (const p of partners) {
+      const tokens = (p.deviceTokens || []).map(t => t.token).filter(Boolean);
+      if (!tokens.length) continue;
+      try {
+        await sendPush({
+          tokens,
+          title: "Location paused",
+          body: "Open GoDavaii to resume live location.",
+          data: { type: "open_for_location", partnerId: String(p._id) },
+        });
+        notified++;
+      } catch {}
+    }
+    res.json({ ok: true, notified });
+  } catch (e) {
+    console.error("nudge-stale-loc error:", e);
+    res.status(500).json({ error: "cron failed" });
   }
 });
 

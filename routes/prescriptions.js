@@ -16,6 +16,9 @@ const path = require('path');
 const { extractTextPlus, extractPrescriptionItems } = require('../utils/ocr');
 const { parse: parseMeds } = require('../utils/ai/medParser');
 
+// 🔔 Push notifications
+const { sendPush } = require("../utils/fcm");
+
 // CRON: Prevent double schedule in dev
 let cronRegistered = global.__GODAVAI_CRON_REGISTERED__;
 if (!cronRegistered) {
@@ -39,7 +42,65 @@ function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
 
-// === B) AI parse helper ===
+/* -------------------------- PUSH TOKEN REGISTRY -------------------------- */
+// Keep tokens in a simple collection to avoid schema edits.
+const PushTokens = () => mongoose.connection.collection("push_tokens");
+
+async function savePharmacyToken({ userId, pharmacyId, token }) {
+  if (!token || (!userId && !pharmacyId)) return;
+  await PushTokens().updateOne(
+    {
+      userId: userId ? new mongoose.Types.ObjectId(userId) : null,
+      pharmacyId: pharmacyId ? new mongoose.Types.ObjectId(pharmacyId) : null
+    },
+    {
+      $addToSet: { tokens: String(token) },
+      $setOnInsert: { createdAt: new Date() }
+    },
+    { upsert: true }
+  );
+}
+
+async function getPharmacyTokens(pharmacyId) {
+  if (!pharmacyId) return [];
+  const row = await PushTokens().findOne({ pharmacyId: new mongoose.Types.ObjectId(pharmacyId) });
+  return Array.isArray(row?.tokens) ? row.tokens.filter(Boolean) : [];
+}
+
+// Minimal endpoint for the native app to register its FCM token.
+router.post("/register-fcm", auth, async (req, res) => {
+  try {
+    const token = String(req.body?.token || "");
+    if (!token) return res.status(400).json({ ok: false, error: "Missing token" });
+    await savePharmacyToken({
+      userId: req.user.userId,
+      pharmacyId: req.user.pharmacyId || null,
+      token
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+async function notifyPharmacy(pharmacyId, order, { reason = "New prescription order" } = {}) {
+  try {
+    const tokens = await getPharmacyTokens(pharmacyId);
+    if (!tokens.length) return;
+    await sendPush({
+      tokens,
+      title: "New prescription order",
+      body: `${reason} • #${String(order?._id || "").slice(-5)} • Quote now`,
+      data: {
+        type: "rx_new",
+        orderId: String(order?._id || ""),
+        quoteExpiry: order?.quoteExpiry ? String(order.quoteExpiry) : "",
+      },
+    });
+  } catch (_) {}
+}
+
+/* ----------------------------- AI parse helper ---------------------------- */
 async function runAiParseForOrder(order) {
   try {
     // build list of urls to scan (attachments[] first, fallback to single url)
@@ -150,6 +211,8 @@ async function assignNextPharmacy(order) {
   order.pharmaciesTried.push(nextPharmacy._id);
   order.timeline.push({ status: "waiting_for_quotes", date: new Date() });
   await order.save();
+  // 🔔 push the new assignee
+  await notifyPharmacy(nextPharmacy._id, order, { reason: "Order reassigned to you" });
   return true;
 }
 
@@ -200,6 +263,8 @@ async function autoSplitAndAssignUnavailable(prescriptionOrder, parentOrder = nu
     },
     alreadyFulfilledItems: fulfilledMeds,
   });
+  // 🔔 notify the pharmacy that got the split
+  await notifyPharmacy(nextPharmacy._id, splitOrder, { reason: "Split order awaiting your quote" });
   return splitOrder;
 }
 
@@ -268,6 +333,10 @@ router.post('/order', auth, async (req, res) => {
 
     // Non-blocking but not at the mercy of timers
     Promise.resolve().then(() => runAiParseForOrder(order)).catch(() => {});
+    // 🔔 notify the first assignee pharmacy instantly
+    try {
+      await notifyPharmacy(pharmacyIds[0], order, { reason: "New prescription order" });
+    } catch (_) {}
 
     res.json(order);
   } catch (err) {

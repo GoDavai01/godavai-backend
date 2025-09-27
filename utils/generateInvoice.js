@@ -213,11 +213,29 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
 
   // right column (pharmacy block)
   let yR = startY;
-  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Pharmacy:", value: (pharmacy?.name || ""),    labelW:rightBox.labelW, colW:rightBox.w });
-  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Address:",  value: (pharmacy?.address || ""), labelW:rightBox.labelW, colW:rightBox.w });
-  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"GSTIN:",    value: (pharmacy?.gstin || ""),   labelW:rightBox.labelW, colW:rightBox.w });
-  if (pharmacy?.drugLicense20B) yR = drawKV(doc, { x:rightBox.x, y:yR, label:"DL No. 20B:", value: pharmacy.drugLicense20B, labelW:rightBox.labelW, colW:rightBox.w });
-  if (pharmacy?.drugLicense21B) yR = drawKV(doc, { x:rightBox.x, y:yR, label:"DL No. 21B:", value: pharmacy.drugLicense21B, labelW:rightBox.labelW, colW:rightBox.w });
+  if (pharmacy?.legalEntityName) {
+    yR = drawKV(doc, {
+      x: rightBox.x,
+      y: yR,
+      label: "Legal Entity Name:",
+      value: pharmacy.legalEntityName,
+      labelW: rightBox.labelW,
+      colW: rightBox.w
+    });
+  }
+  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Pharmacy:", value:(pharmacy?.name || ""),    labelW:rightBox.labelW, colW:rightBox.w });
+  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Address:",  value:(pharmacy?.address || ""), labelW:rightBox.labelW, colW:rightBox.w });
+  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"GSTIN:",    value:(pharmacy?.gstin || ""),   labelW:rightBox.labelW, colW:rightBox.w });
+
+  // ✅ Retailer Drug License — single line, shown right under GSTIN (no 20B/21B label)
+  const drugLicense =
+    pharmacy?.drugLicenseRetail ||
+    pharmacy?.drugLicense20B ||
+    pharmacy?.drugLicense ||
+    pharmacy?.drugLicence; // handle spelling variant
+  if (drugLicense) {
+    yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Drug License No.:", value: drugLicense, labelW:rightBox.labelW, colW:rightBox.w });
+  }
 
   // next section starts after the taller column
   let curY = Math.max(yL, yR) + 6;
@@ -225,7 +243,11 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
   // Customer & POS
   const custLabelW = 120;
   curY = drawKV(doc, { x:40, y:curY, label:"Customer:", value:(order.customerName || customer?.name || ""), labelW:custLabelW, colW:515, gapY:4 });
-  curY = drawKV(doc, { x:40, y:curY, label:"Address:",  value:getPrintableAddress(order.customerAddress || customer?.address), labelW:custLabelW, colW:515, gapY:4 });
+
+  // ✅ Prefer delivery address and label accordingly
+  const deliveryAddr = order?.deliveryAddress || order?.customerAddress || customer?.address;
+  curY = drawKV(doc, { x:40, y:curY, label:"Delivery Address:", value:getPrintableAddress(deliveryAddr), labelW:custLabelW, colW:515, gapY:4 });
+
   if (order.customerGSTIN || customer?.gstin) {
     curY = drawKV(doc, { x:40, y:curY, label:"Customer GSTIN:", value:(order.customerGSTIN || customer?.gstin), labelW:custLabelW, colW:515, gapY:4 });
   }
@@ -320,7 +342,7 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
       .text("Item(s) Total", 40+30, rowY + 6, { width: 205+55+28, align: "left" });
     doc.font("Helvetica-Bold")
       .text(fmtINR(baseSum), 40+30+205+55+28, rowY + 6, { width: 70, align: "center" }) // taxable
-      .text(fmtINR(igstSum), 40+30+205+55+28+70+32, rowY + 6, { width: 44, align: "center" }) // IGST INR cell x-position matches above (skip % col width=32)
+      .text(fmtINR(igstSum), 40+30+205+55+28+70+32, rowY + 6, { width: 44, align: "center" }) // IGST INR
       .text(fmtINR(grossSum), 40+30+205+55+28+70+32+44, rowY + 6, { width: 51, align: "right" });
     rowY += 22;
 
@@ -550,12 +572,15 @@ function pagePlatformFee(doc, { order, company = {}, customer = {}, platformFeeG
   // ensure next section starts below the taller column
   let curY = Math.max(yL, yR) + 6;
 
-  // Customer Details + Service Details (Zomato-style mini blocks)
+  // Customer Details + Service Details
   const custLabelW = 140;
   doc.font("Helvetica-Bold").fontSize(10).text("Customer Details", 40, curY); curY = doc.y + 2;
   curY = drawKV(doc, { x:40, y:curY, label:"Name:", value:(order.customerName || customer?.name || ""), labelW:custLabelW, colW:515, gapY:2 });
   curY = drawKV(doc, { x:40, y:curY, label:"GSTIN:", value:(order.customerGSTIN || customer?.gstin || "UNREGISTERED"), labelW:custLabelW, colW:515, gapY:2 });
-  curY = drawKV(doc, { x:40, y:curY, label:"Delivery Address:", value:getPrintableAddress(order.customerAddress || customer?.address), labelW:custLabelW, colW:515, gapY:6 });
+
+  // ✅ Prefer deliveryAddress here too
+  const deliveryAddr2 = order?.deliveryAddress || order?.customerAddress || customer?.address;
+  curY = drawKV(doc, { x:40, y:curY, label:"Delivery Address:", value:getPrintableAddress(deliveryAddr2), labelW:custLabelW, colW:515, gapY:6 });
 
   doc.font("Helvetica-Bold").fontSize(10).text("Service Details", 40, curY); curY = doc.y + 2;
 
@@ -578,7 +603,7 @@ function pagePlatformFee(doc, { order, company = {}, customer = {}, platformFeeG
   const { base: taxableBase, tax: includedTax } = splitInclusive(gross, GST_RATE);
 
   if (isInterState) {
-    // IGST: S.No | Description | SAC | Taxable INR | IGST % | IGST INR | Total INR
+    // IGST table
     const col = { sno:30, desc:235, code:60, taxable:70, igstPct:32, igstAmt:44, total:44 }; // 515
     const x = {
       sno:40,

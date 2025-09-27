@@ -25,7 +25,7 @@ router.post("/available-for-cart", async (req, res) => {
     }
     const query = { city: new RegExp(`^${city}$`, "i"), ...(area ? { area } : {}), active: true };
 
-    const pharmacies = await Pharmacy.find(query);
+    const pharmacies = await Pharmacy.find(query).select("-legalEntityName");
     const result = pharmacies.filter(pharmacy =>
       medicines.every(medId =>
         (pharmacy.medicines || []).map(String).includes(String(medId))
@@ -65,7 +65,7 @@ router.get("/", async (req, res) => {
     // optional trending filter
     if (trending === "1" || trending === "true") q.trending = true;
 
-    const pharmacies = await Pharmacy.find(q);
+    const pharmacies = await Pharmacy.find(q).select("-legalEntityName");
     res.json(pharmacies);
   } catch (err) {
     console.error("Pharmacy list error:", err);
