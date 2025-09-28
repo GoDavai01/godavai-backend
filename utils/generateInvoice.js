@@ -308,7 +308,7 @@ function drawContactLine(doc, y, company = {}) {
   doc.y = Math.max(doc.y, y + lh);
 }
 
-function renderFooter(doc, { company = {}, notes = [], includeCommAddress = false }) {
+function renderFooter(doc, { company = {}, notes = [], includeCommAddress = false, thankYou }) {
   const primary = "#13C0A2";
   const address = company.communicationAddress || company.address || "";
 
@@ -332,8 +332,20 @@ function renderFooter(doc, { company = {}, notes = [], includeCommAddress = fals
   drawContactLine(doc, y + 4, company);
   y = doc.y;
 
+  // draw "Thank you" only if provided, and never overlap links
+if (thankYou) {
+  const pageH = doc.page?.height || 842;
+  const bottom = doc.page?.margins?.bottom ?? 40;
+  const lineH = doc.currentLineHeight();
+
+  // keep near bottom but never above previous content
+  const minTy = Math.max(doc.y + 8, 760);
+  const maxTy = pageH - bottom - lineH;
+  const ty = Math.min(minTy, maxTy);
+
   doc.fontSize(10).fillColor(primary).font("Helvetica-Bold")
-     .text("Thank you for choosing GODAVAII", 40, 772, { align: "center" });
+     .text(thankYou, 40, ty, { align: "center" });
+}
 }
 
 // ============================================================
@@ -584,13 +596,14 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
   // <<< guard footer so "Thank you" never overlaps >>>
   ensureRoom(doc, 160);
   renderFooter(doc, {
-    company,
-    notes: [
-      "This invoice page is issued by the pharmacy for medicines.",
-      "GoDavaii acts as a facilitator for orders and delivery."
-    ],
-    includeCommAddress: false
-  });
+  company,
+  notes: [
+    "This invoice page is issued by the pharmacy for medicines.",
+    "GoDavaii acts as a facilitator for orders and delivery."
+  ],
+  includeCommAddress: false,
+  thankYou: "Thank you for choosing GODAVAII"   // Page 1 message
+});
 }
 
 // ============================================================
@@ -753,27 +766,33 @@ async function pagePlatformFee(doc, { order, company = {}, customer = {}, platfo
     doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor("#E0E0E0").lineWidth(0.5).stroke();
   }
 
-  // ---- Payment text (wide line, no narrow wrap)
-  ensureRoom(doc, 120);
-  doc.moveDown(0.6);
-  const mode = formatPaymentMode(order.paymentMode);
-  doc.font("Helvetica").fontSize(10).text(`Payment Mode: ${mode}`);
-  doc.moveDown(0.2);
-  doc.text(
+  // ---- Payment text (LEFT aligned full-width, directly under table)
+ensureRoom(doc, 140);
+const x = 40, w = 515;
+const mode = formatPaymentMode(order.paymentMode);
+
+doc.font("Helvetica").fontSize(10)
+  .text(`Payment Mode: ${mode}`, x, doc.y + 8, { width: w, align: "left" })
+  .text(
     `Amount of INR ${fmtINR(gross)} settled through ${mode} ` +
-    `against Order ID: ${order.orderId || ""} dated ${order.date || ""}.`
-  );
-  doc.moveDown(0.6);
-  doc.font("Helvetica").fontSize(10)
-     .text("Pricing is tax-inclusive.")
-     .text("Tax is not payable on reverse charge basis.");
+    `against Order ID: ${order.orderId || ""} dated ${order.date || ""}.`,
+    x, doc.y + 4, { width: w, align: "left" }
+  )
+  .text("Pricing is tax-inclusive.", x, doc.y + 4, { width: w, align: "left" })
+  .text("Tax is not payable on reverse charge basis.", x, doc.y + 2, { width: w, align: "left" });
+
 
   // ---- Signature (guarded)
   await addSignatureBlock(doc, company);
 
   // ---- Footer (guarded; includes comm address & links)
   ensureRoom(doc, 160);
-  renderFooter(doc, { company, notes: [], includeCommAddress: true });
+  renderFooter(doc, {
+  company,
+  notes: [],
+  includeCommAddress: true,
+  thankYou: "Thank you for your payment to GODAVAII"   // Page 2 message (change wording as you like)
+});
 }
 
 // ============================================================
