@@ -245,12 +245,18 @@ async function addSignatureBlock(doc, company) {
   const boxW = Math.min(maxAllowed, Math.max(defaultW, neededForLabel));
 
   // Vertical placement – leave room for footer band later
-  const blockH = 16 + boxH + 14 + 28; // gap + box + line gap + captions
-  const maxTop = pageH - bottomMargin - blockH - 6;
-  const minTop = Math.max(doc.y + 16, 560);
-  const signTop = Math.min(Math.max(minTop, 580), maxTop);
+const blockH = 16 + boxH + 14 + 28; // gap + box + line gap + captions
+const maxTop = pageH - bottomMargin - blockH - 6;
+const minTop = Math.max(doc.y + 16, 560);
 
-  const boxY = signTop + 16;
+// NEW: keep the signature block above the footer line at y=720
+const footerTop = 720, gap = 6;
+// bottom of block = signTop + (16 + boxH + 14 + 28) = signTop + (boxH + 58)
+const maxTopByFooter = footerTop - gap - (boxH + 58);
+
+const signTop = Math.min(Math.max(minTop, 580), Math.min(maxTop, maxTopByFooter));
+
+const boxY = signTop + 16;
 
   // Label (single line; no wrapping)
   doc.font("Helvetica").fontSize(10).fillColor("black")
@@ -799,10 +805,9 @@ doc.font("Helvetica").fontSize(10)
 
   // ---- Signature (guarded)
 const afterSigY = await addSignatureBlock(doc, company);
-doc.y = Math.max(doc.y, afterSigY);    // ensure cursor is below signature
+doc.y = Math.max(doc.y, afterSigY);    // keep cursor honest
 
-// ---- Footer (guarded; includes comm address & links)
-ensureRoom(doc, 130);                   // was 160; this avoids an unnecessary page break
+// ---- Footer (same page; fixed band at y=720)
 renderFooter(doc, {
   company,
   notes: [],
