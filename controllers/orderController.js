@@ -13,6 +13,12 @@ function reqMaybe(...segments) {
   return null;
 }
 
+// Helper to resolve an existing asset path (signature image etc.)
+function resolveIfExists(...segments) {
+  const p = path.resolve(__dirname, ...segments);
+  return fs.existsSync(p) ? p : null;
+}
+
 const s3 =
   reqMaybe('..', 'uploads', 's3-setup') ||
   reqMaybe('..', 'utils', 's3-setup');
@@ -46,7 +52,15 @@ exports.markOrderDelivered = async (req, res) => {
       customerDoc?.address ||
       null;
 
-    // Company details for Platform Fee page (fill envs if you have them)
+    // Signature image: ENV first, then common local fallbacks
+    const signaturePath =
+      process.env.COMPANY_SIGNATURE_IMAGE_PATH ||
+      resolveIfExists('..', 'uploads', 'assets', 'signature.png') ||
+      resolveIfExists('..', 'uploads', 'assets', 'signature.jpg') ||
+      resolveIfExists('..', 'uploads', 'signature.png') ||
+      resolveIfExists('..', 'uploads', 'signature.jpg');
+
+    // Company details for Platform Fee page
     const company = {
       legalName: process.env.COMPANY_LEGAL_NAME || "Karniva Private Limited",
       tradeName: process.env.COMPANY_TRADE_NAME || "GoDavaii",
@@ -60,14 +74,19 @@ exports.markOrderDelivered = async (req, res) => {
       termsUrl: process.env.COMPANY_TERMS_URL || "",
       signatoryName: process.env.COMPANY_SIGNATORY_NAME || "Authorized Signatory",
       signatoryTitle: process.env.COMPANY_SIGNATORY_TITLE || "Authorized Signatory",
-      // Optional images (absolute path or buffer) if you want a logo/seal/signature on page 2:
-      // sealImage: process.env.COMPANY_SEAL_IMAGE_PATH,
-      // signatureImage: process.env.COMPANY_SIGNATURE_IMAGE_PATH,
 
-      // Optional toggles used by generator:
-      // showHSNSummary: true,
-      // signPage1: true,
-      // preferHSN: false, hsnForService: "999799", sac: "999799"
+      // used by PDF to draw inside the box
+      signatureImage: signaturePath || undefined,
+
+      // NEW: S3 fallback (no env needed; default matches your S3 path)
+      signatureS3Key: process.env.COMPANY_SIGNATURE_S3_KEY || "branding/signature.jpg",
+
+      // --- signature rendering controls ---
+      // box | invisiblebox | nobox
+      signatureMode: (process.env.COMPANY_SIGNATURE_MODE || "box"),
+      signatureBW: (process.env.COMPANY_SIGNATURE_BW || "1") === "1",
+      signatureMaxW: Number(process.env.COMPANY_SIGNATURE_MAXW || 120),
+      signatureMaxH: Number(process.env.COMPANY_SIGNATURE_MAXH || 45),
     };
 
     // Platform fee (gross, tax-inclusive)
@@ -86,35 +105,23 @@ exports.markOrderDelivered = async (req, res) => {
         items: order.items || [],
         paymentMode: order.paymentMethod || order.payment_mode || "",
         paymentRef: order.paymentRef || order.payment_reference || "",
-
-        // Prefer delivery address and pass customer fields used by the generator
         deliveryAddress,
         customerName: order.customerName || customerDoc?.name || "",
         customerGSTIN: order.customerGSTIN || customerDoc?.gstin || "",
         customerAddress: order.customerAddress || order.address || customerDoc?.address || null,
       },
-
-      // Include legalEntityName + Retail Drug License so it renders under GSTIN
       pharmacy: {
         name: pharmacyDoc?.name || "",
         legalEntityName: pharmacyDoc?.legalEntityName || "",
         address: pharmacyDoc?.address || pharmacyDoc?.location?.formatted || "",
         gstin: pharmacyDoc?.gstin || "",
-
-        // Retailer only (you said no wholesaler): generator will pick this up and show a single "Drug License No."
         drugLicenseRetail: pharmacyDoc?.drugLicenseRetail || "",
-        // If you ever store alternate keys in future, generator also supports these:
-        // drugLicense20B: pharmacyDoc?.drugLicense20B,
-        // drugLicense: pharmacyDoc?.drugLicense,
-        // drugLicence: pharmacyDoc?.drugLicence,
       },
-
       customer: {
         name: customerDoc?.name || order.customerName || "",
         address: deliveryAddress || customerDoc?.address || "",
         gstin: customerDoc?.gstin || "",
       },
-
       company,
       platformFeeGross,
     });
