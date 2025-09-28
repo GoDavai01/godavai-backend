@@ -272,8 +272,9 @@ const boxY = signTop + 16;
     ? await prepareSignatureBuffer(company)
     : await loadSignatureBuffer(company);
   if (imgBuf) {
-    try { doc.image(imgBuf, boxX + 4, boxY + 4, { fit: [boxW - 8, boxH - 8] }); } catch {}
-  }
+  const shiftX = 10; // move signature slightly right
+  try { doc.image(imgBuf, boxX + 4 + shiftX, boxY + 4, { fit: [boxW - 8 - shiftX, boxH - 8] }); } catch {}
+}
 
   const lineY = boxY + boxH + 14;
   doc.moveTo(boxX, lineY).lineTo(boxX + boxW, lineY).strokeColor("#000").lineWidth(0.7).stroke();
@@ -788,20 +789,25 @@ async function pagePlatformFee(doc, { order, company = {}, customer = {}, platfo
     doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor("#E0E0E0").lineWidth(0.5).stroke();
   }
 
-  // ---- Payment text (LEFT aligned full-width, directly under table)
+// ---- Payment text (LEFT aligned full-width, with spacing)
 ensureRoom(doc, 140);
 const x = 40, w = 515;
 const mode = formatPaymentMode(order.paymentMode);
 
-doc.font("Helvetica").fontSize(10)
-  .text(`Payment Mode: ${mode}`, x, doc.y + 8, { width: w, align: "left" })
-  .text(
-    `Amount of INR ${fmtINR(gross)} settled through ${mode} ` +
-    `against Order ID: ${order.orderId || ""} dated ${order.date || ""}.`,
-    x, doc.y + 4, { width: w, align: "left" }
-  )
-  .text("Pricing is tax-inclusive.", x, doc.y + 4, { width: w, align: "left" })
-  .text("Tax is not payable on reverse charge basis.", x, doc.y + 2, { width: w, align: "left" });
+// spacing controls (page 2 only)
+const topGap = 12;   // gap between table and "Payment Mode"
+const paraGap = 6;   // gap between each subsequent point
+const paraOpts = { width: w, align: "left", paragraphGap: paraGap };
+
+doc.font("Helvetica").fontSize(10);
+doc.text(`Payment Mode: ${mode}`, x, doc.y + topGap, paraOpts);
+doc.text(
+  `Amount of INR ${fmtINR(gross)} settled through ${mode} ` +
+  `against Order ID: ${order.orderId || ""} dated ${order.date || ""}.`,
+  x, doc.y, paraOpts
+);
+doc.text("Pricing is tax-inclusive.", x, doc.y, paraOpts);
+doc.text("Tax is not payable on reverse charge basis.", x, doc.y, paraOpts);
 
   // ---- Signature (guarded)
 const afterSigY = await addSignatureBlock(doc, company);
