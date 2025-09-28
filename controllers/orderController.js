@@ -44,7 +44,7 @@ exports.markOrderDelivered = async (req, res) => {
     const pharmacyDoc = await Pharmacy.findById(order.pharmacyId || order.pharmacy).lean();
     const customerDoc = await User.findById(order.customerId || order.userId).lean();
 
-    // Prefer actual delivery address for invoice & POS
+    // Prefer *actual* delivery address for invoice & POS
     const deliveryAddress =
       order.deliveryAddress ||
       order.customerAddress ||
@@ -72,18 +72,18 @@ exports.markOrderDelivered = async (req, res) => {
       phone: process.env.COMPANY_PHONE || "",
       website: process.env.COMPANY_WEBSITE || "www.godavaii.com",
       termsUrl: process.env.COMPANY_TERMS_URL || "",
+
       signatoryName: process.env.COMPANY_SIGNATORY_NAME || "Authorized Signatory",
       signatoryTitle: process.env.COMPANY_SIGNATORY_TITLE || "Authorized Signatory",
 
-      // used by PDF to draw inside the box
+      // Local file path wins if present:
       signatureImage: signaturePath || undefined,
 
-      // NEW: S3 fallback (no env needed; default matches your S3 path)
+      // S3 fallback (no ENV needed; default is your S3 object)
       signatureS3Key: process.env.COMPANY_SIGNATURE_S3_KEY || "branding/signature.jpg",
 
-      // --- signature rendering controls ---
-      // box | invisiblebox | nobox
-      signatureMode: (process.env.COMPANY_SIGNATURE_MODE || "box"),
+      // --- Signature rendering controls ---
+      signatureMode: (process.env.COMPANY_SIGNATURE_MODE || "box"), // box | invisiblebox | nobox
       signatureBW: (process.env.COMPANY_SIGNATURE_BW || "1") === "1",
       signatureMaxW: Number(process.env.COMPANY_SIGNATURE_MAXW || 120),
       signatureMaxH: Number(process.env.COMPANY_SIGNATURE_MAXH || 45),

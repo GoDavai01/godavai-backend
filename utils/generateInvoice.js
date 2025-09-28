@@ -1,14 +1,13 @@
 // uploads/generateInvoice.js
-// Page 1: Product (pharmacy) invoice – compact table + inline Amount in Words
-// Page 2: Platform Fee invoice – compact table (auto IGST when POS != Supplier state), with signature
-// Contact: support@godavaii.com
-
 "use strict";
+
+// Page 1: Product (pharmacy) invoice
+// Page 2: Platform Fee invoice (auto IGST when POS != Supplier state)
+// Contact: support@godavaii.com
 
 const PDFDocument = require("pdfkit");
 const sharp = (() => { try { return require("sharp"); } catch { return null; } })();
 const fs = require("fs");
-const path = require("path");
 const https = require("https");
 const { classifyHSNandGST } = require("../utils/tax/taxClassifier");
 
@@ -21,7 +20,7 @@ const s3 = (() => {
   }
 })();
 
-// -------------------- small utils --------------------
+// -------------------- tiny utils --------------------
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const fmtINR = (n) => (r2(n)).toFixed(2);
 
@@ -56,11 +55,6 @@ function amountInWordsINR(num) {
   const a = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
   const b = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
   const two = (n)=> n < 20 ? a[n] : b[Math.floor(n/10)] + (n%10 ? " " + a[n%10] : "");
-  const three = (n)=> {
-    const h = Math.floor(n/100), r = n%100;
-    return (h ? a[h] + " Hundred" + (r ? " " : "") : "") + (r ? two(r) : "");
-  };
-
   const ru = rupees;
   const c = Math.floor(ru/1e7);
   const l = Math.floor((ru/1e5)%100);
@@ -202,7 +196,6 @@ async function prepareSignatureBuffer(company) {
     if (!input) return null;
     if (!sharp) return input; // fallback: no processing available
 
-    // grayscale -> high contrast threshold -> trim -> resize to fit box
     let img = sharp(input).grayscale();
     img = img.linear(1.6, -30).threshold(170);
     if (img.trim) { try { img = img.trim(); } catch {} }
@@ -218,21 +211,32 @@ async function prepareSignatureBuffer(company) {
 }
 
 // ============================================================
-// Signature block (no overlap; configurable box visibility)
+// Signature block (centered label; clamped Y; no overlap)
 // ============================================================
 async function addSignatureBlock(doc, company) {
-  const signTop = Math.max(doc.y + 24, 640); // pushes the box down so it never overlaps the label
-  const signLeft = 360;
+  const pageH = doc.page?.height || 842;
+  const bottomMargin = doc.page?.margins?.bottom ?? 40;
 
-  // Label "For <Company>" (always above the box)
-  doc.font("Helvetica").fontSize(10).fillColor("black")
-     .text(`For ${company.legalName || "Karniva Private Limited"}`, signLeft, signTop);
-
-  // Geometry
-  const boxX = signLeft + 25;
-  const boxY = signTop + 16; // gap prevents overlap with label
+  // Desired geometry
   const boxW = Number(company.signatureMaxW || 120);
   const boxH = Number(company.signatureMaxH || 45);
+
+  // Compute a safe Y so nothing slides off the page or overlaps content above
+  const blockH = 16 /*gap*/ + boxH + 14 /*line gap*/ + 28 /*caption*/;
+  const maxTop = pageH - bottomMargin - blockH - 6;
+  const minTop = Math.max(doc.y + 16, 560);
+  const signTop = Math.min(Math.max(minTop, 580), maxTop);
+
+  // Left anchor
+  const left = 360;
+  const boxX = left + 25;
+  const boxY = signTop + 16;
+
+  // Label "For <Company>" centered over the box
+  const label = `For ${company.legalName || "Karniva Private Limited"}`;
+  const labelW = doc.widthOfString(label);
+  const labelX = boxX + (boxW - labelW) / 2;
+  doc.font("Helvetica").fontSize(10).fillColor("black").text(label, labelX, signTop, { lineBreak: false });
 
   // Box visibility control
   const mode = (company.signatureMode || "box").toLowerCase(); // box | invisiblebox | nobox
@@ -240,13 +244,16 @@ async function addSignatureBlock(doc, company) {
     doc.rect(boxX, boxY, boxW, boxH).strokeColor("#CCCCCC").lineWidth(1).stroke();
   } else if (mode === "invisiblebox") {
     doc.rect(boxX, boxY, boxW, boxH).strokeColor("#FFFFFF").lineWidth(1).stroke();
-  } // nobox => no rect, signature still placed & centered
+  }
 
   // Signature image (processed) centered inside the area
-  const processed = (company.signatureBW !== false) ? await prepareSignatureBuffer(company) : await loadSignatureBuffer(company);
-  if (processed) {
+  const source = (company.signatureBW !== false)
+    ? await prepareSignatureBuffer(company)
+    : await loadSignatureBuffer(company);
+
+  if (source) {
     try {
-      doc.image(processed, boxX + 4, boxY + 4, { fit: [boxW - 8, boxH - 8], align: 'center', valign: 'center' });
+      doc.image(source, boxX + 4, boxY + 4, { fit: [boxW - 8, boxH - 8], align: 'center', valign: 'center' });
     } catch { /* ignore bad image data */ }
   }
 
@@ -262,13 +269,50 @@ async function addSignatureBlock(doc, company) {
 }
 
 // ============================================================
-// Unified Footer with NOTES + contact + final Thank You
+// Footer with NOTES + contact + thank-you (no overlap)
 // ============================================================
+function drawContactLine(doc, y, company = {}) {
+  // Draw website | email | phone as *separate segments* so viewers don't auto repaint on top
+  const site = (company.website || "www.godavaii.com").replace(/^https?:\/\//, "");
+  const email = company.email || "support@godavaii.com";
+  const phone = company.phone || "";
+
+  const parts = [site, email, phone].filter(Boolean);
+  if (!parts.length) return;
+
+  const sep = " | ";
+  doc.font("Helvetica").fontSize(9).fillColor("#000");
+
+  const widths = parts.map(t => doc.widthOfString(t));
+  const sepW = doc.widthOfString(sep);
+  const total = widths.reduce((a,b)=>a+b, 0) + (parts.length - 1) * sepW;
+
+  const left = 40 + (515 - total) / 2; // center within content width 515
+  let x = left;
+  const lh = doc.currentLineHeight();
+
+  parts.forEach((t, i) => {
+    const w = widths[i];
+    doc.text(t, x, y, { lineBreak: false });
+    // Optional real link annotations (won’t duplicate text)
+    try {
+      if (i === 0) doc.link(x, y, w, lh, `https://${site}`);
+      else if (i === 1) doc.link(x, y, w, lh, `mailto:${email}`);
+    } catch { /* link optional */ }
+
+    x += w;
+    if (i !== parts.length - 1) {
+      doc.text(sep, x, y, { lineBreak: false });
+      x += sepW;
+    }
+  });
+
+  doc.y = Math.max(doc.y, y + lh);
+}
+
 function renderFooter(doc, { company = {}, notes = [], includeCommAddress = false }) {
   const primary = "#13C0A2";
   const address = company.communicationAddress || company.address || "";
-  const contactLine = [company.website || "www.godavaii.com", company.email || "support@godavaii.com", company.phone || ""]
-    .filter(Boolean).join(" | ");
 
   doc.moveTo(40, 720).lineTo(555, 720).strokeColor("#E0E0E0").lineWidth(1).stroke();
 
@@ -285,10 +329,10 @@ function renderFooter(doc, { company = {}, notes = [], includeCommAddress = fals
     doc.font("Helvetica").fontSize(9).fillColor("#000").text(`Communication Address: ${address}`, 40, y + 6, { align: "center" });
     y = doc.y;
   }
-  if (contactLine) {
-    doc.font("Helvetica").fontSize(9).fillColor("#000").text(contactLine, 40, y + 4, { align: "center" });
-    y = doc.y;
-  }
+
+  // Contact line, **no overlap**
+  drawContactLine(doc, y + 4, company);
+  y = doc.y;
 
   doc.fontSize(10).fillColor(primary).font("Helvetica-Bold")
     .text("Thank you for choosing GODAVAII", 40, 772, { align: "center" });
@@ -300,7 +344,6 @@ function renderFooter(doc, { company = {}, notes = [], includeCommAddress = fals
 async function pageMedicines(doc, { order, pharmacy, customer, company }) {
   const primary = "#13C0A2";
   const tableHeaderBG = "#EAF7F2";
-  const lightGrey = "#EAEAEA";
 
   header(doc, "Invoice for Medicine Purchase", { bigTitle: "TAX INVOICE", topRight: "ORIGINAL FOR RECIPIENT" });
 
@@ -330,14 +373,7 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
 
   let yR = startY;
   if (pharmacy?.legalEntityName) {
-    yR = drawKV(doc, {
-      x: rightBox.x,
-      y: yR,
-      label: "Legal Entity Name:",
-      value: pharmacy.legalEntityName,
-      labelW: rightBox.labelW,
-      colW: rightBox.w
-    });
+    yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Legal Entity Name:", value: pharmacy.legalEntityName, labelW:rightBox.labelW, colW:rightBox.w });
   }
   yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Pharmacy:", value:(pharmacy?.name || ""),    labelW:rightBox.labelW, colW:rightBox.w });
   yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Address:",  value:(pharmacy?.address || ""), labelW:rightBox.labelW, colW:rightBox.w });
@@ -542,8 +578,7 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
 
   doc.moveTo(40, rowY + 8).lineTo(555, rowY + 8).strokeColor(primary).lineWidth(1).stroke();
   const words = amountInWordsINR(grossSum);
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("black")
-    .text("Amount in Words: ", 40, rowY + 16, { continued: true });
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("black").text("Amount in Words: ", 40, rowY + 16, { continued: true });
   doc.font("Helvetica").fontSize(10).text(words);
 
   doc.moveDown(0.8);
@@ -619,7 +654,7 @@ async function pagePlatformFee(doc, { order, company = {}, customer = {}, platfo
     : (supplierState && posState && supplierState !== posState);
 
   const posCode = STATE_CODES[posState] || "";
-  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Place of Supply:", value: `${titleCase(posState)}${posCode ? " (${posCode})" : ""}`, labelW:rightBox.labelW, colW:rightBox.w });
+  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Place of Supply:", value: `${titleCase(posState)}${posCode ? " ("+posCode+")" : ""}`, labelW:rightBox.labelW, colW:rightBox.w });
 
   let curY = Math.max(yL, yR) + 6;
 
@@ -732,7 +767,7 @@ async function pagePlatformFee(doc, { order, company = {}, customer = {}, platfo
   doc.font("Helvetica-Bold").fontSize(10).text("Amount in Words: ", 40, doc.y, { continued: true });
   doc.font("Helvetica").fontSize(10).text(amountInWordsINR(gross));
 
-  // Signature block (processed B/W image; no overlap; configurable box)
+  // Signature block (centered label; safe Y)
   await addSignatureBlock(doc, company);
 
   const footerNotes = [
