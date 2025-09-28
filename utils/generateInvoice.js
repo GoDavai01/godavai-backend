@@ -211,72 +211,67 @@ async function prepareSignatureBuffer(company) {
 }
 
 // ============================================================
-// Signature block (centered label; clamped Y; no overlap)
+// Signature block: centered label & caption; exact underline; safe layout
 // ============================================================
 async function addSignatureBlock(doc, company) {
   const pageH = doc.page?.height || 842;
   const bottomMargin = doc.page?.margins?.bottom ?? 40;
 
-  // Desired geometry
   const boxW = Number(company.signatureMaxW || 120);
   const boxH = Number(company.signatureMaxH || 45);
 
-  // Compute a safe Y so nothing slides off the page or overlaps content above
-  const blockH = 16 /*gap*/ + boxH + 14 /*line gap*/ + 28 /*caption*/;
+  const blockH = 16 + boxH + 14 + 28; // gap + box + line gap + captions
   const maxTop = pageH - bottomMargin - blockH - 6;
   const minTop = Math.max(doc.y + 16, 560);
   const signTop = Math.min(Math.max(minTop, 580), maxTop);
 
-  // Left anchor
-  const left = 360;
-  const boxX = left + 25;
+  const boxX = 385; // keep on the right
   const boxY = signTop + 16;
 
-  // Label "For <Company>" centered over the box
+  // "For <Company>" centered
   const label = `For ${company.legalName || "Karniva Private Limited"}`;
-  const labelW = doc.widthOfString(label);
-  const labelX = boxX + (boxW - labelW) / 2;
-  doc.font("Helvetica").fontSize(10).fillColor("black").text(label, labelX, signTop, { lineBreak: false });
+  doc.font("Helvetica").fontSize(10).fillColor("black")
+     .text(label, boxX, signTop, { width: boxW, align: "center" });
 
-  // Box visibility control
-  const mode = (company.signatureMode || "box").toLowerCase(); // box | invisiblebox | nobox
-  if (mode === "box") {
-    doc.rect(boxX, boxY, boxW, boxH).strokeColor("#CCCCCC").lineWidth(1).stroke();
-  } else if (mode === "invisiblebox") {
-    doc.rect(boxX, boxY, boxW, boxH).strokeColor("#FFFFFF").lineWidth(1).stroke();
+  // box (mode: box | invisiblebox | nobox)
+  const mode = (company.signatureMode || "box").toLowerCase();
+  if (mode !== "nobox") {
+    const color = mode === "box" ? "#CCCCCC" : "#FFFFFF";
+    doc.rect(boxX, boxY, boxW, boxH).strokeColor(color).lineWidth(1).stroke();
   }
 
-  // Signature image (processed) centered inside the area
-  const source = (company.signatureBW !== false)
+  const imgBuf = (company.signatureBW !== false)
     ? await prepareSignatureBuffer(company)
     : await loadSignatureBuffer(company);
-
-  if (source) {
-    try {
-      doc.image(source, boxX + 4, boxY + 4, { fit: [boxW - 8, boxH - 8], align: 'center', valign: 'center' });
-    } catch { /* ignore bad image data */ }
+  if (imgBuf) {
+    try { doc.image(imgBuf, boxX + 4, boxY + 4, { fit: [boxW - 8, boxH - 8] }); } catch {}
   }
 
-  // Line + caption (kept below the box)
+  // underline (exactly the box width)
   const lineY = boxY + boxH + 14;
-  doc.moveTo(boxX, lineY).lineTo(boxX + boxW + 45, lineY).strokeColor("#000").lineWidth(0.7).stroke();
+  doc.moveTo(boxX, lineY).lineTo(boxX + boxW, lineY).strokeColor("#000").lineWidth(0.7).stroke();
+
+  // captions centered & same size
   const nm = company.signatoryName || "Authorized Signatory";
   const tl = company.signatoryTitle || "Authorized Signatory";
-  doc.font("Helvetica").fontSize(9).fillColor("black").text(nm, boxX, lineY + 4);
-  if (tl && tl !== nm) doc.text(tl, boxX, lineY + 16);
+  doc.font("Helvetica").fontSize(10).fillColor("black")
+     .text(nm, boxX, lineY + 4, { width: boxW, align: "center" });
+  if (tl && tl !== nm) {
+    doc.text(tl, boxX, lineY + 18, { width: boxW, align: "center" });
+  }
 
-  return lineY + 28;
+  return lineY + 32;
 }
 
 // ============================================================
-// Footer with NOTES + contact + thank-you (no overlap)
+// Footer helpers: never draw NOTES if none; safe links + thank-you
 // ============================================================
+
+// add this helper (top of file with others)
 function drawContactLine(doc, y, company = {}) {
-  // Draw website | email | phone as *separate segments* so viewers don't auto repaint on top
   const site = (company.website || "www.godavaii.com").replace(/^https?:\/\//, "");
   const email = company.email || "support@godavaii.com";
   const phone = company.phone || "";
-
   const parts = [site, email, phone].filter(Boolean);
   if (!parts.length) return;
 
@@ -285,21 +280,18 @@ function drawContactLine(doc, y, company = {}) {
 
   const widths = parts.map(t => doc.widthOfString(t));
   const sepW = doc.widthOfString(sep);
-  const total = widths.reduce((a,b)=>a+b, 0) + (parts.length - 1) * sepW;
+  const total = widths.reduce((a,b)=>a+b,0) + (parts.length-1)*sepW;
 
-  const left = 40 + (515 - total) / 2; // center within content width 515
-  let x = left;
-  const lh = doc.currentLineHeight();
+  const left = 40 + (515 - total)/2;
+  let x = left, lh = doc.currentLineHeight();
 
-  parts.forEach((t, i) => {
+  parts.forEach((t,i) => {
     const w = widths[i];
     doc.text(t, x, y, { lineBreak: false });
-    // Optional real link annotations (won’t duplicate text)
     try {
       if (i === 0) doc.link(x, y, w, lh, `https://${site}`);
       else if (i === 1) doc.link(x, y, w, lh, `mailto:${email}`);
-    } catch { /* link optional */ }
-
+    } catch {}
     x += w;
     if (i !== parts.length - 1) {
       doc.text(sep, x, y, { lineBreak: false });
@@ -310,32 +302,36 @@ function drawContactLine(doc, y, company = {}) {
   doc.y = Math.max(doc.y, y + lh);
 }
 
+// replace existing renderFooter with this version
 function renderFooter(doc, { company = {}, notes = [], includeCommAddress = false }) {
   const primary = "#13C0A2";
   const address = company.communicationAddress || company.address || "";
 
   doc.moveTo(40, 720).lineTo(555, 720).strokeColor("#E0E0E0").lineWidth(1).stroke();
 
-  doc.font("Helvetica-Bold").fontSize(9).fillColor("#222").text("NOTES", 40, 730);
-  doc.font("Helvetica").fontSize(9).fillColor("#000");
-  let y = doc.y + 2;
-  notes.forEach(n => {
-    const bullet = "• ";
-    doc.text(bullet + n, 40, y, { width: 515 });
+  let y = 730;
+
+  if (notes.length) {
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#222").text("NOTES", 40, y);
+    doc.font("Helvetica").fontSize(9).fillColor("#000");
     y = doc.y + 2;
-  });
+    notes.forEach(n => {
+      doc.text("• " + n, 40, y, { width: 515 });
+      y = doc.y + 2;
+    });
+  }
 
   if (includeCommAddress && address) {
-    doc.font("Helvetica").fontSize(9).fillColor("#000").text(`Communication Address: ${address}`, 40, y + 6, { align: "center" });
+    doc.font("Helvetica").fontSize(9).fillColor("#000")
+       .text(`Communication Address: ${address}`, 40, notes.length ? y + 6 : 730, { align: "center" });
     y = doc.y;
   }
 
-  // Contact line, **no overlap**
-  drawContactLine(doc, y + 4, company);
+  drawContactLine(doc, y + 4, company);   // << no-overlap contact line
   y = doc.y;
 
   doc.fontSize(10).fillColor(primary).font("Helvetica-Bold")
-    .text("Thank you for choosing GODAVAII", 40, 772, { align: "center" });
+     .text("Thank you for choosing GODAVAII", 40, 772, { align: "center" });
 }
 
 // ============================================================
@@ -350,56 +346,47 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
   doc.moveDown(0.7).font("Helvetica").fontSize(10).fillColor("black");
   const startY = doc.y;
 
-  const leftBox = { x: 40, w: 260, labelW: 120 };
-  const rightBox = { x: 320, w: 235, labelW: 110 };
+  // -- Invoice metadata (small block)
+  let y = startY;
+  y = drawKV(doc, { x:40, y, label:"Invoice No:",   value: order.invoiceNo || "", labelW:120, colW:515 });
+  y = drawKV(doc, { x:40, y, label:"Order ID:",     value: order.orderId   || "", labelW:120, colW:515 });
+  y = drawKV(doc, { x:40, y, label:"Invoice Date:", value: order.date      || "", labelW:120, colW:515 });
+  y += 4;
+
+  // -- Pharmacy Details (list)
+  doc.font("Helvetica-Bold").fontSize(10).text("Pharmacy Details", 40, y);
+  y = doc.y + 2;
+  y = drawKV(doc, { x:40, y, label:"Name:",    value:(pharmacy?.name || ""),    labelW:120, colW:515, gapY:2 });
+  y = drawKV(doc, { x:40, y, label:"Address:", value:(pharmacy?.address || ""), labelW:120, colW:515, gapY:2 });
+  y = drawKV(doc, { x:40, y, label:"GSTIN:",   value:(pharmacy?.gstin || ""),   labelW:120, colW:515, gapY:2 });
+  const drugLicense1 =
+    pharmacy?.drugLicenseRetail || pharmacy?.drugLicense20B ||
+    pharmacy?.drugLicense || pharmacy?.drugLicence;
+  if (drugLicense1) {
+    y = drawKV(doc, { x:40, y, label:"Drug License No.:", value: drugLicense1, labelW:120, colW:515, gapY:2 });
+  }
+  y += 4;
+
+  // -- Customer Details (list)
+  doc.font("Helvetica-Bold").fontSize(10).text("Customer Details", 40, y);
+  y = doc.y + 2;
+  const deliveryAddr = order?.deliveryAddress || order?.customerAddress || customer?.address;
 
   const supplierCode = stateFromGSTIN(pharmacy?.gstin) || (STATE_CODES[inferState(pharmacy?.address)] || "");
   const supplierState = CODE_TO_STATE[supplierCode] || inferState(pharmacy?.address) || "uttar pradesh";
-
   const posState =
-    findStateName(order?.deliveryAddress?.state) ||
-    inferState(order?.deliveryAddress) ||
-    inferState(order?.customerAddress) ||
-    findStateName(customer?.address?.state) ||
-    inferState(customer?.address) ||
-    supplierState;
+    findStateName(order?.deliveryAddress?.state) || inferState(order?.deliveryAddress) ||
+    inferState(order?.customerAddress) || findStateName(customer?.address?.state) ||
+    inferState(customer?.address) || supplierState;
   const posCode = STATE_CODES[posState] || "";
   const isInterState = supplierCode && posCode && supplierCode !== posCode;
 
-  let yL = startY;
-  yL = drawKV(doc, { x:leftBox.x, y:yL, label:"Invoice No:",   value: order.invoiceNo || "", labelW:leftBox.labelW, colW:leftBox.w });
-  yL = drawKV(doc, { x:leftBox.x, y:yL, label:"Order ID:",     value: order.orderId   || "", labelW:leftBox.labelW, colW:leftBox.w });
-  yL = drawKV(doc, { x:leftBox.x, y:yL, label:"Invoice Date:", value: order.date      || "", labelW:leftBox.labelW, colW:leftBox.w });
-
-  let yR = startY;
-  if (pharmacy?.legalEntityName) {
-    yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Legal Entity Name:", value: pharmacy.legalEntityName, labelW:rightBox.labelW, colW:rightBox.w });
-  }
-  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Pharmacy:", value:(pharmacy?.name || ""),    labelW:rightBox.labelW, colW:rightBox.w });
-  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Address:",  value:(pharmacy?.address || ""), labelW:rightBox.labelW, colW:rightBox.w });
-  yR = drawKV(doc, { x:rightBox.x, y:yR, label:"GSTIN:",    value:(pharmacy?.gstin || ""),   labelW:rightBox.labelW, colW:rightBox.w });
-
-  const drugLicense =
-    pharmacy?.drugLicenseRetail ||
-    pharmacy?.drugLicense20B ||
-    pharmacy?.drugLicense ||
-    pharmacy?.drugLicence;
-  if (drugLicense) {
-    yR = drawKV(doc, { x:rightBox.x, y:yR, label:"Drug License No.:", value: drugLicense, labelW:rightBox.labelW, colW:rightBox.w });
-  }
-
-  let curY = Math.max(yL, yR) + 6;
-
-  const custLabelW = 120;
-  curY = drawKV(doc, { x:40, y:curY, label:"Customer:", value:(order.customerName || customer?.name || ""), labelW:custLabelW, colW:515, gapY:4 });
-
-  const deliveryAddr = order?.deliveryAddress || order?.customerAddress || customer?.address;
-  curY = drawKV(doc, { x:40, y:curY, label:"Delivery Address:", value:getPrintableAddress(deliveryAddr), labelW:custLabelW, colW:515, gapY:4 });
-
+  y = drawKV(doc, { x:40, y, label:"Name:",             value:(order.customerName || customer?.name || ""), labelW:120, colW:515, gapY:2 });
+  y = drawKV(doc, { x:40, y, label:"Delivery Address:", value:getPrintableAddress(deliveryAddr),            labelW:120, colW:515, gapY:2 });
   if (order.customerGSTIN || customer?.gstin) {
-    curY = drawKV(doc, { x:40, y:curY, label:"Customer GSTIN:", value:(order.customerGSTIN || customer?.gstin), labelW:custLabelW, colW:515, gapY:4 });
+    y = drawKV(doc, { x:40, y, label:"Customer GSTIN:", value:(order.customerGSTIN || customer?.gstin),     labelW:120, colW:515, gapY:2 });
   }
-  curY = drawKV(doc, { x:40, y:curY, label:"Place of Supply:", value:`${titleCase(posState)}${posCode ? " ("+posCode+")" : ""}`, labelW:custLabelW, colW:515, gapY:6 });
+  y = drawKV(doc, { x:40, y, label:"Place of Supply:",  value:`${titleCase(posState)}${posCode ? " ("+posCode+")" : ""}`, labelW:120, colW:515, gapY:6 });
 
   doc.moveDown(0.6);
   doc.moveTo(40, doc.y).lineTo(555, doc.y).strokeColor(tableHeaderBG).lineWidth(1.5).stroke();
@@ -482,7 +469,7 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
     if (rowY > 680) { doc.addPage(); header(doc, "Medicines (contd.)", { bigTitle: "TAX INVOICE", topRight: "ORIGINAL FOR RECIPIENT" }); rowY = doc.y + 16; }
     doc.rect(40, rowY, 515, 22).fill("#F7F7F7").strokeColor("#E0E0E0").lineWidth(0.5).stroke();
     doc.font("Helvetica-Bold").fontSize(9).fillColor("black")
-      .text("Item(s) Total", 40+30, rowY + 6, { width: 205+55+28, align: "left" });
+      .text("Total", 40+30, rowY + 6, { width: 205+55+28, align: "left" });
     doc.font("Helvetica-Bold")
       .text(fmtINR(baseSum), 40+30+205+55+28, rowY + 6, { width: 70, align: "center" })
       .text(fmtINR(igstSum), 40+30+205+55+28+70+32, rowY + 6, { width: 44, align: "center" })
@@ -567,7 +554,7 @@ async function pageMedicines(doc, { order, pharmacy, customer, company }) {
     if (rowY > 680) { doc.addPage(); header(doc, "Medicines (contd.)", { bigTitle: "TAX INVOICE", topRight: "ORIGINAL FOR RECIPIENT" }); rowY = doc.y + 16; }
     doc.rect(40, rowY, 515, 22).fill("#F7F7F7").strokeColor("#E0E0E0").lineWidth(0.5).stroke();
     doc.font("Helvetica-Bold").fontSize(9).fillColor("black")
-      .text("Item(s) Total", x.name, rowY + 6, { width: col.name + col.hsn + col.qty, align: "left" });
+      .text("Total", x.name, rowY + 6, { width: col.name + col.hsn + col.qty, align: "left" });
     doc.font("Helvetica-Bold")
       .text(fmtINR(baseSum),  x.taxable, rowY + 6, { width: col.taxable, align: "center" })
       .text(fmtINR(cgstSum),  x.cgstAmt, rowY + 6, { width: col.cgstAmt, align: "center" })
@@ -763,18 +750,26 @@ async function pagePlatformFee(doc, { order, company = {}, customer = {}, platfo
     doc.moveTo(40, rowY).lineTo(555, rowY).strokeColor("#E0E0E0").lineWidth(0.5).stroke();
   }
 
+  // ---- Replace "Amount in Words" with settlement text + two lines
   doc.moveDown(0.6);
-  doc.font("Helvetica-Bold").fontSize(10).text("Amount in Words: ", 40, doc.y, { continued: true });
-  doc.font("Helvetica").fontSize(10).text(amountInWordsINR(gross));
+  const mode = formatPaymentMode(order.paymentMode);
+  doc.font("Helvetica").fontSize(10)
+     .text(`Payment Mode: ${mode}`);
+  doc.moveDown(0.2);
+  doc.text(
+    `Amount of INR ${fmtINR(gross)} settled through ${mode} ` +
+    `against Order ID: ${order.orderId || ""} dated ${order.date || ""}.`
+  );
+  doc.moveDown(0.6);
+  doc.font("Helvetica").fontSize(10)
+     .text("Pricing is tax-inclusive.")
+     .text("Tax is not payable on reverse charge basis.");
 
   // Signature block (centered label; safe Y)
   await addSignatureBlock(doc, company);
 
-  const footerNotes = [
-    "Pricing is tax-inclusive. Tax is not payable on reverse charge basis.",
-    "GoDavaii acts as a facilitator for orders and delivery."
-  ];
-  renderFooter(doc, { company, notes: footerNotes, includeCommAddress: true });
+  // Footer WITHOUT notes (keeps comm address & links; no "NOTES" title)
+  renderFooter(doc, { company, notes: [], includeCommAddress: true });
 }
 
 // ============================================================
