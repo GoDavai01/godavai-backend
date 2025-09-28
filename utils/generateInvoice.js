@@ -225,23 +225,36 @@ async function prepareSignatureBuffer(company) {
 async function addSignatureBlock(doc, company) {
   ensureRoom(doc, 140); // reserve space before drawing signature cluster
 
+  const pageW = doc.page?.width || 595;
   const pageH = doc.page?.height || 842;
   const bottomMargin = doc.page?.margins?.bottom ?? 40;
 
-  const boxW = Number(company.signatureMaxW || 120);
+  // Anchor near the right side
+  const boxX = 385;                    // keep on the right (same as before)
+  const rightLimit = 40 + 515;         // = 555, same content width as the rest
+
+  const defaultW = Number(company.signatureMaxW || 120);
   const boxH = Number(company.signatureMaxH || 45);
 
+  const label = `For ${company.legalName || "Karniva Private Limited"}`;
+
+  // Measure label and widen the box just enough (but never past the right margin)
+  doc.font("Helvetica").fontSize(10);
+  const neededForLabel = Math.ceil(doc.widthOfString(label)) + 10; // small padding
+  const maxAllowed = rightLimit - boxX;                            // ~170
+  const boxW = Math.min(maxAllowed, Math.max(defaultW, neededForLabel));
+
+  // Vertical placement – leave room for footer band later
   const blockH = 16 + boxH + 14 + 28; // gap + box + line gap + captions
   const maxTop = pageH - bottomMargin - blockH - 6;
   const minTop = Math.max(doc.y + 16, 560);
   const signTop = Math.min(Math.max(minTop, 580), maxTop);
 
-  const boxX = 385; // keep on the right
   const boxY = signTop + 16;
 
-  const label = `For ${company.legalName || "Karniva Private Limited"}`;
+  // Label (single line; no wrapping)
   doc.font("Helvetica").fontSize(10).fillColor("black")
-     .text(label, boxX, signTop, { width: boxW, align: "center" });
+     .text(label, boxX, signTop, { width: boxW, align: "center", lineBreak: false });
 
   const mode = (company.signatureMode || "box").toLowerCase();
   if (mode !== "nobox") {
@@ -262,12 +275,15 @@ async function addSignatureBlock(doc, company) {
   const nm = company.signatoryName || "Authorized Signatory";
   const tl = company.signatoryTitle || "Authorized Signatory";
   doc.font("Helvetica").fontSize(10).fillColor("black")
-     .text(nm, boxX, lineY + 4, { width: boxW, align: "center" });
+     .text(nm, boxX, lineY + 4, { width: boxW, align: "center", lineBreak: false });
   if (tl && tl !== nm) {
-    doc.text(tl, boxX, lineY + 18, { width: boxW, align: "center" });
+    doc.text(tl, boxX, lineY + 18, { width: boxW, align: "center", lineBreak: false });
   }
 
-  return lineY + 32;
+  // Advance the document cursor so subsequent ensureRoom() sees the true bottom
+  const bottomY = lineY + 32;
+  doc.y = Math.max(doc.y, bottomY);
+  return bottomY;
 }
 
 // ============================================================
@@ -781,17 +797,17 @@ doc.font("Helvetica").fontSize(10)
   .text("Pricing is tax-inclusive.", x, doc.y + 4, { width: w, align: "left" })
   .text("Tax is not payable on reverse charge basis.", x, doc.y + 2, { width: w, align: "left" });
 
-
   // ---- Signature (guarded)
-  await addSignatureBlock(doc, company);
+const afterSigY = await addSignatureBlock(doc, company);
+doc.y = Math.max(doc.y, afterSigY);    // ensure cursor is below signature
 
-  // ---- Footer (guarded; includes comm address & links)
-  ensureRoom(doc, 160);
-  renderFooter(doc, {
+// ---- Footer (guarded; includes comm address & links)
+ensureRoom(doc, 130);                   // was 160; this avoids an unnecessary page break
+renderFooter(doc, {
   company,
   notes: [],
   includeCommAddress: true,
-  thankYou: "Thank you for your payment to GODAVAII"   // Page 2 message (change wording as you like)
+  thankYou: "Thank you for your payment to GODAVAII"
 });
 }
 
