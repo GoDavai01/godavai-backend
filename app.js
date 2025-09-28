@@ -1555,13 +1555,13 @@ app.post("/api/orders/:orderId/status", auth, async (req, res) => {
     if (status === 2) {
       await notifyUser(
         order.userId.toString(),
-        "Order Out for Delivery 🚚",
+        "Order Out for Delivery 🏍️",
         "Your medicines are out for delivery! Track your order in GoDavaii.",
         `${process.env.FRONTEND_URL || "http://localhost:3000"}/order/${order._id}`
       );
       await saveInAppNotification({
         userId: order.userId,
-        title: "Order Out for Delivery 🚚",
+        title: "Order Out for Delivery 🏍️",
         message: "Your medicines are out for delivery! Track your order in GoDavaii."
       });
     }

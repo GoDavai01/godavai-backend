@@ -643,7 +643,7 @@ router.patch("/orders/:orderId/status", async (req, res) => {
             <div style="font-family:Roboto,sans-serif;background:#F9FAFB;padding:26px 16px 18px 16px;border-radius:11px;max-width:480px;margin:auto;">
               <div style="text-align:center">
                 <img src="https://www.godavaii.com/logo192.png" alt="GoDavaii" width="60" style="margin-bottom:10px"/>
-                <h2 style="color:#13C0A2;margin:0 0 10px 0;">Order Delivered 🚚</h2>
+                <h2 style="color:#13C0A2;margin:0 0 10px 0;">Order Delivered 🏍️</h2>
               </div>
               <p>Hi <b>${user.name || "Customer"}</b>,</p>
               <p>Your GoDavaii order <b>#${order._id}</b> has been <span style="color:#13C0A2">delivered</span> successfully! Thank you for trusting us with your health needs.</p>
