@@ -463,7 +463,7 @@ async function extractPrescriptionItems(urlOrPath) {
   }
 
   // sanity
-  const merged = Array.from(byKey.values())
+    const merged = Array.from(byKey.values())
     .map(it => ({ ...it, name: stripLeadingFormWord(it.name) }))
     .filter(it => {
       const n0 = String(it.name || "");
@@ -474,25 +474,47 @@ async function extractPrescriptionItems(urlOrPath) {
     });
 
   // ——— E) Snap to dictionary; DROP if unknown ———
-  const corrected = merged.map(i => {
+  let corrected = merged.map(i => {
     const formNorm = normalizeForm(i.form || "");
     let chosen = stripLeadingFormWord(i.name || "").trim();
 
-    // If the line started with a form/number, demand a very strong fuzzy score
-    const startsWithFormOrNum = /^(?:\d+|tab|tablet|cap|capsule|vial|amp|syr|syp|inj|drop|solution|soln)\b/i.test(i.name || "");
-    const bm = hasDrug(chosen) ? { word: chosen, score: 1 } : bestMatch(chosen, startsWithFormOrNum ? 0.94 : undefined);
+    const startsWithFormOrNum =
+      /^(?:\d+|tab|tablet|cap|capsule|vial|amp|syr|syp|inj|drop|solution|soln)\b/i.test(i.name || "");
+
+    const bm = hasDrug(chosen)
+      ? { word: chosen, score: 1 }
+      : bestMatch(chosen, startsWithFormOrNum ? 0.94 : undefined);
+
+    // If we can't confidently match to dictionary, return null (for now)
     if (!bm || !bm.word || bm.score < (startsWithFormOrNum ? 0.94 : 0.88)) {
-      return null; // 🚫 unknown → DROP to avoid unsafe guesses
+      return null;
     }
+
     chosen = bm.word;
 
     return {
       ...i,
       name: chosen,
       form: formNorm || "",
-      confidence: Math.min(0.98, (typeof i.confidence === "number" ? i.confidence : 0.7) + 0.1)
+      confidence: Math.min(
+        0.98,
+        (typeof i.confidence === "number" ? i.confidence : 0.7) + 0.1
+      ),
     };
   }).filter(Boolean);
+
+  // ⚠️ IMPORTANT: if dictionary step killed everything, fall back to heuristics
+  if (!corrected.length) {
+    if (process.env.DEBUG_OCR) {
+      console.warn(
+        "[OCR] dictionary produced 0 items; falling back to heuristic merged items"
+      );
+    }
+    corrected = merged.map(i => ({
+      ...i,
+      form: normalizeForm(i.form || ""),
+    }));
+  }
 
   return {
     items: corrected.map(i => ({
@@ -501,12 +523,12 @@ async function extractPrescriptionItems(urlOrPath) {
       strength: i.strength || "",
       form: i.form || "",
       qty: i.qty || 1,
-      confidence: typeof i.confidence === "number" ? i.confidence : 0.75
+      confidence: typeof i.confidence === "number" ? i.confidence : 0.75,
     })),
     engine: gptItems.length ? (detailed.engine + "+gpt") : detailed.engine,
-    raw: detailed.text
+    raw: detailed.text,
   };
-}
+  }
 
 async function extractText(urlOrPath) {
   const { text } = await extractTextPlus(urlOrPath);
