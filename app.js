@@ -82,7 +82,12 @@ const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:3000").spl
 // ADD THESE DEBUG LOGS HERE:
 console.log("[ENV FRONTEND_URL]:", process.env.FRONTEND_URL);
 console.log("[Allowed origins]:", allowedOrigins);
-const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+// Browser key (for React / script tags)
+const GOOGLE_MAPS_BROWSER_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+
+// Server key (for backend calls to Google APIs)
+const GOOGLE_GEOCODE_SERVER_KEY = process.env.GOOGLE_GEOCODE_SERVER_KEY;
+
 
 // --- For Password Reset ---
 function randomOTP() {
@@ -1742,15 +1747,43 @@ function printRoutes() {
 }
 
 // Proxy for Geocoding (lat,lng -> address)
+// Proxy for Geocoding (lat,lng -> address)
 app.get('/api/geocode', async (req, res) => {
   const { lat, lng } = req.query;
-  if (!lat || !lng) return res.status(400).json({ error: "Missing lat/lng" });
+  if (!lat || !lng) return res.status(400).json({ error: "MISSING_LAT_LNG" });
+
+  const apiKey = GOOGLE_GEOCODE_SERVER_KEY;
+  if (!apiKey) {
+    console.error("Missing GOOGLE_GEOCODE_SERVER_KEY env var");
+    return res.status(500).json({ error: "SERVER_MISCONFIGURED" });
+  }
+
   try {
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`;
-    const response = await axios.get(url);
-    res.json(response.data);
-  } catch (err) {
-    res.status(500).json({ error: "Failed to fetch geocode", detail: err.message });
+    const { data } = await axios.get(
+      "https://maps.googleapis.com/maps/api/geocode/json",
+      {
+        params: {
+          latlng: `${lat},${lng}`,
+          key: apiKey,
+        },
+      }
+    );
+
+    if (data.status !== "OK" || !data.results?.length) {
+      console.error("Google reverse geocode error:", data.status, data.error_message);
+      return res.status(500).json({
+        error: "GOOGLE_GEOCODE_FAILED",
+        status: data.status,
+        error_message: data.error_message,
+        results: data.results || [],
+      });
+    }
+
+    // frontend expects response.data.results
+    return res.json({ results: data.results });
+  } catch (e) {
+    console.error("Reverse geocode request failed:", e.message);
+    return res.status(500).json({ error: "GEOCODE_ERROR" });
   }
 });
 
@@ -1758,8 +1791,16 @@ app.get('/api/geocode', async (req, res) => {
 app.get('/api/place-autocomplete', async (req, res) => {
   const { input } = req.query;
   if (!input) return res.status(400).json({ error: "Missing input" });
+
+  const apiKey = GOOGLE_GEOCODE_SERVER_KEY;
+  if (!apiKey) return res.status(500).json({ error: "SERVER_MISCONFIGURED" });
+
   try {
-    const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${GOOGLE_MAPS_API_KEY}&types=address&components=country:in`;
+    const url =
+      `https://maps.googleapis.com/maps/api/place/autocomplete/json` +
+      `?input=${encodeURIComponent(input)}` +
+      `&key=${apiKey}` +
+      `&types=address&components=country:in`;
     const response = await axios.get(url);
     res.json(response.data);
   } catch (err) {
@@ -1767,18 +1808,25 @@ app.get('/api/place-autocomplete', async (req, res) => {
   }
 });
 
-// Proxy for Place Details (get lat/lng by place_id)
 app.get('/api/place-details', async (req, res) => {
   const { place_id } = req.query;
   if (!place_id) return res.status(400).json({ error: "Missing place_id" });
+
+  const apiKey = GOOGLE_GEOCODE_SERVER_KEY;
+  if (!apiKey) return res.status(500).json({ error: "SERVER_MISCONFIGURED" });
+
   try {
-    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place_id}&key=${GOOGLE_MAPS_API_KEY}`;
+    const url =
+      `https://maps.googleapis.com/maps/api/place/details/json` +
+      `?place_id=${place_id}` +
+      `&key=${apiKey}`;
     const response = await axios.get(url);
     res.json(response.data);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch place details", detail: err.message });
   }
 });
+
 
 // --- TEMP: prove routes are mounted in prod ---
 if (process.env.PRINT_ROUTES === "1") {
