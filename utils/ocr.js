@@ -13,25 +13,32 @@ async function fetchWithUA(url, opts = {}) {
   return fetchFn(url, { ...opts, headers });
 }
 
-// add after existing requires
 const { correctDrugName, normalizeForm, hasDrug, bestMatch } = require("./pharma/spellfix");
 const sharp = require("sharp");
+
+const DEBUG = process.env.DEBUG_OCR === "1";
+const MIN_TEXT_LEN = Number(process.env.MIN_OCR_TEXT_LEN || 14);
+const DICT_MIN_SCORE = Number(process.env.DICT_MIN_SCORE || 0.75);
 
 /* ----------------------- Clients (lazy / optional) ----------------------- */
 
 let visionClient = null;
 try {
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GCV_CREDENTIALS_JSON) {
+  if (
+    process.env.DISABLE_GOOGLE !== "1" &&
+    (process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GCV_CREDENTIALS_JSON)
+  ) {
     const { ImageAnnotatorClient } = require("@google-cloud/vision");
     const apiEndpoint =
       (process.env.GCV_API_ENDPOINT || process.env.GOOGLE_VISION_API_ENDPOINT || "").trim() || undefined;
     const baseOpts = { fallback: true, ...(apiEndpoint ? { apiEndpoint } : {}) }; // force REST
-
     visionClient = process.env.GCV_CREDENTIALS_JSON
       ? new ImageAnnotatorClient({ ...baseOpts, credentials: JSON.parse(process.env.GCV_CREDENTIALS_JSON) })
       : new ImageAnnotatorClient(baseOpts);
   }
-} catch { /* ignore */ }
+} catch (e) {
+  if (DEBUG) console.warn("[OCR] google client init failed:", e.message);
+}
 
 let textractClient = null;
 try {
@@ -44,7 +51,9 @@ try {
     const { TextractClient } = require("@aws-sdk/client-textract");
     textractClient = new TextractClient({ region: process.env.AWS_REGION });
   }
-} catch { /* ignore */ }
+} catch (e) {
+  if (DEBUG) console.warn("[OCR] textract client init failed:", e.message);
+}
 
 /* ------------------------------ Helpers ---------------------------------- */
 
@@ -72,7 +81,10 @@ function sniffMime(buf) {
   return "image";
 }
 
-// ——— B) Treat vial/amp(oule) as form words ———
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const splitToLines = (text) => (text || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
+// ——— Treat form words cleanly ———
 function stripLeadingFormWord(s) {
   return String(s || "")
     .replace(/^\s*(tab(?:let)?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|inj(?:ection)?|vial|amp(?:oule)?|ointment|cream|gel|lotion|spray|drop|solution|soln)\b[.\s:-]*/i, "")
@@ -84,26 +96,23 @@ async function preprocess(buf) {
   const kind = sniffMime(buf);
   if (kind !== "image") return buf; // PDFs/TIFFs as-is
   try {
-    const maxDim = Number(process.env.OCR_MAX_DIM || 1800); // speed knob (1200–2000 is fine)
-    return await sharp(buf)
+    const maxDim = Number(process.env.OCR_MAX_DIM || 1800); // 1200–2000 is fine
+    const out = await sharp(buf)
       .rotate()
       .resize({ width: maxDim, height: maxDim, fit: "inside", withoutEnlargement: true })
       .greyscale()
-      // gentle brightness + contrast-ish boost (linear) + mild denoise + normalize
       .modulate({ brightness: 1.02, saturation: 1.0 })
       .linear(1.08)              // slight contrast boost
       .median(1)
       .normalize()
       .jpeg({ quality: 92 })
       .toBuffer();
+    return out;
   } catch (e) {
-    if (process.env.DEBUG_OCR) console.warn("[OCR] preprocess skipped:", e.message);
+    if (DEBUG) console.warn("[OCR] preprocess skipped:", e.message);
     return buf;
   }
 }
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const splitToLines = (text) => (text || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
 /* ------------------------------ Engines ---------------------------------- */
 
@@ -111,15 +120,19 @@ async function ocrGoogle(buf) {
   if (!visionClient) return null;
   try {
     const [result] = await visionClient.documentTextDetection({ image: { content: buf } });
-    const text = result?.fullTextAnnotation?.text || result?.textAnnotations?.[0]?.description;
-    if (text) return { text, lines: splitToLines(text).map(t => ({ text: t })), engine: "google-vision" };
+    const text = result?.fullTextAnnotation?.text || result?.textAnnotations?.[0]?.description || "";
+    if (text.trim().length >= MIN_TEXT_LEN) {
+      const lines = splitToLines(text).map(t => ({ text: t }));
+      return { text, lines, engine: "google-vision" };
+    }
   } catch (err) {
-    if (process.env.DEBUG_OCR) console.warn("[OCR] google-vision failed:", err?.message || err);
+    if (DEBUG) console.warn("[OCR] google-vision failed:", err?.message || err);
   }
   return null;
 }
 
 async function ocrAzure(buf) {
+  if (process.env.DISABLE_AZURE === "1") return null;
   const ep = (process.env.AZURE_VISION_ENDPOINT || process.env.AZURE_OCR_ENDPOINT || "").replace(/\/+$/, "");
   const key = process.env.AZURE_VISION_KEY;
   if (!ep || !key) return null;
@@ -132,7 +145,7 @@ async function ocrAzure(buf) {
     });
 
     if (submit.status !== 202) {
-      if (process.env.DEBUG_OCR) {
+      if (DEBUG) {
         const txt = await submit.text().catch(() => "");
         console.warn("[OCR] azure submit failed:", submit.status, submit.statusText, txt.slice(0, 200));
       }
@@ -151,19 +164,25 @@ async function ocrAzure(buf) {
         const pages = j?.analyzeResult?.readResults ?? j?.analyzeResult?.pages ?? [];
         const lines = [];
         for (const p of pages) for (const l of (p.lines || [])) {
-          lines.push({
-            text: l.text || l.content || "",
-            confidence: typeof l.confidence === "number" ? l.confidence : undefined,
-            bbox: l.boundingBox || l.polygon || undefined,
-          });
+          const text = l.text || l.content || "";
+          if (text) {
+            lines.push({
+              text,
+              confidence: typeof l.confidence === "number" ? l.confidence : undefined,
+              bbox: l.boundingBox || l.polygon || undefined,
+            });
+          }
         }
         const text = lines.map(l => l.text).join("\n");
-        return { text, lines, engine: "azure-vision-read" };
+        if (text.trim().length >= MIN_TEXT_LEN) {
+          return { text, lines, engine: "azure-vision-read" };
+        }
+        return null;
       }
       if (j.status === "failed") return null;
     }
   } catch (e) {
-    if (process.env.DEBUG_OCR) console.warn("[OCR] azure error:", e?.message || e);
+    if (DEBUG) console.warn("[OCR] azure error:", e?.message || e);
   }
   return null;
 }
@@ -174,21 +193,23 @@ async function ocrTextract(buf) {
     const { DetectDocumentTextCommand } = require("@aws-sdk/client-textract");
     const out = await textractClient.send(new DetectDocumentTextCommand({ Document: { Bytes: buf } }));
     const lines = (out?.Blocks || [])
-      .filter((b) => b.BlockType === "LINE")
-      .map((b) => ({ text: b.Text, confidence: b.Confidence }))
-      .filter((l) => !!l.text);
+      .filter((b) => b.BlockType === "LINE" && b.Text)
+      .map((b) => ({ text: b.Text, confidence: b.Confidence }));
     const text = lines.map(l => l.text).join("\n");
-    return { text, lines, engine: "aws-textract" };
+    if (text.trim().length >= MIN_TEXT_LEN) {
+      return { text, lines, engine: "aws-textract" };
+    }
   } catch (e) {
-    if (process.env.DEBUG_OCR) console.warn("[OCR] textract failed:", e?.message || e);
-    return null;
+    if (DEBUG) console.warn("[OCR] textract failed:", e?.message || e);
   }
+  return null;
 }
 
 async function ocrTesseract(buf) {
+  if (process.env.DISABLE_TESSERACT === "1") return null;
   let createWorker;
   try { ({ createWorker } = require("tesseract.js")); }
-  catch (e) { if (process.env.DEBUG_OCR) console.warn("[OCR] tesseract.js not installed:", e.message); return null; }
+  catch (e) { if (DEBUG) console.warn("[OCR] tesseract.js not installed:", e.message); return null; }
 
   let worker;
   let timeout;
@@ -201,43 +222,66 @@ async function ocrTesseract(buf) {
     await worker.initialize("eng");
     const { data } = await worker.recognize(buf);
     await kill();
-    const text = data?.text || "";
-    return { text, lines: splitToLines(text).map(t => ({ text: t })), engine: "tesseract" };
+    const text = (data?.text || "").trim();
+    if (text.length >= MIN_TEXT_LEN) {
+      return { text, lines: splitToLines(text).map(t => ({ text: t })), engine: "tesseract" };
+    }
   } catch (e) {
-    if (process.env.DEBUG_OCR) console.warn("[OCR] tesseract run failed:", e.message);
+    if (DEBUG) console.warn("[OCR] tesseract run failed:", e.message);
     await kill();
-    return null;
   }
+  return null;
 }
 
 /* -------------- Fast gather: run engines in parallel & pick best ---------- */
 
 async function runEnginesFast(buf, wantLines = true) {
-  // Stagger Tesseract by a couple seconds (CPU heavy) so cloud OCRs win if available
+  // Allow forcing tesseract for debugging/noisy scans
+  if (process.env.FORCE_TESSERACT === "1") {
+    if (DEBUG) console.log("[OCR] Forcing Tesseract engine...");
+    const out = await ocrTesseract(buf);
+    if (out && DEBUG) console.log("[OCR] engine used:", out.engine, "len:", out.text?.length || 0);
+    return out;
+  }
+
+  // Stagger Tesseract slightly (CPU heavy) so clouds can win when good
   const tesseractLater = new Promise(res => setTimeout(async () => res(await ocrTesseract(buf)), 2000));
 
-  const tasks = [
-    ocrAzure(buf),
-    ocrGoogle(buf),
-    ocrTextract(buf),
-    tesseractLater,
-  ].map(p => p.catch(() => null));
+  // Engine order can be customized via OCR_ENGINE_ORDER (e.g., "azure,google,aws,tesseract")
+  const orderEnv = (process.env.OCR_ENGINE_ORDER || "azure,google,aws,tesseract")
+    .split(",")
+    .map(s => s.trim().toLowerCase());
 
-  // Wait for first decent result; if all come back, pick the longest text
+  const engineMap = {
+    azure: ocrAzure,
+    google: ocrGoogle,
+    aws: ocrTextract,
+    tesseract: () => tesseractLater,
+  };
+
+  const tasks = orderEnv
+    .map(key => engineMap[key])
+    .filter(Boolean)
+    .map(fn => fn(buf).catch(() => null));
+
   const deadlineMs = Number(process.env.OCR_DEADLINE_MS || 45000);
   const timeout = new Promise(res => setTimeout(() => res(null), deadlineMs));
 
   const all = await Promise.race([
     (async () => {
       const results = await Promise.all(tasks);
-      const good = results.filter(r => r && (r.text || "").trim().length > 10);
+      const good = results.filter(r => r && (r.text || "").trim().length >= MIN_TEXT_LEN);
       if (!good.length) return null;
+      // Pick longest text
       good.sort((a, b) => (b.text || "").length - (a.text || "").length);
-      return good[0];
+      const winner = good[0];
+      if (DEBUG) console.log("[OCR] engine used:", winner.engine, "len:", winner.text?.length || 0);
+      return winner;
     })(),
     timeout
   ]);
 
+  if (!all && DEBUG) console.warn("[OCR] all engines returned null/empty");
   return all || null;
 }
 
@@ -275,13 +319,11 @@ const STRENGTH_RE = new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*${UNITS}\\b`, "i");
 // Add support for “unitless number with release code” (e.g., Dicorate ER 250)
 const RELEASE_RE = /\b(ER|SR|CR|MR|XL|XR)\b/i;
 
-// ——— B) updated FORM_RE includes vial/amp(oule) ———
 const FORM_RE = /\b(t\.?|tab(?:let)?|c\.?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|ointment|cream|gel|lotion|spray|paint|drop|solution|soln|inj(?:ection)?|vial|amp(?:oule)?|tablet|capsule)s?\b/i;
 
-const DOSE_RE = /\b[01]\s*[-–]\s*[01]\s*[-–]\*[01]\b/; // protection if someone copied “*”; kept original line typo-safe
+// Clean dose patterns
 const DOSE_RE_SAFE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;
 const DURATION_RE = /\b[x×]\s*\d+\s*(day|days|week|weeks)\b/i;
-const MEAL_RE = /\b(after|before)\s+meals?\b|\b(?:ac|pc)\b/i;
 
 const JUNK_PHRASES = [
   "smile designing","teeth whitening","dental implants","general dentistry",
@@ -298,11 +340,11 @@ function looksLikeDrugLine(s) {
   if (JUNK_PHRASES.some(p => s.toLowerCase().includes(p))) return false;
   if (/^dr\.|\bdoctor\b|\bsignature\b|\breg\.?\s?no\b|\bregistration\b/i.test(s)) return false;
 
-  // ——— C) Hard reject quantity/empty lines & pure form words ———
+  // reject pure qty or pure form words
   if (/^\s*(?:x\s*)?\d{1,3}\s*(?:tabs?|caps?|vials?|amps?|pcs?)?\s*$/i.test(s)) return false;
   if (/^\s*(?:tab(?:let)?|caps?(?:ule)?|syrup|susp(?:ension)?|inj(?:ection)?|vial|amp(?:oule)?|drop|solution|soln|gel|cream|ointment|lotion|spray)\s*$/i.test(s)) return false;
 
-  // must show any strong “medicine” signal
+  // must show “medicine signal”
   return STRENGTH_RE.test(s) || FORM_RE.test(s) || /\bTr\.?\b/i.test(s);
 }
 
@@ -315,7 +357,7 @@ function parseDrugLine(s) {
     .replace(/\b(\d{1,4})\s*mq\b/ig, "$1 mg")
     .replace(/\bO\b/g, "0");
 
-  const tincture = norm.match(/\bTr\.?\s*([A-Za-z][\w\.\-]+(?:\s+[A-Za-z][\w\.\-]+){0,2})\b/i);
+  const tincture = norm.match(/\b(Tr\.?)\s*([A-Za-z][\w\.\-]+(?:\s+[A-Za-z][\w\.\-]+){0,2})\b/i);
   const dose     = norm.match(STRENGTH_RE);
 
   // vitamin D “60k” → 60000 IU
@@ -337,7 +379,7 @@ function parseDrugLine(s) {
     norm.match(/\bqty[:\s]*([1-9]\d?)\b/i);
 
   let name = norm;
-  if (tincture) name = tincture[1];
+  if (tincture) name = norm.replace(tincture[1], "").replace(tincture[2], tincture[2]).trim();
   else if (dose) name = norm.replace(dose[0], "").trim();
   else if (dose2) name = norm.replace(kHit[0], "").trim();
   else if (dose3) name = norm.replace(/\b(\d{2,4})\b/, "").trim();
@@ -356,9 +398,6 @@ function parseDrugLine(s) {
 
   if (!dose && !formHit) return null;
   if (!/[A-Za-z]{3,}/.test(name) || !/[aeiou]/i.test(name)) return null;
-
-  // ——— D) extra strict guards ———
-  if (!/[aeiou]/i.test(name) || name.replace(/[^A-Za-z]/g, "").length < 3) return null;
   if (/^\d+$/i.test(name)) return null;
 
   return { name: stripLeadingFormWord(name), strength, qty, form: formHit ? formHit[0].toLowerCase() : "" };
@@ -373,7 +412,7 @@ async function extractTextPlus(urlOrPath) {
   const out = await runEnginesFast(buf, false);
   if (out?.text) return { text: out.text.trim(), engine: out.engine };
 
-  if (process.env.DEBUG_OCR) console.warn("[OCR] all engines returned null/empty");
+  if (DEBUG) console.warn("[OCR] all engines returned null/empty");
   return { text: "", engine: "none" };
 }
 
@@ -450,7 +489,7 @@ async function extractPrescriptionItems(urlOrPath) {
       }
     }
   } catch (e) {
-    if (process.env.DEBUG_OCR) console.warn("[OCR] GPT post-filter failed:", e.message);
+    if (DEBUG) console.warn("[OCR] GPT post-filter failed:", e.message);
   }
 
   // 4) Merge GPT + heuristic
@@ -462,18 +501,16 @@ async function extractPrescriptionItems(urlOrPath) {
     if (!byKey.has(k)) byKey.set(k, it);
   }
 
-  // sanity
-    const merged = Array.from(byKey.values())
+  const merged = Array.from(byKey.values())
     .map(it => ({ ...it, name: stripLeadingFormWord(it.name) }))
     .filter(it => {
       const n0 = String(it.name || "");
-      // dump pure form words or bullets like "1", "x", etc.
       if (/^(tab(?:let)?|cap(?:sule)?|syrup|susp(?:ension)?|inj(?:ection)?|ointment|cream|gel|lotion|spray|drop|solution|soln)$/i.test(n0)) return false;
       const n = n0.replace(/[^A-Za-z]/g, "");
       return n.length >= 3 && /[aeiou]/i.test(n);
     });
 
-  // ——— E) Snap to dictionary; DROP if unknown ———
+  // ——— Snap to dictionary; fallback if it kills everything ———
   let corrected = merged.map(i => {
     const formNorm = normalizeForm(i.form || "");
     let chosen = stripLeadingFormWord(i.name || "").trim();
@@ -483,10 +520,9 @@ async function extractPrescriptionItems(urlOrPath) {
 
     const bm = hasDrug(chosen)
       ? { word: chosen, score: 1 }
-      : bestMatch(chosen, startsWithFormOrNum ? 0.94 : undefined);
+      : bestMatch(chosen, startsWithFormOrNum ? Math.max(DICT_MIN_SCORE, 0.94) : DICT_MIN_SCORE);
 
-    // If we can't confidently match to dictionary, return null (for now)
-    if (!bm || !bm.word || bm.score < (startsWithFormOrNum ? 0.94 : 0.88)) {
+    if (!bm || !bm.word || bm.score < (startsWithFormOrNum ? Math.max(DICT_MIN_SCORE, 0.94) : DICT_MIN_SCORE)) {
       return null;
     }
 
@@ -494,7 +530,7 @@ async function extractPrescriptionItems(urlOrPath) {
 
     return {
       ...i,
-      name: chosen,
+      name: correctDrugName ? (correctDrugName(chosen) || chosen) : chosen,
       form: formNorm || "",
       confidence: Math.min(
         0.98,
@@ -503,17 +539,16 @@ async function extractPrescriptionItems(urlOrPath) {
     };
   }).filter(Boolean);
 
-  // ⚠️ IMPORTANT: if dictionary step killed everything, fall back to heuristics
   if (!corrected.length) {
-    if (process.env.DEBUG_OCR) {
-      console.warn(
-        "[OCR] dictionary produced 0 items; falling back to heuristic merged items"
-      );
-    }
+    if (DEBUG) console.warn("[OCR] dictionary produced 0 items; falling back to heuristic merged items");
     corrected = merged.map(i => ({
       ...i,
       form: normalizeForm(i.form || ""),
     }));
+  }
+
+  if (DEBUG) {
+    console.log("[OCR DEBUG] items before dict:", merged.length, "after dict/fallback:", corrected.length);
   }
 
   return {
@@ -528,7 +563,7 @@ async function extractPrescriptionItems(urlOrPath) {
     engine: gptItems.length ? (detailed.engine + "+gpt") : detailed.engine,
     raw: detailed.text,
   };
-  }
+}
 
 async function extractText(urlOrPath) {
   const { text } = await extractTextPlus(urlOrPath);
