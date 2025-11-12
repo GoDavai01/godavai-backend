@@ -19,6 +19,7 @@ const sharp = require("sharp");
 const DEBUG = process.env.DEBUG_OCR === "1";
 const MIN_TEXT_LEN = Number(process.env.MIN_OCR_TEXT_LEN || 14);
 const DICT_MIN_SCORE = Number(process.env.DICT_MIN_SCORE || 0.75);
+const NAME_ONLY_FALLBACK = process.env.OCR_NAME_ONLY_FALLBACK !== "0";
 
 /* ----------------------- Clients (lazy / optional) ----------------------- */
 
@@ -31,7 +32,7 @@ try {
     const { ImageAnnotatorClient } = require("@google-cloud/vision");
     const apiEndpoint =
       (process.env.GCV_API_ENDPOINT || process.env.GOOGLE_VISION_API_ENDPOINT || "").trim() || undefined;
-    const baseOpts = { fallback: true, ...(apiEndpoint ? { apiEndpoint } : {}) }; // force REST
+    const baseOpts = { fallback: true, ...(apiEndpoint ? { apiEndpoint } : {}) }; // REST path
     visionClient = process.env.GCV_CREDENTIALS_JSON
       ? new ImageAnnotatorClient({ ...baseOpts, credentials: JSON.parse(process.env.GCV_CREDENTIALS_JSON) })
       : new ImageAnnotatorClient(baseOpts);
@@ -73,7 +74,7 @@ async function loadBuffer(urlOrPath) {
 
 function sniffMime(buf) {
   const a = buf;
-  if (a[0] === 0x25 && a[1] === 0x50 && a[2] === 0x44 && a[3] === 0x46) return "application/pdf"; // %PDF
+  if (a[0] === 0x25 && a[1] === 0x50 && a[2] === 0x44 && a[3] === 0x46) return "application/pdf";
   if (
     (a[0] === 0x49 && a[1] === 0x49 && a[2] === 0x2a && a[3] === 0x00) ||
     (a[0] === 0x4d && a[1] === 0x4d && a[2] === 0x00 && a[3] === 0x2a)
@@ -84,25 +85,25 @@ function sniffMime(buf) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const splitToLines = (text) => (text || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
-// ——— Treat form words cleanly ———
+// Treat form words cleanly
 function stripLeadingFormWord(s) {
   return String(s || "")
     .replace(/^\s*(tab(?:let)?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|inj(?:ection)?|vial|amp(?:oule)?|ointment|cream|gel|lotion|spray|drop|solution|soln)\b[.\s:-]*/i, "")
     .trim();
 }
 
-/* -------------------- A) Strengthened pre-processing --------------------- */
+/* -------------------- Pre-processing ------------------------------------- */
 async function preprocess(buf) {
   const kind = sniffMime(buf);
-  if (kind !== "image") return buf; // PDFs/TIFFs as-is
+  if (kind !== "image") return buf;
   try {
-    const maxDim = Number(process.env.OCR_MAX_DIM || 1800); // 1200–2000 is fine
+    const maxDim = Number(process.env.OCR_MAX_DIM || 1800);
     const out = await sharp(buf)
       .rotate()
       .resize({ width: maxDim, height: maxDim, fit: "inside", withoutEnlargement: true })
       .greyscale()
       .modulate({ brightness: 1.02, saturation: 1.0 })
-      .linear(1.08)              // slight contrast boost
+      .linear(1.08)
       .median(1)
       .normalize()
       .jpeg({ quality: 92 })
@@ -155,7 +156,7 @@ async function ocrAzure(buf) {
     const op = submit.headers.get("operation-location");
     if (!op) return null;
 
-    const maxPoll = Number(process.env.AZURE_MAX_POLL || 24); // ~24*0.8s ≈ 19s
+    const maxPoll = Number(process.env.AZURE_MAX_POLL || 24);
     for (let i = 0; i < maxPoll; i++) {
       await sleep(800);
       const res = await fetchWithUA(op, { headers: { "Ocp-Apim-Subscription-Key": key } });
@@ -233,10 +234,9 @@ async function ocrTesseract(buf) {
   return null;
 }
 
-/* -------------- Fast gather: run engines in parallel & pick best ---------- */
+/* -------------- Fast gather & pick best ---------------------------------- */
 
-async function runEnginesFast(buf, wantLines = true) {
-  // Allow forcing tesseract for debugging/noisy scans
+async function runEnginesFast(buf) {
   if (process.env.FORCE_TESSERACT === "1") {
     if (DEBUG) console.log("[OCR] Forcing Tesseract engine...");
     const out = await ocrTesseract(buf);
@@ -244,25 +244,14 @@ async function runEnginesFast(buf, wantLines = true) {
     return out;
   }
 
-  // Stagger Tesseract slightly (CPU heavy) so clouds can win when good
   const tesseractLater = new Promise(res => setTimeout(async () => res(await ocrTesseract(buf)), 2000));
 
-  // Engine order can be customized via OCR_ENGINE_ORDER (e.g., "azure,google,aws,tesseract")
   const orderEnv = (process.env.OCR_ENGINE_ORDER || "azure,google,aws,tesseract")
-    .split(",")
-    .map(s => s.trim().toLowerCase());
+    .split(",").map(s => s.trim().toLowerCase());
 
-  const engineMap = {
-    azure: ocrAzure,
-    google: ocrGoogle,
-    aws: ocrTextract,
-    tesseract: () => tesseractLater,
-  };
+  const engineMap = { azure: ocrAzure, google: ocrGoogle, aws: ocrTextract, tesseract: () => tesseractLater };
 
-  const tasks = orderEnv
-    .map(key => engineMap[key])
-    .filter(Boolean)
-    .map(fn => fn(buf).catch(() => null));
+  const tasks = orderEnv.map(k => engineMap[k]).filter(Boolean).map(fn => fn(buf).catch(() => null));
 
   const deadlineMs = Number(process.env.OCR_DEADLINE_MS || 45000);
   const timeout = new Promise(res => setTimeout(() => res(null), deadlineMs));
@@ -272,7 +261,6 @@ async function runEnginesFast(buf, wantLines = true) {
       const results = await Promise.all(tasks);
       const good = results.filter(r => r && (r.text || "").trim().length >= MIN_TEXT_LEN);
       if (!good.length) return null;
-      // Pick longest text
       good.sort((a, b) => (b.text || "").length - (a.text || "").length);
       const winner = good[0];
       if (DEBUG) console.log("[OCR] engine used:", winner.engine, "len:", winner.text?.length || 0);
@@ -312,16 +300,10 @@ function looksLikeDateOrSerial(s) {
   return false;
 }
 
-// UNITS (+ add µg + IU variations)
 const UNITS = "(mg|mcg|µg|g|ml|l|iu|IU|%)";
 const STRENGTH_RE = new RegExp(`\\b\\d+(?:\\.\\d+)?\\s*${UNITS}\\b`, "i");
-
-// Add support for “unitless number with release code” (e.g., Dicorate ER 250)
 const RELEASE_RE = /\b(ER|SR|CR|MR|XL|XR)\b/i;
-
 const FORM_RE = /\b(t\.?|tab(?:let)?|c\.?|cap(?:sule)?|syp\.?|syrup|susp(?:ension)?|ointment|cream|gel|lotion|spray|paint|drop|solution|soln|inj(?:ection)?|vial|amp(?:oule)?|tablet|capsule)s?\b/i;
-
-// Clean dose patterns
 const DOSE_RE_SAFE = /\b[01]\s*[-–]\s*[01]\s*[-–]\s*[01]\b/;
 const DURATION_RE = /\b[x×]\s*\d+\s*(day|days|week|weeks)\b/i;
 
@@ -340,11 +322,9 @@ function looksLikeDrugLine(s) {
   if (JUNK_PHRASES.some(p => s.toLowerCase().includes(p))) return false;
   if (/^dr\.|\bdoctor\b|\bsignature\b|\breg\.?\s?no\b|\bregistration\b/i.test(s)) return false;
 
-  // reject pure qty or pure form words
   if (/^\s*(?:x\s*)?\d{1,3}\s*(?:tabs?|caps?|vials?|amps?|pcs?)?\s*$/i.test(s)) return false;
   if (/^\s*(?:tab(?:let)?|caps?(?:ule)?|syrup|susp(?:ension)?|inj(?:ection)?|vial|amp(?:oule)?|drop|solution|soln|gel|cream|ointment|lotion|spray)\s*$/i.test(s)) return false;
 
-  // must show “medicine signal”
   return STRENGTH_RE.test(s) || FORM_RE.test(s) || /\bTr\.?\b/i.test(s);
 }
 
@@ -360,12 +340,10 @@ function parseDrugLine(s) {
   const tincture = norm.match(/\b(Tr\.?)\s*([A-Za-z][\w\.\-]+(?:\s+[A-Za-z][\w\.\-]+){0,2})\b/i);
   const dose     = norm.match(STRENGTH_RE);
 
-  // vitamin D “60k” → 60000 IU
   let dose2 = null;
   const kHit = norm.match(/\b(\d{2,3})\s*k\b/i);
   if (kHit) dose2 = `${parseInt(kHit[1], 10) * 1000} IU`;
 
-  // number + release code (mg)
   let dose3 = null;
   if (RELEASE_RE.test(norm)) {
     const m = norm.match(/\b(\d{2,4})\b/);
@@ -403,13 +381,39 @@ function parseDrugLine(s) {
   return { name: stripLeadingFormWord(name), strength, qty, form: formHit ? formHit[0].toLowerCase() : "" };
 }
 
+/* --------- NEW: ultra-permissive name-only mining fallback --------------- */
+
+function collectNameOnlyCandidates(text) {
+  // pick 1–2 word tokens that look like brand/generic names
+  const tokens = [];
+  const lines = splitToLines(text);
+  for (const ln of lines) {
+    if (!ln || /\b(dr\.|doctor|sign|registration|age|qty|directions?)\b/i.test(ln)) continue;
+    // Grab chunks of letters with optional hyphen/dot; allow two words max
+    const m = ln.match(/\b([A-Za-z][A-Za-z\.\-]{2,})(?:\s+([A-Za-z][A-Za-z\.\-]{2,}))?\b/g);
+    if (!m) continue;
+    for (const raw of m) {
+      const cleaned = raw.replace(/[^A-Za-z\-\. ]/g, " ").trim();
+      if (!cleaned) continue;
+      // avoid pure form words & common noise
+      if (/^(tab|tablet|cap|capsule|syrup|susp|inj|vial|amp|drop|solution|soln|cream|gel|ointment|lotion|spray)$/i.test(cleaned)) continue;
+      // favor something with a vowel
+      if (!/[aeiou]/i.test(cleaned)) continue;
+      tokens.push(cleaned);
+    }
+  }
+  // de-dupe & keep top 20 unique by length (longer first)
+  const uniq = Array.from(new Set(tokens.map(t => t.toLowerCase()))).sort((a,b)=>b.length-a.length).slice(0,20);
+  return uniq.map(t => t.replace(/\s{2,}/g, " ").trim());
+}
+
 /* --------------------------- Public functions ---------------------------- */
 
 async function extractTextPlus(urlOrPath) {
   const raw = await loadBuffer(urlOrPath);
   const buf = await preprocess(raw);
 
-  const out = await runEnginesFast(buf, false);
+  const out = await runEnginesFast(buf);
   if (out?.text) return { text: out.text.trim(), engine: out.engine };
 
   if (DEBUG) console.warn("[OCR] all engines returned null/empty");
@@ -420,7 +424,7 @@ async function extractTextPlusDetailed(urlOrPath) {
   const raw = await loadBuffer(urlOrPath);
   const buf = await preprocess(raw);
 
-  const out = await runEnginesFast(buf, true);
+  const out = await runEnginesFast(buf);
   if (out) return { text: out.text.trim(), lines: out.lines, engine: out.engine };
 
   return { text: "", lines: [], engine: "none" };
@@ -446,7 +450,7 @@ async function extractPrescriptionItems(urlOrPath) {
     items.push({ ...parsed, confidence: typeof raw.confidence === "number" ? raw.confidence : 0.5 });
   }
 
-  // Fallback: if nothing parsed, try simple NLPish parser (kept in repo)
+  // Fallback A: coarse parser (if present)
   let mergedHeur = items;
   if (!mergedHeur.length) {
     try {
@@ -510,7 +514,7 @@ async function extractPrescriptionItems(urlOrPath) {
       return n.length >= 3 && /[aeiou]/i.test(n);
     });
 
-  // ——— Snap to dictionary; fallback if it kills everything ———
+  // 5) Dictionary snap
   let corrected = merged.map(i => {
     const formNorm = normalizeForm(i.form || "");
     let chosen = stripLeadingFormWord(i.name || "").trim();
@@ -532,23 +536,39 @@ async function extractPrescriptionItems(urlOrPath) {
       ...i,
       name: correctDrugName ? (correctDrugName(chosen) || chosen) : chosen,
       form: formNorm || "",
-      confidence: Math.min(
-        0.98,
-        (typeof i.confidence === "number" ? i.confidence : 0.7) + 0.1
-      ),
+      confidence: Math.min(0.98, (typeof i.confidence === "number" ? i.confidence : 0.7) + 0.1),
     };
   }).filter(Boolean);
 
+  // 6) NEW Fallback B: if still nothing, try ultra-permissive name-only mining
+  if (!corrected.length && NAME_ONLY_FALLBACK && bodyText) {
+    if (DEBUG) console.warn("[OCR] nothing parsed — trying name-only fallback");
+    const cands = collectNameOnlyCandidates(bodyText);
+    const picked = [];
+    for (const cand of cands) {
+      const bm = hasDrug(cand) ? { word: cand, score: 1 } : bestMatch(cand, Math.max(DICT_MIN_SCORE - 0.07, 0.68));
+      if (!bm || !bm.word || bm.score < Math.max(DICT_MIN_SCORE - 0.07, 0.68)) continue;
+      if (picked.find(p => p.name.toLowerCase() === bm.word.toLowerCase())) continue;
+      picked.push({
+        name: correctDrugName ? (correctDrugName(bm.word) || bm.word) : bm.word,
+        strength: "",
+        form: "",
+        qty: 1,
+        confidence: 0.6 + (bm.score * 0.3), // 0.6–0.9
+      });
+      if (picked.length >= 6) break; // keep it tidy
+    }
+    corrected = picked;
+  }
+
+  // 7) If dictionary & fallback both produced nothing, fall back to merged heuristics (as-is)
   if (!corrected.length) {
-    if (DEBUG) console.warn("[OCR] dictionary produced 0 items; falling back to heuristic merged items");
-    corrected = merged.map(i => ({
-      ...i,
-      form: normalizeForm(i.form || ""),
-    }));
+    if (DEBUG) console.warn("[OCR] dictionary + name-only produced 0; falling back to heuristics");
+    corrected = merged.map(i => ({ ...i, form: normalizeForm(i.form || "") }));
   }
 
   if (DEBUG) {
-    console.log("[OCR DEBUG] items before dict:", merged.length, "after dict/fallback:", corrected.length);
+    console.log("[OCR DEBUG] items after parsing:", corrected.length, "engine:", detailed.engine);
   }
 
   return {
@@ -560,7 +580,7 @@ async function extractPrescriptionItems(urlOrPath) {
       qty: i.qty || 1,
       confidence: typeof i.confidence === "number" ? i.confidence : 0.75,
     })),
-    engine: gptItems.length ? (detailed.engine + "+gpt") : detailed.engine,
+    engine: (corrected.length && detailed.engine) ? detailed.engine : (detailed.engine || "none"),
     raw: detailed.text,
   };
 }
