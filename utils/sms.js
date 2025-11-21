@@ -1,36 +1,53 @@
 // utils/sms.js
-const axios = require('axios');
+const axios = require("axios");
 
-async function sendSmsMSG91(mobile, message) {
+const MSG91_BASE_URL = "https://api.msg91.com/api/v2/sendsms";
+
+/**
+ * Send OTP SMS via MSG91 using your DLT-approved template.
+ * It builds the exact message text that matches the template and
+ * passes template_id so DLT is happy.
+ */
+async function sendSmsMSG91(mobile, otp) {
   const authkey = process.env.MSG91_AUTHKEY;
-  const sender = process.env.MSG91_SENDER || "GODAVAII"; // Fallback to GODAVAII
-  const route = 4; // 4 = transactional
-  const country = 91;
-  const template_id = process.env.MSG91_TEMPLATE_ID; // <-- Add this line!
+  const sender = process.env.MSG91_SENDER;          // e.g. GDAVAI
+  const templateId = process.env.MSG91_TEMPLATE_ID; // e.g. 691ddce543a7712e306f3423
 
-  const url = `https://api.msg91.com/api/v2/sendsms`;
+  if (!authkey || !sender || !templateId) {
+    console.error("MSG91 config missing. Check MSG91_AUTHKEY, MSG91_SENDER, MSG91_TEMPLATE_ID");
+    throw new Error("MSG91 configuration missing");
+  }
 
-  const data = {
+  // IMPORTANT: this MUST match your DLT template text exactly
+  const message =
+    `Your GoDavaii OTP is ${otp}. Please use this to verify your login on GoDavaii.\n\n` +
+    `- GoDavaii (Karniva Private Limited)`;
+
+  const payload = {
     sender,
-    route,
-    country,
+    route: "4",              // transactional
+    country: "91",
     sms: [
       {
         message,
-        to: [mobile.startsWith("91") ? mobile : "91" + mobile],
-        template_id // <-- Add this field!
+        to: [mobile.startsWith("91") ? mobile : `91${mobile}`],
+        template_id: templateId
       }
     ]
   };
 
   const headers = {
     authkey,
-    'content-type': 'application/json'
+    "content-type": "application/json"
   };
 
   try {
-    const res = await axios.post(url, data, { headers });
-    console.log("MSG91 SMS sent:", res.data);
+    const res = await axios.post(MSG91_BASE_URL, payload, { headers });
+    console.log("MSG91 SMS response:", JSON.stringify(res.data));
+    // If MSG91 returns error structure, throw so /send-otp can show error
+    if (res.data && res.data.type === "error") {
+      throw new Error("MSG91 error: " + JSON.stringify(res.data));
+    }
     return res.data;
   } catch (err) {
     console.error("MSG91 SMS failed:", err.response?.data || err.message);

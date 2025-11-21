@@ -4,32 +4,33 @@ const router = express.Router();
 const User = require("../models/User");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const { sendSmsMSG91 } = require("../utils/sms"); // <-- IMPORT your real MSG91 sender
-const nodemailer = require("nodemailer"); // <--- Added for email OTP
+const { sendSmsMSG91 } = require("../utils/sms"); // use fixed MSG91 util
+const nodemailer = require("nodemailer");
 
 const isEmail = (str) => /\S+@\S+\.\S+/.test(str);
 const OTP_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
-// --- SEND OTP VIA MSG91 (production) or log (dev) ---
+// --- SEND OTP VIA MSG91 ---
 async function sendOtpMsg91(mobile, otp) {
-  const message = `Your GoDavaii OTP is ${otp}.`;
-  await sendSmsMSG91(mobile, message);
+  // delegate to utils/sms.js, which builds exact template text
+  await sendSmsMSG91(mobile, otp);
+
   if (process.env.NODE_ENV !== "production") {
     console.log(`[DEV] OTP for ${mobile}: ${otp}`);
   }
 }
 
+// --- SEND OTP VIA EMAIL (unchanged) ---
 async function sendOtpEmail(email, otp) {
-  // Nodemailer production-ready implementation
   const transporter = nodemailer.createTransport({
-  host: "smtp.hostinger.com",
-  port: 465, // or 587 if TLS
-  secure: true, // true for 465, false for 587
-  auth: {
-    user: process.env.EMAIL_USER, // info@godavaii.com
-    pass: process.env.EMAIL_PASS, // actual password for that mailbox
-  },
-});
+    host: "smtp.hostinger.com",
+    port: 465,
+    secure: true,
+    auth: {
+      user: process.env.EMAIL_USER, // info@godavaii.com
+      pass: process.env.EMAIL_PASS,
+    },
+  });
 
   const mailOptions = {
     from: `"GoDavaii" <${process.env.EMAIL_USER}>`,
@@ -69,6 +70,7 @@ router.post("/send-otp", async (req, res) => {
       user = await User.findOne({ mobile: identifier });
       if (!user) user = new User({ mobile: identifier, name: "New User" });
     }
+
     user.otp = otpHash;
     user.otpExpiry = new Date(Date.now() + OTP_EXPIRY);
     await user.save();
@@ -78,15 +80,15 @@ router.post("/send-otp", async (req, res) => {
     } else {
       await sendOtpMsg91(identifier, otp);
     }
-    // Do not send OTP in response in production!
+
     res.json({ success: true, message: "OTP sent!" });
   } catch (err) {
-    console.error("Send OTP error:", err);
-    res.status(500).json({ error: "Server error." });
+    console.error("Send OTP error:", err.response?.data || err.message || err);
+    res.status(500).json({ error: "Error sending OTP. Please try again." });
   }
 });
 
-// ===== VERIFY OTP (SINGLE ROUTE ONLY) =====
+// ===== VERIFY OTP =====
 router.post("/verify-otp", async (req, res) => {
   try {
     let { identifier, otp } = req.body;
@@ -116,6 +118,7 @@ router.post("/verify-otp", async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "30d" }
     );
+
     res.json({
       success: true,
       token,
