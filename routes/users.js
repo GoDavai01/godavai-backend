@@ -59,11 +59,11 @@ router.put("/:id", async (req, res) => {
 
   try {
     const updates = {};
-    ["name", "email", "dob", "avatar"].forEach(field => {
+    ["name", "email", "dob", "avatar"].forEach((field) => {
       if (field in req.body) updates[field] = req.body[field];
     });
     const user = await User.findByIdAndUpdate(req.params.id, updates, {
-      new: true
+      new: true,
     });
     if (!user) return res.status(404).json({ error: "User not found" });
     res.json(user);

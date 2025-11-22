@@ -10,14 +10,16 @@ const nodemailer = require("nodemailer");
 const isEmail = (str) => /\S+@\S+\.\S+/.test(str);
 const OTP_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
+// ---- MSG91 OTP sender (mobile) ----
 async function sendOtpMsg91(mobile, otp) {
-  await sendSmsMSG91(mobile, otp);
-
+  const result = await sendSmsMSG91(mobile, otp);
   if (process.env.NODE_ENV !== "production") {
-    console.log(`[DEV] OTP for ${mobile}: ${otp}`);
+    console.log(`[DEV] OTP for ${mobile}: ${otp}`, result);
   }
+  return result;
 }
 
+// ---- Email OTP sender ----
 async function sendOtpEmail(email, otp) {
   const transporter = nodemailer.createTransport({
     host: "smtp.hostinger.com",
@@ -53,7 +55,11 @@ async function sendOtpEmail(email, otp) {
 router.post("/send-otp", async (req, res) => {
   try {
     let { identifier } = req.body;
-    if (!identifier) return res.status(400).json({ error: "Mobile or Email is required." });
+    if (!identifier) {
+      return res
+        .status(400)
+        .json({ error: "Mobile or Email is required." });
+    }
     identifier = (identifier + "").trim();
 
     const otp = (Math.floor(100000 + Math.random() * 900000)).toString();
@@ -81,7 +87,22 @@ router.post("/send-otp", async (req, res) => {
     res.json({ success: true, message: "OTP sent!" });
   } catch (err) {
     console.error("Send OTP error:", err.response?.data || err.message || err);
-    res.status(500).json({ error: "Error sending OTP. Please try again." });
+
+    const apiError = err.response?.data;
+    if (apiError) {
+      return res.status(500).json({
+        error:
+          apiError.message ||
+          apiError.description ||
+          apiError.type ||
+          "MSG91 OTP API error",
+        raw: apiError,
+      });
+    }
+
+    res
+      .status(500)
+      .json({ error: "Error sending OTP. Please try again." });
   }
 });
 
@@ -100,7 +121,9 @@ router.post("/verify-otp", async (req, res) => {
       return res.status(400).json({ error: "OTP not found." });
 
     if (user.otpExpiry < new Date())
-      return res.status(400).json({ error: "OTP expired. Please request again." });
+      return res
+        .status(400)
+        .json({ error: "OTP expired. Please request again." });
 
     const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
     if (otpHash !== user.otp)
