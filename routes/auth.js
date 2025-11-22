@@ -4,15 +4,13 @@ const router = express.Router();
 const User = require("../models/User");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const { sendSmsMSG91 } = require("../utils/sms"); // use fixed MSG91 util
+const { sendSmsMSG91 } = require("../utils/sms");
 const nodemailer = require("nodemailer");
 
 const isEmail = (str) => /\S+@\S+\.\S+/.test(str);
 const OTP_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
-// --- SEND OTP VIA MSG91 ---
 async function sendOtpMsg91(mobile, otp) {
-  // delegate to utils/sms.js, which builds exact template text
   await sendSmsMSG91(mobile, otp);
 
   if (process.env.NODE_ENV !== "production") {
@@ -20,7 +18,6 @@ async function sendOtpMsg91(mobile, otp) {
   }
 }
 
-// --- SEND OTP VIA EMAIL (unchanged) ---
 async function sendOtpEmail(email, otp) {
   const transporter = nodemailer.createTransport({
     host: "smtp.hostinger.com",
@@ -128,7 +125,7 @@ router.post("/verify-otp", async (req, res) => {
         email: user.email,
         name: user.name,
         dob: user.dob,
-        avatar: user.avatar
+        avatar: user.avatar,
       },
     });
   } catch (err) {
