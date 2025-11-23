@@ -3,34 +3,25 @@ const axios = require("axios");
 
 /**
  * Send OTP SMS via MSG91 using SMS v2 + DLT mapping.
- *
- * mobile: "7906886249" or "917906886249"
- * otp: "123456"
- *
- * REQUIRED ENV VARS (Render):
- *   MSG91_AUTHKEY          -> your MSG91 auth key
- *   MSG91_SENDER           -> GDAVAI      (exactly same as DLT header)
- *   MSG91_TEMPLATE_ID      -> **SMS** template ID (from SMS > Templates)
- *                             e.g. 691e03af338dfd707e3793d9
- *   MSG91_DLT_TEMPLATE_ID  -> DLT template ID from Jio
- *                             e.g. 1207176348392746192
  */
 async function sendSmsMSG91(mobile, otp) {
   const authkey = process.env.MSG91_AUTHKEY;
-  const sender = process.env.MSG91_SENDER;               // GDAVAI
-  const templateId = process.env.MSG91_TEMPLATE_ID;      // SMS template ID
-  const dltTemplateId = process.env.MSG91_DLT_TEMPLATE_ID; // Jio DLT ID
+  const sender = process.env.MSG91_SENDER; // GDAVAI
+  const templateId = process.env.MSG91_TEMPLATE_ID; // SMS template ID from SMS section
+  const dltTemplateId = process.env.MSG91_DLT_TEMPLATE_ID; // 1207... from Jio DLT
 
   if (!authkey || !sender || !templateId || !dltTemplateId) {
     console.error(
-      "MSG91 config missing. Need MSG91_AUTHKEY, MSG91_SENDER, MSG91_TEMPLATE_ID (SMS), MSG91_DLT_TEMPLATE_ID"
+      "MSG91 config missing. Need MSG91_AUTHKEY, MSG91_SENDER, MSG91_TEMPLATE_ID, MSG91_DLT_TEMPLATE_ID"
     );
     throw new Error("MSG91 configuration missing");
   }
 
-  // MESSAGE TEXT MUST MATCH DLT TEMPLATE EXACTLY
+  // *** MUST MATCH DLT TEMPLATE BODY EXACTLY (only number changes) ***
   const message =
-    `Your GoDavaii OTP is ${otp}. Please use this to verify your login on GoDavaii. - GoDavaii (Karniva Private Limited)`;
+    `Your GoDavaii OTP is ${otp}.` +
+    `\nPlease use this to verify your login on GoDavaii.` +
+    `\n\n- GoDavaii (Karniva Private Limited)`;
 
   const cleanMobile = String(mobile).replace(/\D/g, "");
   const fullMobile = cleanMobile.startsWith("91")
@@ -39,14 +30,14 @@ async function sendSmsMSG91(mobile, otp) {
 
   const payload = {
     sender,
-    route: "4",           // transactional
+    route: "4", // transactional
     country: "91",
     sms: [
       {
-        message,
         to: [fullMobile],
-        template_id: templateId,        // SMS template ID
-        dlt_template_id: dltTemplateId, // Jio DLT template ID
+        message,
+        template_id: templateId,       // MSG91 SMS template ID
+        dlt_template_id: dltTemplateId // Jio DLT template ID
       },
     ],
   };
@@ -63,7 +54,6 @@ async function sendSmsMSG91(mobile, otp) {
       { headers }
     );
     console.log("MSG91 SMS response:", JSON.stringify(res.data));
-
     if (res.data && res.data.type === "error") {
       throw new Error("MSG91 error: " + JSON.stringify(res.data));
     }
