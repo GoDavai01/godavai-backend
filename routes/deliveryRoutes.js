@@ -402,14 +402,12 @@ router.post("/forgot-password", async (req, res) => {
     otpMap.set(mobile, { otp, expires });
 
     // IMPORTANT: Must match your DLT template
-    const message = `Your GoDavaii Delivery OTP is ${otp}.`;
-
     try {
-      await sendSmsMSG91(mobile, message);
-    } catch (err) {
-      console.error("MSG91 send failed:", err?.response?.data || err.message);
-      return res.status(500).json({ error: "Failed to send OTP SMS" });
-    }
+  await sendSmsMSG91(mobile, otp);   // FIXED — ONLY OTP ALLOWED
+} catch (err) {
+  console.error("MSG91 send failed:", err?.response?.data || err.message);
+  return res.status(500).json({ error: "Failed to send OTP SMS" });
+}
 
     res.json({ msg: "OTP sent!" });
   } catch (err) {

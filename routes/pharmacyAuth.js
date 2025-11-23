@@ -71,7 +71,7 @@ router.post("/send-otp", async (req, res) => {
       return res.json({ success: true, message: "OTP sent to registered email address." });
     } else {
       // Send OTP via MSG91 SMS
-      await sendSmsMSG91(contact, `Your GoDavaii Pharmacy OTP is: ${otp}`);
+      await sendSmsMSG91(contact, otp);
       return res.json({ success: true, message: "OTP sent to registered mobile number." });
     }
   } catch (err) {
