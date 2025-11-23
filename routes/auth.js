@@ -10,7 +10,7 @@ const nodemailer = require("nodemailer");
 const isEmail = (str) => /\S+@\S+\.\S+/.test(str);
 const OTP_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
-// ---- MSG91 OTP sender (mobile) ----
+// ---- MSG91 SMS sender (mobile) ----
 async function sendOtpMsg91(mobile, otp) {
   const result = await sendSmsMSG91(mobile, otp);
   if (process.env.NODE_ENV !== "production") {
