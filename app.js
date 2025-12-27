@@ -64,6 +64,7 @@ const medicinesRouter = require("./routes/medicines");
 const pharmaciesRouter = require("./routes/pharmacies"); // optional, for consistency
 const upload = require('./utils/upload');
 const suggestRouter = require("./routes/suggest");
+const medicineMasterRoutes = require("./routes/medicineMaster");
 
 // ---- S3 guard (put near your other env reads) ----
 const haveS3Creds =
@@ -223,6 +224,7 @@ app.use("/api/chat", require("./routes/chat"));
 app.use("/api/support-chat", require("./routes/supportChat"));
 app.use('/api/admin', require('./routes/admin'));
 app.use("/api/suggest", suggestRouter);
+app.use("/api/medicine-master", medicineMasterRoutes);
 
 app.use("/api/allorders", require("./routes/allorders"));
 app.use("/api/pharmacy", require("./routes/pharmacyAuth"));

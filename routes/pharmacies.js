@@ -8,6 +8,10 @@ const mongoose = require("mongoose");
 const generateMedicineDescription = require("../utils/generateDescription");
 const buildCompositionKey = require("../utils/buildCompositionKey");
 
+// ✅ NEW: Master + Inventory models
+const PharmacyInventory = require("../models/PharmacyInventory");
+const MedicineMaster = require("../models/MedicineMaster");
+
 // ✅ Shared field list for /alternatives so results include `pharmacy`
 const ALT_PUBLIC_FIELDS =
   "_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind pharmacy";
@@ -86,6 +90,120 @@ router.get("/medicines", auth, async (req, res) => {
   } catch (err) {
     console.error("Pharmacy medicines error:", err);
     res.status(500).json({ message: "Failed to fetch medicines" });
+  }
+});
+
+/**
+ * ✅✅✅ NEW INVENTORY ROUTES (Master -> Pharmacy inventory with overrides)
+ *
+ * ✅ ADD TO INVENTORY FROM MASTER (and optionally override)
+ * POST /api/pharmacies/inventory/add
+ * body: { medicineMasterId, sellingPrice, mrp, discount, stockQty, images[] }
+ */
+router.post("/inventory/add", auth, async (req, res) => {
+  try {
+    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+
+    const { medicineMasterId, sellingPrice, mrp, discount, stockQty, images } = req.body;
+
+    const master = await MedicineMaster.findById(medicineMasterId);
+    if (!master || master.status !== "approved" || !master.active) {
+      return res.status(404).json({ error: "Master medicine not found/approved." });
+    }
+
+    // upsert so duplicate na bane
+    const inv = await PharmacyInventory.findOneAndUpdate(
+      { pharmacyId: req.user.pharmacyId, medicineMasterId },
+      {
+        $set: {
+          sellingPrice: Number(sellingPrice ?? master.price ?? 0),
+          mrp: Number(mrp ?? master.mrp ?? 0),
+          discount: Number(discount ?? master.discount ?? 0),
+          stockQty: Number(stockQty ?? 0),
+          images: Array.isArray(images) ? images : [],
+          isActive: true,
+        },
+      },
+      { upsert: true, new: true }
+    ).populate("medicineMasterId");
+
+    res.json(inv);
+  } catch (e) {
+    res.status(400).json({ error: (e && e.message) || "Failed to add inventory." });
+  }
+});
+
+/**
+ * ✅ UPDATE INVENTORY (override only for that pharmacy)
+ * PATCH /api/pharmacies/inventory/:id
+ */
+router.patch("/inventory/:id", auth, async (req, res) => {
+  try {
+    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+
+    const inv = await PharmacyInventory.findOneAndUpdate(
+      { _id: req.params.id, pharmacyId: req.user.pharmacyId },
+      { $set: req.body },
+      { new: true }
+    ).populate("medicineMasterId");
+
+    if (!inv) return res.status(404).json({ error: "Inventory not found." });
+    res.json(inv);
+  } catch (e) {
+    res.status(400).json({ error: (e && e.message) || "Failed to update inventory." });
+  }
+});
+
+/**
+ * ✅ LIST INVENTORY (merged view)
+ * GET /api/pharmacies/inventory
+ */
+router.get("/inventory", auth, async (req, res) => {
+  try {
+    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+
+    const list = await PharmacyInventory.find({
+      pharmacyId: req.user.pharmacyId,
+      isActive: true,
+    }).populate("medicineMasterId");
+
+    // merge master + override for easy UI
+    const merged = list.map((x) => {
+      const m = (x.medicineMasterId && x.medicineMasterId.toObject) ? x.medicineMasterId.toObject() : {};
+      const inv = x.toObject();
+
+      return {
+        _id: inv._id,
+        medicineMasterId: m._id,
+
+        // master fields:
+        name: m.name,
+        brand: m.brand,
+        composition: m.composition,
+        company: m.company,
+        category: m.category,
+        type: m.type,
+        customType: m.customType,
+        prescriptionRequired: m.prescriptionRequired,
+        productKind: m.productKind,
+        hsn: m.hsn,
+        gstRate: m.gstRate,
+        packCount: m.packCount,
+        packUnit: m.packUnit,
+        description: m.description,
+
+        // effective fields (override wins)
+        price: inv.sellingPrice != null ? inv.sellingPrice : m.price,
+        mrp: inv.mrp != null ? inv.mrp : m.mrp,
+        discount: inv.discount != null ? inv.discount : m.discount,
+        stockQty: inv.stockQty != null ? inv.stockQty : 0,
+        images: (inv.images && inv.images.length ? inv.images : (m.images || [])) || [],
+      };
+    });
+
+    res.json(merged);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to fetch inventory." });
   }
 });
 
