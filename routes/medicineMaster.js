@@ -2,11 +2,34 @@ import express from "express";
 import MedicineMaster from "../models/MedicineMaster.js";
 import PharmacyInventory from "../models/PharmacyInventory.js";
 
-// NOTE: apne project ke middleware names ke hisaab se adjust karna
-// In your pasted file it was: isAdmin, isPharmacyAuth
-import { isAdmin, isPharmacyAuth } from "../middleware/auth.js";
+// ✅ Your project already uses auth middleware (single default export)
+import auth from "../middleware/auth.js";
 
 const router = express.Router();
+
+/**
+ * ✅ Wrapper: pharmacy auth
+ * - Works if token has: { pharmacyId } OR { type: "pharmacy" }
+ */
+const isPharmacyAuth = (req, res, next) => {
+  return auth(req, res, () => {
+    const ok = !!req.user?.pharmacyId || req.user?.type === "pharmacy";
+    if (!ok) return res.status(403).json({ error: "Pharmacy only" });
+    next();
+  });
+};
+
+/**
+ * ✅ Wrapper: admin auth
+ * - Works if token has: { adminId } OR { type: "admin" }
+ */
+const isAdmin = (req, res, next) => {
+  return auth(req, res, () => {
+    const ok = !!req.user?.adminId || req.user?.type === "admin";
+    if (!ok) return res.status(403).json({ error: "Admin only" });
+    next();
+  });
+};
 
 /**
  * ✅ SEARCH approved master medicines (pharmacy + admin)
