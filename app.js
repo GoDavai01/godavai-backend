@@ -225,7 +225,6 @@ app.use("/api/support-chat", require("./routes/supportChat"));
 app.use('/api/admin', require('./routes/admin'));
 app.use("/api/suggest", suggestRouter);
 app.use("/api/medicine-master", medicineMasterRoutes);
-
 app.use("/api/allorders", require("./routes/allorders"));
 app.use("/api/pharmacy", require("./routes/pharmacyAuth"));
 app.use(express.json());
