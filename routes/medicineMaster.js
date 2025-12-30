@@ -1,11 +1,12 @@
-import express from "express";
-import MedicineMaster from "../models/MedicineMaster.js";
-import PharmacyInventory from "../models/PharmacyInventory.js";
+// routes/medicineMaster.js
+const express = require("express");
+const router = express.Router();
+
+const MedicineMaster = require("../models/MedicineMaster");
+const PharmacyInventory = require("../models/PharmacyInventory");
 
 // ✅ Your project already uses auth middleware (single default export)
-import auth from "../middleware/auth.js";
-
-const router = express.Router();
+const auth = require("../middleware/auth");
 
 /**
  * ✅ Wrapper: pharmacy auth
@@ -149,4 +150,4 @@ router.patch("/:id/reject", isAdmin, async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;
