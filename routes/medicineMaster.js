@@ -2,13 +2,17 @@
 const express = require("express");
 const router = express.Router();
 
-const MedicineMaster = require("../models/MedicineMaster");
-const PharmacyInventory = require("../models/PharmacyInventory");
+// ✅ Models can be ESM default export OR CommonJS export
+const MedicineMasterImport = require("../models/MedicineMaster");
+const PharmacyInventoryImport = require("../models/PharmacyInventory");
 
-// ✅ Your project already uses auth middleware (single default export)
+const MedicineMaster = MedicineMasterImport?.default || MedicineMasterImport;
+const PharmacyInventory = PharmacyInventoryImport?.default || PharmacyInventoryImport;
+
+// ✅ Auth middleware (single default export)
 const auth = require("../middleware/auth");
 
-// ✅ Same util already used elsewhere in your backend (routes/pharmacies.js)
+// ✅ Util already used elsewhere in backend
 const generateMedicineDescription = require("../utils/generateDescription");
 
 /**
@@ -39,15 +43,15 @@ const isAdmin = (req, res, next) => {
 // ✅ shared helper: auto description
 // ------------------------
 async function ensureDescription(payload = {}) {
+  // ✅ FIX: spread payload properly
   const p = { ...payload };
 
-  // normalize a few fields so both admin + pharmacy behave same
   const composition = (p.composition || "").toString().trim();
   const brand = (p.brand || "").toString().trim();
   const company = (p.company || "").toString().trim();
   const type = (p.type || "").toString().trim();
 
-  // name fallback logic
+  // name fallback
   p.name = (p.name || brand || composition || "").toString().trim();
 
   // if generic => brand empty
@@ -66,8 +70,12 @@ async function ensureDescription(payload = {}) {
         type,
       });
 
-      // avoid storing placeholder text if your util returns something like "No description..."
-      if (desc && typeof desc === "string" && desc.trim() && desc.trim() !== "No description available.") {
+      if (
+        desc &&
+        typeof desc === "string" &&
+        desc.trim() &&
+        desc.trim() !== "No description available."
+      ) {
         p.description = desc.trim();
       }
     } catch (e) {
@@ -112,7 +120,9 @@ router.get("/admin/all", isAdmin, async (req, res) => {
       ...(q ? { name: { $regex: q, $options: "i" } } : {}),
     };
 
-    const meds = await MedicineMaster.find(filter).sort({ createdAt: -1 }).limit(200);
+    const meds = await MedicineMaster.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(200);
     res.json(meds);
   } catch (e) {
     res.status(500).json({ error: "Failed to fetch admin master list." });
@@ -130,9 +140,9 @@ router.post("/admin", isAdmin, async (req, res) => {
       status: "approved",
       createdByType: "admin",
       createdByPharmacyId: null,
+      active: true,
     };
 
-    // ✅ ensure auto-description for admin adds too
     payload = await ensureDescription(payload);
 
     const med = await MedicineMaster.create(payload);
@@ -156,7 +166,6 @@ router.post("/request", isPharmacyAuth, async (req, res) => {
       active: true,
     };
 
-    // ✅ ensure auto-description for pharmacy requests too
     payload = await ensureDescription(payload);
 
     const med = await MedicineMaster.create(payload);
