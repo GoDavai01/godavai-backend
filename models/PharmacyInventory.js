@@ -1,4 +1,5 @@
-import mongoose from "mongoose";
+// models/PharmacyInventory.js (FULLY REPLACEABLE - CommonJS)
+const mongoose = require("mongoose");
 
 const PharmacyInventorySchema = new mongoose.Schema(
   {
@@ -31,4 +32,6 @@ const PharmacyInventorySchema = new mongoose.Schema(
 // prevent duplicates per pharmacy per master medicine
 PharmacyInventorySchema.index({ pharmacyId: 1, medicineMasterId: 1 }, { unique: true });
 
-export default mongoose.model("PharmacyInventory", PharmacyInventorySchema);
+// ✅ Prevent OverwriteModelError in dev/hot reload:
+module.exports =
+  mongoose.models.PharmacyInventory || mongoose.model("PharmacyInventory", PharmacyInventorySchema);

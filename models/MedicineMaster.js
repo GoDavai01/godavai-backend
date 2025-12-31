@@ -1,15 +1,15 @@
-import mongoose from "mongoose";
+// models/MedicineMaster.js (FULLY REPLACEABLE - CommonJS)
+const mongoose = require("mongoose");
 
 const MedicineMasterSchema = new mongoose.Schema(
   {
-    // same fields like pharmacy medicine form
     name: { type: String, required: true, trim: true },
 
-    brand: { type: String, trim: true },          // branded only
-    composition: { type: String, trim: true },    // salts / composition
+    brand: { type: String, trim: true },       // branded only
+    composition: { type: String, trim: true }, // salts / composition
     company: { type: String, trim: true },
 
-    price: { type: Number, default: 0 },          // base/default selling price
+    price: { type: Number, default: 0 },       // base/default selling price
     mrp: { type: Number, default: 0 },
     discount: { type: Number, default: 0 },
 
@@ -54,4 +54,5 @@ const MedicineMasterSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("MedicineMaster", MedicineMasterSchema);
+// ✅ Prevent OverwriteModelError in dev/hot reload:
+module.exports = mongoose.models.MedicineMaster || mongoose.model("MedicineMaster", MedicineMasterSchema);
