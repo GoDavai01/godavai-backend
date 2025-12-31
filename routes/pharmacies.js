@@ -1,4 +1,4 @@
-// routes/pharmacies.js
+// routes/pharmacies.js (FULLY REPLACEABLE)
 const express = require("express");
 const router = express.Router();
 const Pharmacy = require("../models/Pharmacy");
@@ -17,25 +17,53 @@ const ALT_PUBLIC_FIELDS =
   "_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind pharmacy";
 
 /**
+ * helpers
+ */
+const round2 = (n) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 100) / 100;
+};
+
+const calcDiscountPercent = (mrp, sellingPrice) => {
+  const m = Number(mrp);
+  const sp = Number(sellingPrice);
+  if (!Number.isFinite(m) || !Number.isFinite(sp) || m <= 0) return 0;
+  const d = ((m - sp) / m) * 100;
+  return round2(Math.max(0, d));
+};
+
+/**
  * ✅✅✅ IMPORTANT FIX:
  * Inventory add/update should also create/update a Medicine document
  * because pharmacy medicines page reads from Medicine collection.
  */
 async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
   const m = masterDoc;
-  const inv = (invDoc && invDoc.toObject) ? invDoc.toObject() : invDoc;
+  const inv = invDoc && invDoc.toObject ? invDoc.toObject() : invDoc;
 
   const effectivePrice =
     inv?.sellingPrice != null ? Number(inv.sellingPrice) : Number(m?.price || 0);
-  const effectiveMrp = inv?.mrp != null ? Number(inv.mrp) : Number(m?.mrp || 0);
+  const effectiveMrp =
+    inv?.mrp != null ? Number(inv.mrp) : Number(m?.mrp || 0);
+
+  // ✅ discount auto-calc if not explicitly provided
   const effectiveDiscount =
-    inv?.discount != null ? Number(inv.discount) : Number(m?.discount || 0);
+    inv?.discount != null
+      ? Number(inv.discount)
+      : calcDiscountPercent(effectiveMrp, effectivePrice);
+
   const effectiveStock = inv?.stockQty != null ? Number(inv.stockQty) : 0;
 
   const effectiveImages =
     (Array.isArray(inv?.images) && inv.images.length
       ? inv.images
-      : (Array.isArray(m?.images) ? m.images : [])) || [];
+      : Array.isArray(m?.images)
+      ? m.images
+      : []) || [];
+
+  // ✅ prevent "flag" fallback: set img as first image if present
+  const effectiveImg = effectiveImages?.length ? effectiveImages[0] : "";
 
   const compositionKey = buildCompositionKey(String(m?.composition || "").trim());
 
@@ -67,6 +95,7 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
     stock: effectiveStock,
 
     images: effectiveImages,
+    img: effectiveImg,
 
     packCount: Number(m?.packCount || 0),
     packUnit: m?.packUnit || "",
@@ -74,7 +103,10 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
     productKind: m?.productKind || "branded",
 
     // keep categories same style as your Medicine collection (array)
-    category: Array.isArray(m?.category) && m.category.length ? m.category : ["Miscellaneous"],
+    category:
+      Array.isArray(m?.category) && m.category.length
+        ? m.category
+        : ["Miscellaneous"],
 
     type: m?.type || "Tablet",
     prescriptionRequired: !!m?.prescriptionRequired,
@@ -84,10 +116,17 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
     available: true,
   };
 
-  const med = await Medicine.findOneAndUpdate(filter, { $set: payload }, { new: true, upsert: true });
+  const med = await Medicine.findOneAndUpdate(
+    filter,
+    { $set: payload },
+    { new: true, upsert: true }
+  );
 
   // ensure pharmacy.medicines contains this med id (used by cart logic)
-  await Pharmacy.updateOne({ _id: pharmacyId }, { $addToSet: { medicines: med._id } });
+  await Pharmacy.updateOne(
+    { _id: pharmacyId },
+    { $addToSet: { medicines: med._id } }
+  );
 
   // If description missing, generate once (optional safe)
   if (!med.description) {
@@ -104,7 +143,10 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
         await med.save();
       }
     } catch (e) {
-      console.error("Desc gen failed (syncInventoryToMedicine):", e?.response?.data || e?.message);
+      console.error(
+        "Desc gen failed (syncInventoryToMedicine):",
+        e?.response?.data || e?.message
+      );
     }
   }
 
@@ -130,7 +172,9 @@ router.post("/available-for-cart", async (req, res) => {
 
     const pharmacies = await Pharmacy.find(query).select("-legalEntityName");
     const result = pharmacies.filter((pharmacy) =>
-      medicines.every((medId) => (pharmacy.medicines || []).map(String).includes(String(medId)))
+      medicines.every((medId) =>
+        (pharmacy.medicines || []).map(String).includes(String(medId))
+      )
     );
     res.json(result);
   } catch (err) {
@@ -176,7 +220,8 @@ router.get("/", async (req, res) => {
  * Requires auth with a pharmacyId
  */
 router.get("/medicines", auth, async (req, res) => {
-  if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
+  if (!req.user.pharmacyId)
+    return res.status(403).json({ message: "Not authorized" });
   try {
     const medicines = await Medicine.find({ pharmacy: req.user.pharmacyId });
     res.json(medicines);
@@ -191,27 +236,34 @@ router.get("/medicines", auth, async (req, res) => {
  *
  * ✅ ADD TO INVENTORY FROM MASTER (and optionally override)
  * POST /api/pharmacies/inventory/add
- * body: { medicineMasterId, sellingPrice, mrp, discount, stockQty, images[] }
+ * body: { medicineMasterId, sellingPrice, mrp, stockQty, images[] }
+ *
+ * ✅ discount AUTO calculated from sellingPrice & mrp
  */
 router.post("/inventory/add", auth, async (req, res) => {
   try {
-    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+    if (!req.user.pharmacyId)
+      return res.status(403).json({ error: "Not authorized" });
 
-    const { medicineMasterId, sellingPrice, mrp, discount, stockQty, images } = req.body;
+    const { medicineMasterId, sellingPrice, mrp, stockQty, images } = req.body;
 
     const master = await MedicineMaster.findById(medicineMasterId);
     if (!master || master.status !== "approved" || !master.active) {
       return res.status(404).json({ error: "Master medicine not found/approved." });
     }
 
+    const sp = Number(sellingPrice ?? master.price ?? 0);
+    const m = Number(mrp ?? master.mrp ?? 0);
+    const discount = calcDiscountPercent(m, sp);
+
     // upsert so duplicate na bane
     const inv = await PharmacyInventory.findOneAndUpdate(
       { pharmacyId: req.user.pharmacyId, medicineMasterId },
       {
         $set: {
-          sellingPrice: Number(sellingPrice ?? master.price ?? 0),
-          mrp: Number(mrp ?? master.mrp ?? 0),
-          discount: Number(discount ?? master.discount ?? 0),
+          sellingPrice: sp,
+          mrp: m,
+          discount,
           stockQty: Number(stockQty ?? 0),
           images: Array.isArray(images) ? images : [],
           isActive: true,
@@ -243,15 +295,42 @@ router.post("/inventory/add", auth, async (req, res) => {
  */
 router.patch("/inventory/:id", auth, async (req, res) => {
   try {
-    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+    if (!req.user.pharmacyId)
+      return res.status(403).json({ error: "Not authorized" });
 
-    const inv = await PharmacyInventory.findOneAndUpdate(
+    // if user updates mrp/sellingPrice, recalc discount automatically unless explicitly provided
+    const patch = { ...(req.body || {}) };
+    const hasMRP = patch.mrp != null;
+    const hasSP = patch.sellingPrice != null;
+    const hasDiscount = patch.discount != null;
+
+    if ((hasMRP || hasSP) && !hasDiscount) {
+      const mrpNum = Number(patch.mrp);
+      const spNum = Number(patch.sellingPrice);
+      // if one missing, we’ll recalc after fetching old doc below (safe)
+      patch.__recalcDiscount = true;
+    }
+
+    let inv = await PharmacyInventory.findOneAndUpdate(
       { _id: req.params.id, pharmacyId: req.user.pharmacyId },
-      { $set: req.body },
+      { $set: patch },
       { new: true }
     ).populate("medicineMasterId");
 
     if (!inv) return res.status(404).json({ error: "Inventory not found." });
+
+    // post-fix: recalc discount safely if needed
+    if (patch.__recalcDiscount) {
+      const invObj = inv.toObject();
+      const mrp2 = Number(invObj.mrp);
+      const sp2 = Number(invObj.sellingPrice);
+      const d2 = calcDiscountPercent(mrp2, sp2);
+      inv = await PharmacyInventory.findOneAndUpdate(
+        { _id: req.params.id, pharmacyId: req.user.pharmacyId },
+        { $set: { discount: d2 } },
+        { new: true }
+      ).populate("medicineMasterId");
+    }
 
     // ✅ keep Medicine collection in sync
     try {
@@ -283,7 +362,8 @@ router.patch("/inventory/:id", auth, async (req, res) => {
  */
 router.get("/inventory", auth, async (req, res) => {
   try {
-    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+    if (!req.user.pharmacyId)
+      return res.status(403).json({ error: "Not authorized" });
 
     const list = await PharmacyInventory.find({
       pharmacyId: req.user.pharmacyId,
@@ -292,8 +372,21 @@ router.get("/inventory", auth, async (req, res) => {
 
     // merge master + override for easy UI
     const merged = list.map((x) => {
-      const m = x.medicineMasterId && x.medicineMasterId.toObject ? x.medicineMasterId.toObject() : {};
+      const m =
+        x.medicineMasterId && x.medicineMasterId.toObject
+          ? x.medicineMasterId.toObject()
+          : {};
       const inv = x.toObject();
+
+      const effectivePrice =
+        inv.sellingPrice != null ? Number(inv.sellingPrice) : Number(m.price || 0);
+      const effectiveMrp =
+        inv.mrp != null ? Number(inv.mrp) : Number(m.mrp || 0);
+      const effectiveDiscount =
+        inv.discount != null ? Number(inv.discount) : calcDiscountPercent(effectiveMrp, effectivePrice);
+
+      const effectiveImages =
+        (inv.images && inv.images.length ? inv.images : m.images || []) || [];
 
       return {
         _id: inv._id,
@@ -316,11 +409,11 @@ router.get("/inventory", auth, async (req, res) => {
         description: m.description,
 
         // effective fields (override wins)
-        price: inv.sellingPrice != null ? inv.sellingPrice : m.price,
-        mrp: inv.mrp != null ? inv.mrp : m.mrp,
-        discount: inv.discount != null ? inv.discount : m.discount,
+        price: effectivePrice,
+        mrp: effectiveMrp,
+        discount: effectiveDiscount,
         stockQty: inv.stockQty != null ? inv.stockQty : 0,
-        images: (inv.images && inv.images.length ? inv.images : m.images || []) || [],
+        images: effectiveImages,
       };
     });
 
@@ -336,9 +429,21 @@ router.get("/inventory", auth, async (req, res) => {
  */
 router.post("/medicines/quick-add-draft", auth, async (req, res) => {
   try {
-    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+    if (!req.user.pharmacyId)
+      return res.status(403).json({ error: "Not authorized" });
 
-    const { name, brand, composition, company, productKind, hsn, gstRate, packCount, packUnit } = req.body;
+    const {
+      name,
+      brand,
+      composition,
+      company,
+      productKind,
+      hsn,
+      gstRate,
+      packCount,
+      packUnit,
+    } = req.body;
+
     if (!brand && !composition) {
       return res.status(400).json({ error: "Provide at least Brand or Composition." });
     }
@@ -353,6 +458,7 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
       discount: 0,
       stock: 0,
       images: [],
+      img: "",
       category: ["Miscellaneous"],
       type: "Tablet",
       prescriptionRequired: false,
@@ -396,7 +502,8 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
  */
 router.patch("/medicines/:id/activate", auth, async (req, res) => {
   try {
-    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+    if (!req.user.pharmacyId)
+      return res.status(403).json({ error: "Not authorized" });
 
     const {
       price,
@@ -411,9 +518,13 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
       packCount,
       packUnit,
     } = req.body;
+
     if (price == null || mrp == null) {
       return res.status(400).json({ error: "price and mrp are required to activate." });
     }
+
+    // ✅ discount auto
+    const discount = calcDiscountPercent(Number(mrp), Number(price));
 
     let med = await Medicine.findOneAndUpdate(
       { _id: req.params.id, pharmacy: req.user.pharmacyId },
@@ -421,6 +532,7 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
         $set: {
           price: Number(price),
           mrp: Number(mrp),
+          discount,
           stock: stock != null ? Number(stock) : 0,
           category: Array.isArray(category) && category.length ? category : ["Miscellaneous"],
           type: type || "Tablet",
@@ -479,7 +591,8 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
  * GET /api/pharmacies/me
  */
 router.get("/me", auth, async (req, res) => {
-  if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
+  if (!req.user.pharmacyId)
+    return res.status(403).json({ message: "Not authorized" });
   try {
     const pharmacy = await Pharmacy.findById(req.user.pharmacyId);
     if (!pharmacy) return res.status(404).json({ message: "Pharmacy not found" });
@@ -494,10 +607,16 @@ router.get("/me", auth, async (req, res) => {
  * PATCH /api/pharmacies/active
  */
 router.patch("/active", auth, async (req, res) => {
-  if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
+  if (!req.user.pharmacyId)
+    return res.status(403).json({ message: "Not authorized" });
+
   const { active } = req.body;
   try {
-    const updated = await Pharmacy.findByIdAndUpdate(req.user.pharmacyId, { active: !!active }, { new: true });
+    const updated = await Pharmacy.findByIdAndUpdate(
+      req.user.pharmacyId,
+      { active: !!active },
+      { new: true }
+    );
     res.json({ message: "Status updated", active: updated.active });
   } catch (err) {
     console.error("Pharmacy active status error:", err);
@@ -536,7 +655,13 @@ router.post("/suggest-for-prescription", async (req, res) => {
 
     const suggestions = Object.values(map).map((ph) => {
       const allAvailable = ph.items.length === medicines.length;
-      return { pharmacyId: ph.pharmacy._id, name: ph.pharmacy.name, total: ph.total, allAvailable, availableItems: ph.items };
+      return {
+        pharmacyId: ph.pharmacy._id,
+        name: ph.pharmacy.name,
+        total: ph.total,
+        allAvailable,
+        availableItems: ph.items,
+      };
     });
 
     suggestions.sort((a, b) => {
@@ -607,7 +732,8 @@ router.get("/nearby", async (req, res) => {
  * PATCH /api/pharmacies/set-location
  */
 router.patch("/set-location", auth, async (req, res) => {
-  if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
+  if (!req.user.pharmacyId)
+    return res.status(403).json({ message: "Not authorized" });
 
   const { lat, lng, formatted } = req.body;
   const la = Number(lat);
@@ -635,7 +761,9 @@ router.patch("/set-location", auth, async (req, res) => {
  */
 router.post("/register-device-token", auth, async (req, res) => {
   try {
-    if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
+    if (!req.user.pharmacyId)
+      return res.status(403).json({ message: "Not authorized" });
+
     const { token, platform = "android" } = req.body || {};
     if (!token) return res.status(400).json({ message: "token required" });
 
