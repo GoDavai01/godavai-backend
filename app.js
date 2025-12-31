@@ -714,6 +714,59 @@ async function generateMedicineImage(medicineName) {
   return "/uploads/" + fileName;
 }
 
+// ===================== GENERIC UPLOAD (FOR ADMIN MEDICINE MASTER) =====================
+// Supports form-data field names: file / image / images / photo
+const uploadFieldsSingle = [
+  { name: "file", maxCount: 1 },
+  { name: "image", maxCount: 1 },
+  { name: "images", maxCount: 1 },
+  { name: "photo", maxCount: 1 },
+];
+
+const genericUpload = useS3
+  ? upload.fields(uploadFieldsSingle)
+  : multer({
+      storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+          const folder = path.join(UPLOADS_DIR, "medicines");
+          if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+          cb(null, folder);
+        },
+        filename: (req, file, cb) => {
+          const ext = path.extname(file.originalname || "");
+          cb(null, Date.now() + ext);
+        },
+      }),
+      limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    }).fields(uploadFieldsSingle);
+
+function pickFirstUploadedFile(req) {
+  const all = Object.values(req.files || {}).flat();
+  return all && all.length ? all[0] : null;
+}
+
+app.post("/api/upload", (req, res) => {
+  genericUpload(req, res, (err) => {
+    if (err) {
+      const msg =
+        err.code === "LIMIT_FILE_SIZE" ? "Image too large" :
+        err.code === "LIMIT_UNEXPECTED_FILE" ? "Unexpected field" :
+        err.message || "Upload error";
+      return res.status(400).json({ message: msg });
+    }
+
+    const f = pickFirstUploadedFile(req);
+    if (!f) return res.status(400).json({ message: "No file uploaded" });
+
+    const url = useS3
+      ? (f.location || `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${f.key}`)
+      : ("/uploads/medicines/" + (f.filename || f.key));
+
+    return res.json({ url });
+  });
+});
+// ===================== END GENERIC UPLOAD =====================
+
 // ========== PHARMACY MEDICINE IMAGE UPLOAD ENDPOINTS ==========
 
 // --- accept common field names for images and avoid "Unexpected field"
