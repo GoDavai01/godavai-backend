@@ -17,6 +17,101 @@ const ALT_PUBLIC_FIELDS =
   "_id name brand composition compositionKey company price mrp discount stock img images packCount packUnit productKind pharmacy";
 
 /**
+ * ✅✅✅ IMPORTANT FIX:
+ * Inventory add/update should also create/update a Medicine document
+ * because pharmacy medicines page reads from Medicine collection.
+ */
+async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
+  const m = masterDoc;
+  const inv = (invDoc && invDoc.toObject) ? invDoc.toObject() : invDoc;
+
+  const effectivePrice =
+    inv?.sellingPrice != null ? Number(inv.sellingPrice) : Number(m?.price || 0);
+  const effectiveMrp = inv?.mrp != null ? Number(inv.mrp) : Number(m?.mrp || 0);
+  const effectiveDiscount =
+    inv?.discount != null ? Number(inv.discount) : Number(m?.discount || 0);
+  const effectiveStock = inv?.stockQty != null ? Number(inv.stockQty) : 0;
+
+  const effectiveImages =
+    (Array.isArray(inv?.images) && inv.images.length
+      ? inv.images
+      : (Array.isArray(m?.images) ? m.images : [])) || [];
+
+  const compositionKey = buildCompositionKey(String(m?.composition || "").trim());
+
+  // Try to uniquely identify same master medicine inside this pharmacy’s Medicine collection
+  const filter = {
+    pharmacy: pharmacyId,
+    name: m?.name || "",
+    composition: m?.composition || "",
+    brand: m?.brand || "",
+    productKind: m?.productKind || "branded",
+    packCount: Number(m?.packCount || 0),
+    packUnit: m?.packUnit || "",
+    type: m?.type || "Tablet",
+  };
+
+  const payload = {
+    pharmacy: pharmacyId,
+
+    name: m?.name || "",
+    brand: m?.brand || "",
+    composition: m?.composition || "",
+    compositionKey,
+
+    company: m?.company || "",
+
+    price: effectivePrice,
+    mrp: effectiveMrp,
+    discount: effectiveDiscount,
+    stock: effectiveStock,
+
+    images: effectiveImages,
+
+    packCount: Number(m?.packCount || 0),
+    packUnit: m?.packUnit || "",
+
+    productKind: m?.productKind || "branded",
+
+    // keep categories same style as your Medicine collection (array)
+    category: Array.isArray(m?.category) && m.category.length ? m.category : ["Miscellaneous"],
+
+    type: m?.type || "Tablet",
+    prescriptionRequired: !!m?.prescriptionRequired,
+
+    // keep it visible in pharmacy medicines list
+    status: "active",
+    available: true,
+  };
+
+  const med = await Medicine.findOneAndUpdate(filter, { $set: payload }, { new: true, upsert: true });
+
+  // ensure pharmacy.medicines contains this med id (used by cart logic)
+  await Pharmacy.updateOne({ _id: pharmacyId }, { $addToSet: { medicines: med._id } });
+
+  // If description missing, generate once (optional safe)
+  if (!med.description) {
+    try {
+      const desc = await generateMedicineDescription({
+        name: med.name,
+        brand: med.brand,
+        composition: med.composition,
+        company: med.company,
+        type: med.type,
+      });
+      if (desc && desc !== "No description available.") {
+        med.description = desc;
+        await med.save();
+      }
+    } catch (e) {
+      console.error("Desc gen failed (syncInventoryToMedicine):", e?.response?.data || e?.message);
+    }
+  }
+
+  return med;
+}
+
+/**
  * POST /api/pharmacies/available-for-cart
  * Expects: { city, area, medicines: [id, ...] }
  * Returns pharmacies in area with ALL of the given medicines in stock
@@ -27,13 +122,15 @@ router.post("/available-for-cart", async (req, res) => {
     if (!city || !medicines || !medicines.length) {
       return res.status(400).json({ error: "city and medicines required" });
     }
-    const query = { city: new RegExp(`^${city}$`, "i"), ...(area ? { area } : {}), active: true };
+    const query = {
+      city: new RegExp(`^${city}$`, "i"),
+      ...(area ? { area } : {}),
+      active: true,
+    };
 
     const pharmacies = await Pharmacy.find(query).select("-legalEntityName");
-    const result = pharmacies.filter(pharmacy =>
-      medicines.every(medId =>
-        (pharmacy.medicines || []).map(String).includes(String(medId))
-      )
+    const result = pharmacies.filter((pharmacy) =>
+      medicines.every((medId) => (pharmacy.medicines || []).map(String).includes(String(medId)))
     );
     res.json(result);
   } catch (err) {
@@ -60,10 +157,7 @@ router.get("/", async (req, res) => {
 
     // optional "location" search that matches either city or area
     if (location) {
-      q.$or = [
-        { city: new RegExp(location, "i") },
-        { area: new RegExp(location, "i") }
-      ];
+      q.$or = [{ city: new RegExp(location, "i") }, { area: new RegExp(location, "i") }];
     }
 
     // optional trending filter
@@ -76,7 +170,6 @@ router.get("/", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
 
 /**
  * GET /api/pharmacies/medicines  (pharmacy dashboard/autocomplete)
@@ -127,6 +220,17 @@ router.post("/inventory/add", auth, async (req, res) => {
       { upsert: true, new: true }
     ).populate("medicineMasterId");
 
+    // ✅ CRITICAL FIX: also sync into Medicine collection so it shows on pharmacy medicines page
+    try {
+      await syncInventoryToMedicine({
+        pharmacyId: req.user.pharmacyId,
+        masterDoc: master,
+        invDoc: inv,
+      });
+    } catch (e) {
+      console.error("syncInventoryToMedicine (add) failed:", e?.message || e);
+    }
+
     res.json(inv);
   } catch (e) {
     res.status(400).json({ error: (e && e.message) || "Failed to add inventory." });
@@ -148,6 +252,25 @@ router.patch("/inventory/:id", auth, async (req, res) => {
     ).populate("medicineMasterId");
 
     if (!inv) return res.status(404).json({ error: "Inventory not found." });
+
+    // ✅ keep Medicine collection in sync
+    try {
+      const masterDoc =
+        inv.medicineMasterId && inv.medicineMasterId._id
+          ? inv.medicineMasterId
+          : await MedicineMaster.findById(inv.medicineMasterId);
+
+      if (masterDoc) {
+        await syncInventoryToMedicine({
+          pharmacyId: req.user.pharmacyId,
+          masterDoc,
+          invDoc: inv,
+        });
+      }
+    } catch (e) {
+      console.error("syncInventoryToMedicine (update) failed:", e?.message || e);
+    }
+
     res.json(inv);
   } catch (e) {
     res.status(400).json({ error: (e && e.message) || "Failed to update inventory." });
@@ -169,7 +292,7 @@ router.get("/inventory", auth, async (req, res) => {
 
     // merge master + override for easy UI
     const merged = list.map((x) => {
-      const m = (x.medicineMasterId && x.medicineMasterId.toObject) ? x.medicineMasterId.toObject() : {};
+      const m = x.medicineMasterId && x.medicineMasterId.toObject ? x.medicineMasterId.toObject() : {};
       const inv = x.toObject();
 
       return {
@@ -197,7 +320,7 @@ router.get("/inventory", auth, async (req, res) => {
         mrp: inv.mrp != null ? inv.mrp : m.mrp,
         discount: inv.discount != null ? inv.discount : m.discount,
         stockQty: inv.stockQty != null ? inv.stockQty : 0,
-        images: (inv.images && inv.images.length ? inv.images : (m.images || [])) || [],
+        images: (inv.images && inv.images.length ? inv.images : m.images || []) || [],
       };
     });
 
@@ -222,7 +345,7 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
 
     let doc = await Medicine.create({
       name: name || brand || composition || "Draft",
-      brand: (String(productKind).toLowerCase() === "generic") ? "" : (brand || ""),
+      brand: String(productKind).toLowerCase() === "generic" ? "" : brand || "",
       composition: composition || "",
       company: company || "",
       price: 0,
@@ -236,9 +359,9 @@ router.post("/medicines/quick-add-draft", auth, async (req, res) => {
       pharmacy: req.user.pharmacyId,
       status: "draft",
       // NEW FIELDS
-      productKind: (String(productKind).toLowerCase() === "generic") ? "generic" : "branded",
-      hsn: (hsn && String(hsn).replace(/[^\d]/g,"")) || "3004",
-      gstRate: [0,5,12,18].includes(Number(gstRate)) ? Number(gstRate) : 0,
+      productKind: String(productKind).toLowerCase() === "generic" ? "generic" : "branded",
+      hsn: (hsn && String(hsn).replace(/[^\d]/g, "")) || "3004",
+      gstRate: [0, 5, 12, 18].includes(Number(gstRate)) ? Number(gstRate) : 0,
       packCount: Number(packCount) || 0,
       packUnit: packUnit || "",
     });
@@ -275,8 +398,19 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
   try {
     if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
 
-    const { price, mrp, stock, category, type, prescriptionRequired,
-            productKind, hsn, gstRate, packCount, packUnit } = req.body;
+    const {
+      price,
+      mrp,
+      stock,
+      category,
+      type,
+      prescriptionRequired,
+      productKind,
+      hsn,
+      gstRate,
+      packCount,
+      packUnit,
+    } = req.body;
     if (price == null || mrp == null) {
       return res.status(400).json({ error: "price and mrp are required to activate." });
     }
@@ -293,9 +427,13 @@ router.patch("/medicines/:id/activate", auth, async (req, res) => {
           prescriptionRequired: !!prescriptionRequired,
           status: "active",
           // NEW OPTIONAL FIELD UPDATES
-          ...(productKind != null ? { productKind: String(productKind).toLowerCase() === "generic" ? "generic" : "branded" } : {}),
-          ...(hsn != null ? { hsn: String(hsn).replace(/[^\d]/g,"") || "3004" } : {}),
-          ...(gstRate != null ? { gstRate: [0,5,12,18].includes(Number(gstRate)) ? Number(gstRate) : 0 } : {}),
+          ...(productKind != null
+            ? { productKind: String(productKind).toLowerCase() === "generic" ? "generic" : "branded" }
+            : {}),
+          ...(hsn != null ? { hsn: String(hsn).replace(/[^\d]/g, "") || "3004" } : {}),
+          ...(gstRate != null
+            ? { gstRate: [0, 5, 12, 18].includes(Number(gstRate)) ? Number(gstRate) : 0 }
+            : {}),
           ...(packCount != null ? { packCount: Number(packCount) || 0 } : {}),
           ...(packUnit != null ? { packUnit: String(packUnit) } : {}),
         },
@@ -359,11 +497,7 @@ router.patch("/active", auth, async (req, res) => {
   if (!req.user.pharmacyId) return res.status(403).json({ message: "Not authorized" });
   const { active } = req.body;
   try {
-    const updated = await Pharmacy.findByIdAndUpdate(
-      req.user.pharmacyId,
-      { active: !!active },
-      { new: true }
-    );
+    const updated = await Pharmacy.findByIdAndUpdate(req.user.pharmacyId, { active: !!active }, { new: true });
     res.json({ message: "Status updated", active: updated.active });
   } catch (err) {
     console.error("Pharmacy active status error:", err);
@@ -385,22 +519,22 @@ router.post("/suggest-for-prescription", async (req, res) => {
     if (area) pharmacyQuery.area = new RegExp(area, "i");
     const pharmacies = await Pharmacy.find(pharmacyQuery).lean();
 
-    const medicineNames = medicines.map(m => m.name);
+    const medicineNames = medicines.map((m) => m.name);
     const meds = await Medicine.find({
       name: { $in: medicineNames },
-      pharmacy: { $in: pharmacies.map(p => p._id) },
+      pharmacy: { $in: pharmacies.map((p) => p._id) },
       stock: { $gt: 0 },
     }).populate("pharmacy");
 
     const map = {};
-    meds.forEach(med => {
+    meds.forEach((med) => {
       const pid = med.pharmacy._id.toString();
       if (!map[pid]) map[pid] = { pharmacy: med.pharmacy, items: [], total: 0 };
       map[pid].items.push({ name: med.name, price: med.price, quantity: 1 });
       map[pid].total += med.price;
     });
 
-    const suggestions = Object.values(map).map(ph => {
+    const suggestions = Object.values(map).map((ph) => {
       const allAvailable = ph.items.length === medicines.length;
       return { pharmacyId: ph.pharmacy._id, name: ph.pharmacy.name, total: ph.total, allAvailable, availableItems: ph.items };
     });
@@ -436,13 +570,12 @@ router.get("/nearby", async (req, res) => {
       {
         $geoNear: {
           near: { type: "Point", coordinates: [lng, lat] }, // [lng, lat]
-          distanceField: "distanceMeters",                  // flat numeric field
+          distanceField: "distanceMeters",
           maxDistance: Number.isFinite(maxDistance) ? maxDistance : 8000,
           spherical: true,
           query: { active: true, status: "approved" },
         },
       },
-      // WHITELIST ONLY SAFE FIELDS!
       {
         $project: {
           name: 1,
@@ -510,7 +643,7 @@ router.post("/register-device-token", auth, async (req, res) => {
     if (!doc) return res.status(404).json({ message: "Pharmacy not found" });
 
     doc.deviceTokens = Array.isArray(doc.deviceTokens) ? doc.deviceTokens : [];
-    const exists = doc.deviceTokens.some(t => t.token === token);
+    const exists = doc.deviceTokens.some((t) => t.token === token);
     if (!exists) doc.deviceTokens.push({ token, platform });
     await doc.save();
     res.json({ ok: true });
@@ -551,7 +684,7 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
         available: { $ne: false },
         stock: { $gt: 0 },
       })
-        .select(ALT_PUBLIC_FIELDS) // ✅ include pharmacy
+        .select(ALT_PUBLIC_FIELDS)
         .lean();
 
       if (brand && !compositionKey) compositionKey = brand.composition || "";
@@ -567,13 +700,12 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
     const generics = await Medicine.find({
       pharmacy: pid,
       compositionKey,
-      // accept both properly-tagged generics and legacy rows with empty brand
       $or: [{ productKind: "generic" }, { brand: "" }],
       status: { $ne: "unavailable" },
       available: { $ne: false },
       stock: { $gt: 0 },
     })
-      .select(ALT_PUBLIC_FIELDS) // ✅ includes pharmacy
+      .select(ALT_PUBLIC_FIELDS)
       .sort({ price: 1, mrp: 1, _id: 1 })
       .lean();
 
@@ -587,7 +719,7 @@ router.get("/:pharmacyId/alternatives", async (req, res) => {
         available: { $ne: false },
         stock: { $gt: 0 },
       })
-        .select(ALT_PUBLIC_FIELDS) // ✅ include pharmacy
+        .select(ALT_PUBLIC_FIELDS)
         .sort({ price: 1, mrp: 1, _id: 1 })
         .lean();
     }

@@ -5,11 +5,11 @@ const MedicineMasterSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
 
-    brand: { type: String, trim: true },       // branded only
+    brand: { type: String, trim: true }, // branded only
     composition: { type: String, trim: true }, // salts / composition
     company: { type: String, trim: true },
 
-    price: { type: Number, default: 0 },       // base/default selling price
+    price: { type: Number, default: 0 }, // base/default selling price
     mrp: { type: Number, default: 0 },
     discount: { type: Number, default: 0 },
 
@@ -55,4 +55,5 @@ const MedicineMasterSchema = new mongoose.Schema(
 );
 
 // ✅ Prevent OverwriteModelError in dev/hot reload:
-module.exports = mongoose.models.MedicineMaster || mongoose.model("MedicineMaster", MedicineMasterSchema);
+module.exports =
+  mongoose.models.MedicineMaster || mongoose.model("MedicineMaster", MedicineMasterSchema);
