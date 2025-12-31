@@ -781,6 +781,47 @@ router.post("/register-device-token", auth, async (req, res) => {
   }
 });
 
+/**
+ * ✅ DELETE INVENTORY BY INVENTORY _id  (fixes frontend calling /inventory/:id)
+ * DELETE /api/pharmacies/inventory/:id
+ */
+router.delete("/inventory/:id", auth, async (req, res) => {
+  try {
+    if (!req.user.pharmacyId) return res.status(403).json({ error: "Not authorized" });
+
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid inventory id" });
+    }
+
+    // find inventory item for this pharmacy
+    const inv = await PharmacyInventory.findOne({
+      _id: id,
+      pharmacyId: req.user.pharmacyId,
+    }).lean();
+
+    if (!inv) return res.status(404).json({ error: "Inventory not found" });
+
+    // delete it
+    await PharmacyInventory.deleteOne({ _id: id, pharmacyId: req.user.pharmacyId });
+
+    // ✅ sync to Medicine collection so medicines page reflects removal
+    try {
+      await syncInventoryToMedicine({
+        pharmacyId: req.user.pharmacyId,
+        medicineMasterId: String(inv.medicineMasterId),
+      });
+    } catch (e) {
+      console.error("syncInventoryToMedicine (delete by id) failed:", e?.message || e);
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("DELETE /inventory/:id error:", err);
+    res.status(500).json({ error: "Failed to remove from inventory" });
+  }
+});
+
 // GET /api/pharmacies/:pharmacyId/alternatives?compositionKey=...&brandId=...
 router.get("/:pharmacyId/alternatives", async (req, res) => {
   try {
