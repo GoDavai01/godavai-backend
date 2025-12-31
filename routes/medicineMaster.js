@@ -1,4 +1,4 @@
-// routes/medicineMaster.js
+// routes/medicineMaster.js (FULLY REPLACEABLE)
 const express = require("express");
 const router = express.Router();
 
@@ -7,6 +7,9 @@ const PharmacyInventory = require("../models/PharmacyInventory");
 
 // ✅ Your project already uses auth middleware (single default export)
 const auth = require("../middleware/auth");
+
+// ✅ Same util already used elsewhere in your backend (routes/pharmacies.js)
+const generateMedicineDescription = require("../utils/generateDescription");
 
 /**
  * ✅ Wrapper: pharmacy auth
@@ -31,6 +34,49 @@ const isAdmin = (req, res, next) => {
     next();
   });
 };
+
+// ------------------------
+// ✅ shared helper: auto description
+// ------------------------
+async function ensureDescription(payload = {}) {
+  const p = { ...payload };
+
+  // normalize a few fields so both admin + pharmacy behave same
+  const composition = (p.composition || "").toString().trim();
+  const brand = (p.brand || "").toString().trim();
+  const company = (p.company || "").toString().trim();
+  const type = (p.type || "").toString().trim();
+
+  // name fallback logic
+  p.name = (p.name || brand || composition || "").toString().trim();
+
+  // if generic => brand empty
+  if (String(p.productKind || "").toLowerCase() === "generic") {
+    p.brand = "";
+  }
+
+  // ✅ auto-generate description if missing
+  if (!p.description && p.name) {
+    try {
+      const desc = await generateMedicineDescription({
+        name: p.name,
+        brand: p.brand || brand,
+        composition,
+        company,
+        type,
+      });
+
+      // avoid storing placeholder text if your util returns something like "No description..."
+      if (desc && typeof desc === "string" && desc.trim() && desc.trim() !== "No description available.") {
+        p.description = desc.trim();
+      }
+    } catch (e) {
+      console.error("Master desc gen failed:", e?.message || e);
+    }
+  }
+
+  return p;
+}
 
 /**
  * ✅ SEARCH approved master medicines (pharmacy + admin)
@@ -79,12 +125,15 @@ router.get("/admin/all", isAdmin, async (req, res) => {
  */
 router.post("/admin", isAdmin, async (req, res) => {
   try {
-    const payload = {
+    let payload = {
       ...req.body,
       status: "approved",
       createdByType: "admin",
       createdByPharmacyId: null,
     };
+
+    // ✅ ensure auto-description for admin adds too
+    payload = await ensureDescription(payload);
 
     const med = await MedicineMaster.create(payload);
     res.json(med);
@@ -99,13 +148,16 @@ router.post("/admin", isAdmin, async (req, res) => {
  */
 router.post("/request", isPharmacyAuth, async (req, res) => {
   try {
-    const payload = {
+    let payload = {
       ...req.body,
       status: "pending",
       createdByType: "pharmacy",
       createdByPharmacyId: req.user?.pharmacyId || null,
       active: true,
     };
+
+    // ✅ ensure auto-description for pharmacy requests too
+    payload = await ensureDescription(payload);
 
     const med = await MedicineMaster.create(payload);
     res.json({ success: true, med });
