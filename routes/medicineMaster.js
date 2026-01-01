@@ -5,15 +5,22 @@ const router = express.Router();
 // ✅ Models can be ESM default export OR CommonJS export
 const MedicineMasterImport = require("../models/MedicineMaster");
 const PharmacyInventoryImport = require("../models/PharmacyInventory");
+const MedicineImport = require("../models/Medicine");
+const PharmacyImport = require("../models/Pharmacy");
 
 const MedicineMaster = MedicineMasterImport?.default || MedicineMasterImport;
 const PharmacyInventory = PharmacyInventoryImport?.default || PharmacyInventoryImport;
+const Medicine = MedicineImport?.default || MedicineImport;
+const Pharmacy = PharmacyImport?.default || PharmacyImport;
 
 // ✅ Auth middleware (single default export)
 const auth = require("../middleware/auth");
 
 // ✅ Util already used elsewhere in backend
 const generateMedicineDescription = require("../utils/generateDescription");
+const buildCompositionKeyImport = require("../utils/buildCompositionKey");
+const buildCompositionKey =
+  buildCompositionKeyImport?.default || buildCompositionKeyImport;
 
 /**
  * ✅ Wrapper: pharmacy auth
@@ -84,6 +91,115 @@ async function ensureDescription(payload = {}) {
   }
 
   return p;
+}
+
+// ------------------------
+// ✅ helpers for sync to Medicine
+// ------------------------
+const round2 = (n) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 100) / 100;
+};
+
+const calcDiscountPercent = (mrp, sellingPrice) => {
+  const m = Number(mrp);
+  const sp = Number(sellingPrice);
+  if (!Number.isFinite(m) || !Number.isFinite(sp) || m <= 0) return 0;
+  const d = ((m - sp) / m) * 100;
+  return round2(Math.max(0, d));
+};
+
+/**
+ * ✅ Create/Update a Medicine document for the pharmacy so it shows on:
+ * - Pharmacy medicines page (reads Medicine)
+ * - User medicines list (reads Medicine and applies stock>0 filter)
+ */
+async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
+  const m = masterDoc;
+  const inv = invDoc && invDoc.toObject ? invDoc.toObject() : invDoc;
+
+  const effectivePrice =
+    inv?.sellingPrice != null ? Number(inv.sellingPrice) : Number(m?.price || 0);
+  const effectiveMrp =
+    inv?.mrp != null ? Number(inv.mrp) : Number(m?.mrp || 0);
+
+  const effectiveDiscount =
+    inv?.discount != null
+      ? Number(inv.discount)
+      : calcDiscountPercent(effectiveMrp, effectivePrice);
+
+  const effectiveStock = inv?.stockQty != null ? Number(inv.stockQty) : 0;
+
+  const effectiveImages =
+    (Array.isArray(inv?.images) && inv.images.length
+      ? inv.images
+      : Array.isArray(m?.images)
+      ? m.images
+      : []) || [];
+
+  const effectiveImg = effectiveImages?.length ? effectiveImages[0] : "";
+
+  const compositionKey = buildCompositionKey(String(m?.composition || "").trim());
+
+  const filter = {
+    pharmacy: pharmacyId,
+    name: m?.name || "",
+    composition: m?.composition || "",
+    brand: m?.brand || "",
+    productKind: m?.productKind || "branded",
+    packCount: Number(m?.packCount || 0),
+    packUnit: m?.packUnit || "",
+    type: m?.type || "Tablet",
+  };
+
+  const payload = {
+    pharmacy: pharmacyId,
+
+    name: m?.name || "",
+    brand: m?.brand || "",
+    composition: m?.composition || "",
+    compositionKey,
+
+    company: m?.company || "",
+
+    price: effectivePrice,
+    mrp: effectiveMrp,
+    discount: effectiveDiscount,
+    stock: effectiveStock,
+
+    images: effectiveImages,
+    img: effectiveImg,
+
+    packCount: Number(m?.packCount || 0),
+    packUnit: m?.packUnit || "",
+
+    productKind: m?.productKind || "branded",
+
+    category:
+      Array.isArray(m?.category) && m.category.length
+        ? m.category
+        : ["Miscellaneous"],
+
+    type: m?.type || "Tablet",
+    prescriptionRequired: !!m?.prescriptionRequired,
+
+    status: "active",
+    available: true,
+  };
+
+  const medDoc = await Medicine.findOneAndUpdate(
+    filter,
+    { $set: payload },
+    { new: true, upsert: true }
+  );
+
+  await Pharmacy.updateOne(
+    { _id: pharmacyId },
+    { $addToSet: { medicines: medDoc._id } }
+  );
+
+  return medDoc;
 }
 
 /**
@@ -178,6 +294,10 @@ router.post("/request", isPharmacyAuth, async (req, res) => {
 /**
  * ✅ ADMIN: approve pending request
  * PATCH /api/medicine-master/:id/approve
+ *
+ * ✅ FIX ADDED:
+ * - If request came from a pharmacy, auto-add to that pharmacy inventory
+ * - AND sync into Medicine collection so it appears in pharmacy list + user list
  */
 router.patch("/:id/approve", isAdmin, async (req, res) => {
   try {
@@ -186,6 +306,38 @@ router.patch("/:id/approve", isAdmin, async (req, res) => {
       { status: "approved" },
       { new: true }
     );
+
+    if (!med) return res.status(404).json({ error: "Master medicine not found." });
+
+    const pharmacyId =
+      med.createdByType === "pharmacy" ? med.createdByPharmacyId : null;
+
+    if (pharmacyId) {
+      try {
+        const sp = Number(med.price ?? 0);
+        const mrp = Number(med.mrp ?? 0);
+        const discount = calcDiscountPercent(mrp, sp);
+
+        const inv = await PharmacyInventory.findOneAndUpdate(
+          { pharmacyId, medicineMasterId: med._id },
+          {
+            $set: {
+              sellingPrice: sp,
+              mrp,
+              discount,
+              stockQty: 1, // ✅ user list needs stock > 0
+              images: [],
+              isActive: true,
+            },
+          },
+          { upsert: true, new: true }
+        );
+
+        await syncInventoryToMedicine({ pharmacyId, masterDoc: med, invDoc: inv });
+      } catch (e) {
+        console.error("Approve auto-add/sync failed:", e?.message || e);
+      }
+    }
 
     res.json({ success: true, med });
   } catch (e) {
