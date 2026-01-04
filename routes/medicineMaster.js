@@ -97,6 +97,16 @@ async function ensureDescription(payload = {}) {
 // ------------------------
 const ALLOWED_GST = new Set([0, 5, 12, 18]);
 
+// ✅ NEW: comma-safe numeric parser
+const toNum = (v) => {
+  if (v === null || v === undefined) return 0;
+  const s = String(v).trim();
+  if (!s) return 0;
+  const cleaned = s.replace(/,/g, "").replace(/[^\d.-]/g, "");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+};
+
 function validateRequiredFields(payload = {}) {
   const errors = [];
 
@@ -105,9 +115,9 @@ function validateRequiredFields(payload = {}) {
   const type = (payload.type || "").toString().trim();
 
   const category = Array.isArray(payload.category) ? payload.category : [];
-  const price = Number(payload.price);
-  const mrp = Number(payload.mrp);
-  const gstRate = Number(payload.gstRate);
+  const price = toNum(payload.price);
+  const mrp = toNum(payload.mrp);
+  const gstRate = toNum(payload.gstRate);
 
   if (!name) errors.push("Medicine Name is required.");
   if (!composition) errors.push("Composition is required.");
@@ -138,8 +148,8 @@ const round2 = (n) => {
 };
 
 const calcDiscountPercent = (mrp, sellingPrice) => {
-  const m = Number(mrp);
-  const sp = Number(sellingPrice);
+  const m = toNum(mrp);
+  const sp = toNum(sellingPrice);
   if (!Number.isFinite(m) || !Number.isFinite(sp) || m <= 0) return 0;
   const d = ((m - sp) / m) * 100;
   return round2(Math.max(0, d));
@@ -155,16 +165,16 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
   const inv = invDoc && invDoc.toObject ? invDoc.toObject() : invDoc;
 
   const effectivePrice =
-    inv?.sellingPrice != null ? Number(inv.sellingPrice) : Number(m?.price || 0);
+    inv?.sellingPrice != null ? toNum(inv.sellingPrice) : toNum(m?.price || 0);
   const effectiveMrp =
-    inv?.mrp != null ? Number(inv.mrp) : Number(m?.mrp || 0);
+    inv?.mrp != null ? toNum(inv.mrp) : toNum(m?.mrp || 0);
 
   const effectiveDiscount =
     inv?.discount != null
-      ? Number(inv.discount)
+      ? toNum(inv.discount)
       : calcDiscountPercent(effectiveMrp, effectivePrice);
 
-  const effectiveStock = inv?.stockQty != null ? Number(inv.stockQty) : 0;
+  const effectiveStock = inv?.stockQty != null ? toNum(inv.stockQty) : 0;
 
   const effectiveImages =
     (Array.isArray(inv?.images) && inv.images.length
@@ -183,7 +193,7 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
     composition: m?.composition || "",
     brand: m?.brand || "",
     productKind: m?.productKind || "branded",
-    packCount: Number(m?.packCount || 0),
+    packCount: toNum(m?.packCount || 0),
     packUnit: m?.packUnit || "",
     type: m?.type || "Tablet",
   };
@@ -206,7 +216,7 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
     images: effectiveImages,
     img: effectiveImg,
 
-    packCount: Number(m?.packCount || 0),
+    packCount: toNum(m?.packCount || 0),
     packUnit: m?.packUnit || "",
 
     productKind: m?.productKind || "branded",
@@ -246,7 +256,7 @@ function buildMedicineMatchFilterFromMaster(masterDoc) {
     brand: masterDoc?.brand || "",
     productKind: masterDoc?.productKind || "branded",
     type: masterDoc?.type || "Tablet",
-    packCount: Number(masterDoc?.packCount || 0),
+    packCount: toNum(masterDoc?.packCount || 0),
     packUnit: masterDoc?.packUnit || "",
   };
 }
@@ -308,6 +318,13 @@ router.post("/admin", isAdmin, async (req, res) => {
       active: true,
     };
 
+    // ✅ normalize numbers (comma-safe) before validate/save
+    payload.price = toNum(payload.price);
+    payload.mrp = toNum(payload.mrp);
+    payload.discount = toNum(payload.discount);
+    payload.gstRate = toNum(payload.gstRate);
+    payload.packCount = toNum(payload.packCount);
+
     payload = await ensureDescription(payload);
 
     const errors = validateRequiredFields(payload);
@@ -333,6 +350,13 @@ router.post("/request", isPharmacyAuth, async (req, res) => {
       createdByPharmacyId: req.user?.pharmacyId || null,
       active: true,
     };
+
+    // ✅ normalize numbers (comma-safe)
+    payload.price = toNum(payload.price);
+    payload.mrp = toNum(payload.mrp);
+    payload.discount = toNum(payload.discount);
+    payload.gstRate = toNum(payload.gstRate);
+    payload.packCount = toNum(payload.packCount);
 
     payload = await ensureDescription(payload);
 
@@ -361,6 +385,13 @@ router.patch("/admin/:id", isAdmin, async (req, res) => {
     const oldMatch = buildMedicineMatchFilterFromMaster(existing);
 
     let payload = { ...req.body };
+
+    // ✅ normalize numbers (comma-safe)
+    payload.price = toNum(payload.price);
+    payload.mrp = toNum(payload.mrp);
+    payload.discount = toNum(payload.discount);
+    payload.gstRate = toNum(payload.gstRate);
+    payload.packCount = toNum(payload.packCount);
 
     // keep status/createdBy intact; only editable fields will overwrite
     payload = await ensureDescription({
@@ -404,7 +435,7 @@ router.patch("/admin/:id", isAdmin, async (req, res) => {
             type: updated?.type || "Tablet",
             prescriptionRequired: !!updated?.prescriptionRequired,
             productKind: updated?.productKind || "branded",
-            packCount: Number(updated?.packCount || 0),
+            packCount: toNum(updated?.packCount || 0),
             packUnit: updated?.packUnit || "",
           },
         }
@@ -422,12 +453,6 @@ router.patch("/admin/:id", isAdmin, async (req, res) => {
 /**
  * ✅ ADMIN: delete a master medicine everywhere
  * DELETE /api/medicine-master/admin/:id
- *
- * Removes:
- * - MedicineMaster
- * - PharmacyInventory (by medicineMasterId)
- * - Medicine docs created from that master (best-effort match)
- * - Pull those Medicine _ids from Pharmacy.medicines arrays
  */
 router.delete("/admin/:id", isAdmin, async (req, res) => {
   try {
@@ -485,8 +510,8 @@ router.patch("/:id/approve", isAdmin, async (req, res) => {
 
     if (pharmacyId) {
       try {
-        const sp = Number(med.price ?? 0);
-        const mrp = Number(med.mrp ?? 0);
+        const sp = toNum(med.price ?? 0);
+        const mrp = toNum(med.mrp ?? 0);
         const discount = calcDiscountPercent(mrp, sp);
 
         const inv = await PharmacyInventory.findOneAndUpdate(
