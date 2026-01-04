@@ -50,7 +50,6 @@ const isAdmin = (req, res, next) => {
 // ✅ shared helper: auto description
 // ------------------------
 async function ensureDescription(payload = {}) {
-  // ✅ FIX: spread payload properly
   const p = { ...payload };
 
   const composition = (p.composition || "").toString().trim();
@@ -94,7 +93,7 @@ async function ensureDescription(payload = {}) {
 }
 
 // ------------------------
-// ✅ REQUIRED FIELDS VALIDATION (ONLY CHANGE)
+// ✅ REQUIRED FIELDS VALIDATION (MANDATORY)
 // ------------------------
 const ALLOWED_GST = new Set([0, 5, 12, 18]);
 
@@ -213,9 +212,7 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
     productKind: m?.productKind || "branded",
 
     category:
-      Array.isArray(m?.category) && m.category.length
-        ? m.category
-        : ["Miscellaneous"],
+      Array.isArray(m?.category) && m.category.length ? m.category : ["Miscellaneous"],
 
     type: m?.type || "Tablet",
     prescriptionRequired: !!m?.prescriptionRequired,
@@ -236,6 +233,22 @@ async function syncInventoryToMedicine({ pharmacyId, masterDoc, invDoc }) {
   );
 
   return medDoc;
+}
+
+// ------------------------
+// ✅ helper: build filter used to match Medicine docs created from master
+// (for UPDATE/DELETE propagate)
+// ------------------------
+function buildMedicineMatchFilterFromMaster(masterDoc) {
+  return {
+    name: masterDoc?.name || "",
+    composition: masterDoc?.composition || "",
+    brand: masterDoc?.brand || "",
+    productKind: masterDoc?.productKind || "branded",
+    type: masterDoc?.type || "Tablet",
+    packCount: Number(masterDoc?.packCount || 0),
+    packUnit: masterDoc?.packUnit || "",
+  };
 }
 
 /**
@@ -297,11 +310,8 @@ router.post("/admin", isAdmin, async (req, res) => {
 
     payload = await ensureDescription(payload);
 
-    // ✅ REQUIRED VALIDATION (ONLY CHANGE)
     const errors = validateRequiredFields(payload);
-    if (errors.length) {
-      return res.status(400).json({ error: errors.join(" ") });
-    }
+    if (errors.length) return res.status(400).json({ error: errors.join(" ") });
 
     const med = await MedicineMaster.create(payload);
     res.json(med);
@@ -326,11 +336,8 @@ router.post("/request", isPharmacyAuth, async (req, res) => {
 
     payload = await ensureDescription(payload);
 
-    // ✅ REQUIRED VALIDATION (ONLY CHANGE)
     const errors = validateRequiredFields(payload);
-    if (errors.length) {
-      return res.status(400).json({ error: errors.join(" ") });
-    }
+    if (errors.length) return res.status(400).json({ error: errors.join(" ") });
 
     const med = await MedicineMaster.create(payload);
     res.json({ success: true, med });
@@ -340,12 +347,128 @@ router.post("/request", isPharmacyAuth, async (req, res) => {
 });
 
 /**
+ * ✅ ADMIN: update an approved master medicine
+ * PATCH /api/medicine-master/admin/:id
+ *
+ * - Updates master doc
+ * - Propagates display fields to Medicine docs (does NOT touch stock/pricing)
+ */
+router.patch("/admin/:id", isAdmin, async (req, res) => {
+  try {
+    const existing = await MedicineMaster.findById(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Master medicine not found." });
+
+    const oldMatch = buildMedicineMatchFilterFromMaster(existing);
+
+    let payload = { ...req.body };
+
+    // keep status/createdBy intact; only editable fields will overwrite
+    payload = await ensureDescription({
+      ...existing.toObject(),
+      ...payload,
+      _id: existing._id,
+      status: existing.status,
+      createdByType: existing.createdByType,
+      createdByPharmacyId: existing.createdByPharmacyId,
+      active: existing.active,
+      createdAt: existing.createdAt,
+      updatedAt: existing.updatedAt,
+    });
+
+    const errors = validateRequiredFields(payload);
+    if (errors.length) return res.status(400).json({ error: errors.join(" ") });
+
+    // write master
+    const updated = await MedicineMaster.findByIdAndUpdate(
+      req.params.id,
+      { $set: payload },
+      { new: true }
+    );
+
+    // propagate to Medicine docs (display fields)
+    try {
+      const img = Array.isArray(updated?.images) && updated.images.length ? updated.images[0] : "";
+
+      await Medicine.updateMany(
+        oldMatch,
+        {
+          $set: {
+            name: updated?.name || "",
+            brand: updated?.brand || "",
+            composition: updated?.composition || "",
+            compositionKey: buildCompositionKey(String(updated?.composition || "").trim()),
+            company: updated?.company || "",
+            images: Array.isArray(updated?.images) ? updated.images : [],
+            img,
+            category: Array.isArray(updated?.category) && updated.category.length ? updated.category : ["Miscellaneous"],
+            type: updated?.type || "Tablet",
+            prescriptionRequired: !!updated?.prescriptionRequired,
+            productKind: updated?.productKind || "branded",
+            packCount: Number(updated?.packCount || 0),
+            packUnit: updated?.packUnit || "",
+          },
+        }
+      );
+    } catch (e) {
+      console.error("Propagate master update to Medicine failed:", e?.message || e);
+    }
+
+    res.json({ success: true, med: updated });
+  } catch (e) {
+    res.status(400).json({ error: e?.message || "Failed to update master medicine." });
+  }
+});
+
+/**
+ * ✅ ADMIN: delete a master medicine everywhere
+ * DELETE /api/medicine-master/admin/:id
+ *
+ * Removes:
+ * - MedicineMaster
+ * - PharmacyInventory (by medicineMasterId)
+ * - Medicine docs created from that master (best-effort match)
+ * - Pull those Medicine _ids from Pharmacy.medicines arrays
+ */
+router.delete("/admin/:id", isAdmin, async (req, res) => {
+  try {
+    const master = await MedicineMaster.findById(req.params.id);
+    if (!master) return res.status(404).json({ error: "Master medicine not found." });
+
+    const match = buildMedicineMatchFilterFromMaster(master);
+
+    // get Medicine ids to pull from Pharmacy
+    let medIds = [];
+    try {
+      const meds = await Medicine.find(match).select("_id").lean();
+      medIds = (meds || []).map((x) => x._id);
+    } catch (_) {}
+
+    // delete master
+    await MedicineMaster.deleteOne({ _id: master._id });
+
+    // delete pharmacy inventories linked to this master
+    await PharmacyInventory.deleteMany({ medicineMasterId: master._id });
+
+    // delete medicines created from this master
+    await Medicine.deleteMany(match);
+
+    // pull from pharmacies
+    if (medIds.length) {
+      await Pharmacy.updateMany(
+        { medicines: { $in: medIds } },
+        { $pull: { medicines: { $in: medIds } } }
+      );
+    }
+
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ error: e?.message || "Failed to delete master medicine." });
+  }
+});
+
+/**
  * ✅ ADMIN: approve pending request
  * PATCH /api/medicine-master/:id/approve
- *
- * ✅ FIX ADDED:
- * - If request came from a pharmacy, auto-add to that pharmacy inventory
- * - AND sync into Medicine collection so it appears in pharmacy list + user list
  */
 router.patch("/:id/approve", isAdmin, async (req, res) => {
   try {
