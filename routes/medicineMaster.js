@@ -94,6 +94,42 @@ async function ensureDescription(payload = {}) {
 }
 
 // ------------------------
+// ✅ REQUIRED FIELDS VALIDATION (ONLY CHANGE)
+// ------------------------
+const ALLOWED_GST = new Set([0, 5, 12, 18]);
+
+function validateRequiredFields(payload = {}) {
+  const errors = [];
+
+  const name = (payload.name || "").toString().trim();
+  const composition = (payload.composition || "").toString().trim();
+  const type = (payload.type || "").toString().trim();
+
+  const category = Array.isArray(payload.category) ? payload.category : [];
+  const price = Number(payload.price);
+  const mrp = Number(payload.mrp);
+  const gstRate = Number(payload.gstRate);
+
+  if (!name) errors.push("Medicine Name is required.");
+  if (!composition) errors.push("Composition is required.");
+  if (!type) errors.push("Type is required.");
+
+  if (!Array.isArray(category) || category.length === 0)
+    errors.push("Category is required.");
+
+  if (!Number.isFinite(price) || price <= 0)
+    errors.push("Selling Price must be greater than 0.");
+
+  if (!Number.isFinite(mrp) || mrp <= 0)
+    errors.push("MRP must be greater than 0.");
+
+  if (!Number.isFinite(gstRate) || !ALLOWED_GST.has(gstRate))
+    errors.push("GST Rate must be one of 0, 5, 12, 18.");
+
+  return errors;
+}
+
+// ------------------------
 // ✅ helpers for sync to Medicine
 // ------------------------
 const round2 = (n) => {
@@ -261,6 +297,12 @@ router.post("/admin", isAdmin, async (req, res) => {
 
     payload = await ensureDescription(payload);
 
+    // ✅ REQUIRED VALIDATION (ONLY CHANGE)
+    const errors = validateRequiredFields(payload);
+    if (errors.length) {
+      return res.status(400).json({ error: errors.join(" ") });
+    }
+
     const med = await MedicineMaster.create(payload);
     res.json(med);
   } catch (e) {
@@ -283,6 +325,12 @@ router.post("/request", isPharmacyAuth, async (req, res) => {
     };
 
     payload = await ensureDescription(payload);
+
+    // ✅ REQUIRED VALIDATION (ONLY CHANGE)
+    const errors = validateRequiredFields(payload);
+    if (errors.length) {
+      return res.status(400).json({ error: errors.join(" ") });
+    }
 
     const med = await MedicineMaster.create(payload);
     res.json({ success: true, med });
