@@ -430,6 +430,8 @@ router.get("/all", async (req, res) => {
       ...filter,
       status: { $ne: "unavailable" },
       available: { $ne: false },
+      stock: { $gt: 0 },
+      price: { $gt: 0 },
     })
     .select("-hsn -gstRate")
     .populate(
