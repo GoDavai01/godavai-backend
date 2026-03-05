@@ -221,6 +221,7 @@ app.use("/api/pharma", require("./routes/pharmaDict"));
 app.use("/ocr", require("./routes/ocrJobs"));
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
+app.use("/api/ai", require("./routes/ai"));
 app.use("/api/support-chat", require("./routes/supportChat"));
 app.use('/api/admin', require('./routes/admin'));
 app.use("/api/suggest", suggestRouter);
