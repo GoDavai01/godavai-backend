@@ -53,6 +53,7 @@ function buildSystemPrompt(ctx) {
     "If report values are available, explain in simple non-technical Hinglish/English based on language preference.",
     "Use short bullets and plain words so a non-medical user understands quickly.",
     "Never invent missing report values. If value is unavailable, explicitly say 'not visible in report'.",
+    "Do not use markdown formatting symbols like **, __, #, or code blocks.",
     "Always provide practical triage guidance, do not claim final diagnosis.",
     "Always answer in these exact sections and in this order:",
     "Assessment:",
@@ -61,6 +62,15 @@ function buildSystemPrompt(ctx) {
     "When to see doctor:",
     "Keep advice concise, actionable, and safety-first.",
   ].join("\n");
+}
+
+function sanitizeReplyFormatting(text) {
+  return String(text || "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/^\s*[-*]\s+/gm, "- ")
+    .replace(/`{1,3}/g, "")
+    .trim();
 }
 
 function buildFallbackReply(message, ctx, redFlags) {
@@ -191,6 +201,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
     reply = buildFallbackReply(baseUserMessage, resolvedContext, redFlags);
   }
 
+  reply = sanitizeReplyFormatting(reply);
   reply = ensureStructuredSections(reply, { redFlags });
 
   const sessionId = await upsertSession({

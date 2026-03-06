@@ -221,6 +221,28 @@ async function ocrImageWithOpenAI(buffer, mime) {
   }
 }
 
+async function extractPdfViaImageFallback(buffer) {
+  let sharp;
+  try {
+    sharp = require("sharp");
+  } catch (_) {
+    return "";
+  }
+
+  for (let page = 0; page < 3; page += 1) {
+    try {
+      const img = await sharp(buffer, { density: 220, page })
+        .png({ quality: 100 })
+        .toBuffer();
+      const text = await ocrImageWithOpenAI(img, "image/png");
+      if (text && text.length > 20) return text;
+    } catch (_) {
+      // try next page or exit
+    }
+  }
+  return "";
+}
+
 async function extractTextAndParsed(file, mode) {
   const kind = fileKind(file);
   let extractedText = "";
@@ -264,6 +286,15 @@ async function extractTextAndParsed(file, mode) {
       if (pdfText) {
         extractedText = pdfText;
         parsed.ocrEngine = parsed.ocrEngine || "pdf-heuristic-text";
+      }
+    }
+
+    // Fallback for scanned PDFs: render page(s) to image then OCR.
+    if (!extractedText && kind.pdf) {
+      const viaImage = await extractPdfViaImageFallback(file.buffer);
+      if (viaImage) {
+        extractedText = viaImage;
+        parsed.ocrEngine = parsed.ocrEngine || "pdf-image-ocr-fallback";
       }
     }
   } else {
