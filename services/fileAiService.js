@@ -12,6 +12,7 @@ const FILES_DIR = path.join(process.cwd(), "uploads", "ai-files");
 let resolvedTmpDir = null;
 let resolvedFilesDir = null;
 let cachedOpenAI = null;
+let cachedPdfParse = null;
 
 function getOpenAIClient() {
   if (cachedOpenAI) return cachedOpenAI;
@@ -20,6 +21,16 @@ function getOpenAIClient() {
   OpenAI = OpenAI?.default || OpenAI;
   cachedOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return cachedOpenAI;
+}
+
+function getPdfParse() {
+  if (cachedPdfParse) return cachedPdfParse;
+  try {
+    cachedPdfParse = require("pdf-parse");
+    return cachedPdfParse;
+  } catch (_) {
+    return null;
+  }
 }
 
 function ensureTmpDir() {
@@ -44,10 +55,12 @@ function ensureTmpDir() {
 function normalizeFocus(message, focus) {
   const forced = String(focus || "").toLowerCase();
   if (forced && forced !== "auto") return forced;
+
   const src = String(message || "").toLowerCase();
-  if (/(report|cbc|lipid|tsh|vitamin|platelet|hba1c|creatinine)/.test(src)) return "lab";
+
   if (/(prescription|rx|dose|tablet|capsule|bd|tid|od)/.test(src)) return "rx";
-  if (/(medicine|drug|dawai|paracetamol|azithromycin|tramadol)/.test(src)) return "medicine";
+  if (/(medicine|drug|dawai|paracetamol|azithromycin|tramadol|amoxicillin|pantoprazole)/.test(src)) return "medicine";
+  if (/(report|cbc|lipid|tsh|vitamin|platelet|hba1c|creatinine|hemoglobin|wbc|rbc|uric acid|bilirubin|sgpt|sgot)/.test(src)) return "lab";
   return "symptom";
 }
 
@@ -98,64 +111,148 @@ function parseCsvToObjects(text) {
   return lines.slice(1).map((line) => {
     const cols = line.split(",").map((c) => c.trim());
     const row = {};
-    headers.forEach((h, i) => { row[h || `col${i + 1}`] = cols[i] || ""; });
+    headers.forEach((h, i) => {
+      row[h || `col${i + 1}`] = cols[i] || "";
+    });
     return row;
   });
 }
 
+function normalizeExtractedText(text) {
+  return String(text || "")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[^\S\n]{2,}/g, " ")
+    .trim();
+}
+
+function parseRangeFromText(str) {
+  const s = String(str || "").replace(/,/g, "").trim();
+  const m = s.match(/(-?\d+(?:\.\d+)?)\s*(?:to|-|–|—)\s*(-?\d+(?:\.\d+)?)/i);
+  if (!m) return { low: null, high: null };
+  return { low: Number(m[1]), high: Number(m[2]) };
+}
+
+function inferFlag(value, low, high, rawLine) {
+  const line = String(rawLine || "").toLowerCase();
+
+  if (/\b(low|below normal|decreased)\b/.test(line)) return "low";
+  if (/\b(high|raised|elevated|above normal)\b/.test(line)) return "high";
+  if (/\b(borderline)\b/.test(line)) return "borderline";
+
+  if (Number.isFinite(value) && Number.isFinite(low) && value < low) return "low";
+  if (Number.isFinite(value) && Number.isFinite(high) && value > high) return "high";
+  if (Number.isFinite(value) && Number.isFinite(low) && Number.isFinite(high)) {
+    const span = Math.abs(high - low);
+    if (span > 0) {
+      const nearLow = value >= low && value <= low + span * 0.08;
+      const nearHigh = value <= high && value >= high - span * 0.08;
+      if (nearLow || nearHigh) return "borderline";
+    }
+  }
+
+  return "normal";
+}
+
+function cleanMarkerName(name) {
+  return String(name || "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[:\-]+$/, "")
+    .trim();
+}
+
 function parseLabMarkers(text) {
+  const src = normalizeExtractedText(text);
+  const lines = src.split(/\n/);
   const rows = [];
-  const lines = String(text || "").split(/\r?\n/);
+
+  const markerHints = [
+    "hemoglobin", "hb", "wbc", "rbc", "platelet", "platelets", "pcv", "hct", "mcv", "mch", "mchc",
+    "neutrophils", "lymphocytes", "monocytes", "eosinophils", "basophils", "esr",
+    "glucose", "sugar", "hba1c", "creatinine", "urea", "bun", "uric acid",
+    "bilirubin", "sgpt", "sgot", "alt", "ast", "alkaline phosphatase", "albumin",
+    "cholesterol", "triglycerides", "hdl", "ldl", "vldl",
+    "tsh", "t3", "t4", "vitamin d", "vitamin b12", "ferritin", "iron", "calcium",
+    "sodium", "potassium", "chloride", "crp"
+  ];
+
   for (const raw of lines) {
     const line = raw.trim();
     if (!line || line.length < 4) continue;
 
-    const m = line.match(/^([A-Za-z][A-Za-z0-9()/%\s\-\._]{1,45})\s*[:\-]?\s*([<>]?\d+(?:\.\d+)?)\s*([A-Za-z/%]+)?(?:\s*\(?\s*(\d+(?:\.\d+)?)\s*[-to]+\s*(\d+(?:\.\d+)?)\s*\)?)?/i);
+    const lower = line.toLowerCase();
+    const looksRelevant = markerHints.some((h) => lower.includes(h));
+    const numberHits = line.match(/-?\d+(?:,\d{3})*(?:\.\d+)?/g) || [];
+    if (!looksRelevant && numberHits.length === 0) continue;
+
+    const leftRight = line.match(/^(.{2,70}?)\s{1,}([<>]?\d+(?:,\d{3})*(?:\.\d+)?)\s*([A-Za-z/%][A-Za-z0-9/%\-\s\.]*)?(.*)$/);
+    const colonStyle = line.match(/^(.{2,70}?)\s*[:\-]\s*([<>]?\d+(?:,\d{3})*(?:\.\d+)?)\s*([A-Za-z/%][A-Za-z0-9/%\-\s\.]*)?(.*)$/);
+
+    const m = leftRight || colonStyle;
     if (!m) continue;
 
-    const marker = m[1].trim();
-    const value = Number(m[2]);
-    const unit = (m[3] || "").trim();
-    const low = m[4] ? Number(m[4]) : null;
-    const high = m[5] ? Number(m[5]) : null;
+    const marker = cleanMarkerName(m[1]);
+    const value = Number(String(m[2]).replace(/,/g, ""));
+    const unit = String(m[3] || "").trim();
+    const tail = String(m[4] || "").trim();
 
-    let flag = "normal";
-    if (Number.isFinite(value) && Number.isFinite(low) && value < low) flag = "low";
-    if (Number.isFinite(value) && Number.isFinite(high) && value > high) flag = "high";
+    if (!marker || !Number.isFinite(value)) continue;
 
-    rows.push({ marker, value, unit, range: low != null && high != null ? `${low}-${high}` : "", flag });
+    const { low, high } = parseRangeFromText(tail || line);
+    const flag = inferFlag(value, low, high, line);
+
+    rows.push({
+      marker,
+      value,
+      unit,
+      range: Number.isFinite(low) && Number.isFinite(high) ? `${low}-${high}` : "",
+      flag,
+    });
   }
-  return rows.slice(0, 80);
+
+  const deduped = [];
+  const seen = new Set();
+
+  for (const row of rows) {
+    const key = `${row.marker.toLowerCase()}|${row.value}|${row.unit}|${row.range}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+
+  return deduped.slice(0, 120);
 }
 
 function buildLabSummary(markers) {
   const rows = Array.isArray(markers) ? markers : [];
   if (!rows.length) return "";
-  const top = rows.slice(0, 15);
+
+  const top = rows.slice(0, 20);
   const lines = top.map((r) => {
     const val = Number.isFinite(r.value) ? r.value : r.value;
     const unit = r.unit ? ` ${r.unit}` : "";
     const range = r.range ? ` (range ${r.range})` : "";
-    const tag = r.flag && r.flag !== "normal" ? ` -> ${String(r.flag).toUpperCase()}` : " -> NORMAL/UNSPECIFIED";
+    const tag = r.flag && r.flag !== "normal" ? ` -> ${String(r.flag).toUpperCase()}` : "";
     return `- ${r.marker}: ${val}${unit}${range}${tag}`;
   });
 
   return [
-    "Lab markers parsed from report:",
+    "Parsed values from uploaded file:",
     ...lines,
     "",
-    "Explain these in simple non-technical language.",
-    "Prioritize values that are low, high, or borderline.",
-    "Tell the user what each important visible value generally means.",
-    "If values look mildly abnormal, say that clearly and calmly.",
-    "Do not claim final diagnosis.",
+    "Explain these in simple language.",
+    "Prioritize clearly abnormal and borderline values.",
+    "If something is mild, say it calmly.",
+    "Do not invent values that are not visible.",
   ].join("\n");
 }
 
 function buildRxSummary(items) {
   const rows = Array.isArray(items) ? items : [];
   if (!rows.length) return "";
-  const top = rows.slice(0, 12);
+
+  const top = rows.slice(0, 15);
   const lines = top.map((r) => {
     const strength = r.strength ? ` ${r.strength}` : "";
     const form = r.form ? ` (${r.form})` : "";
@@ -164,15 +261,11 @@ function buildRxSummary(items) {
   });
 
   return [
-    "Prescription items parsed:",
+    "Parsed medicine details from uploaded file:",
     ...lines,
     "",
-    "For each visible medicine, explain in simple language:",
-    "- what it is generally used for",
-    "- visible dosage/timing if present",
-    "- common side effects",
-    "- one useful caution if appropriate",
-    "If any field is unclear, say not clearly visible.",
+    "Explain visible medicine names, timing if visible, common use, common side effects, and one useful caution.",
+    "If something is unclear, say not clearly visible.",
   ].join("\n");
 }
 
@@ -180,9 +273,9 @@ function extractPdfTextHeuristic(buffer) {
   try {
     const src = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
     const out = [];
-
     const rawAscii = src.toString("latin1");
-    const rawHits = rawAscii.match(/\(([^()]{2,200})\)\s*Tj/g) || [];
+
+    const rawHits = rawAscii.match(/\(([^()]{2,300})\)\s*Tj/g) || [];
     for (const hit of rawHits) {
       const t = hit.replace(/\)\s*Tj$/, "").replace(/^\(/, "");
       out.push(t);
@@ -195,17 +288,31 @@ function extractPdfTextHeuristic(buffer) {
       try {
         const inflated = zlib.inflateSync(chunk);
         const txt = inflated.toString("latin1");
-        const hits = txt.match(/\(([^()]{2,200})\)\s*Tj/g) || [];
+        const hits = txt.match(/\(([^()]{2,300})\)\s*Tj/g) || [];
         for (const h of hits) {
           const t = h.replace(/\)\s*Tj$/, "").replace(/^\(/, "");
           out.push(t);
         }
       } catch (_) {
-        // ignore non-deflated streams
+        // ignore
       }
     }
 
-    return out.join("\n").replace(/[^\x09\x0A\x0D\x20-\x7E]/g, " ").replace(/\s{2,}/g, " ").trim();
+    return normalizeExtractedText(
+      out.join("\n").replace(/[^\x09\x0A\x0D\x20-\x7E]/g, " ")
+    );
+  } catch (_) {
+    return "";
+  }
+}
+
+async function extractPdfTextWithPdfParse(buffer) {
+  const pdfParse = getPdfParse();
+  if (!pdfParse) return "";
+
+  try {
+    const data = await pdfParse(buffer);
+    return normalizeExtractedText(data?.text || "");
   } catch (_) {
     return "";
   }
@@ -214,53 +321,85 @@ function extractPdfTextHeuristic(buffer) {
 async function ocrImageWithOpenAI(buffer, mime) {
   const client = getOpenAIClient();
   if (!client) return "";
+
   try {
     const model = process.env.AI_OCR_MODEL || "gpt-4o-mini";
     const b64 = buffer.toString("base64");
     const dataUrl = `data:${mime || "image/png"};base64,${b64}`;
+
     const out = await client.chat.completions.create({
       model,
       temperature: 0,
       messages: [
         {
           role: "system",
-          content: "Extract all visible medical text exactly. Keep line breaks. Do not summarize.",
+          content: [
+            "Extract all visible medical text as accurately as possible.",
+            "Preserve rows, values, units, and reference ranges.",
+            "Do not summarize.",
+            "Return only plain text.",
+          ].join(" "),
         },
         {
           role: "user",
           content: [
-            { type: "text", text: "Read this medical image and return plain extracted text only." },
+            { type: "text", text: "Read this medical image very carefully and return extracted plain text only." },
             { type: "image_url", image_url: { url: dataUrl } },
           ],
         },
       ],
-      max_tokens: 1800,
+      max_tokens: 2200,
     });
-    return String(out?.choices?.[0]?.message?.content || "").trim();
-  } catch (err) {
+
+    return normalizeExtractedText(out?.choices?.[0]?.message?.content || "");
+  } catch (_) {
     return "";
   }
 }
 
-async function extractPdfViaImageFallback(buffer) {
+async function extractPdfViaImageFallback(buffer, debugErrors) {
   let sharp;
   try {
     sharp = require("sharp");
-  } catch (_) {
+  } catch (err) {
+    debugErrors.push(`sharp_missing:${err?.message || "unknown"}`);
     return "";
   }
 
+  let combined = "";
+
   for (let page = 0; page < 3; page += 1) {
     try {
-      const img = await sharp(buffer, { density: 220, page })
+      const img = await sharp(buffer, { density: 240, page })
+        .flatten({ background: "#ffffff" })
         .png({ quality: 100 })
         .toBuffer();
+
       const text = await ocrImageWithOpenAI(img, "image/png");
-      if (text && text.length > 20) return text;
-    } catch (_) {
-      // try next page or exit
+      if (text && text.length > 20) {
+        combined += `${combined ? "\n\n" : ""}--- Page ${page + 1} ---\n${text}`;
+      }
+    } catch (err) {
+      debugErrors.push(`pdf_image_fallback_failed_page_${page + 1}:${err?.message || "unknown"}`);
     }
   }
+
+  return normalizeExtractedText(combined);
+}
+
+function inferModeFromContent(message, extractedText, parsed) {
+  const src = `${message || ""}\n${extractedText || ""}`.toLowerCase();
+
+  if (parsed?.rxItems?.length) return "rx";
+  if (parsed?.labMarkers?.length) return "lab";
+
+  if (/(hemoglobin|hb|wbc|rbc|platelet|hba1c|creatinine|tsh|cholesterol|triglycerides|bilirubin|sgpt|sgot|cbc)/.test(src)) {
+    return "lab";
+  }
+  if (/(tablet|capsule|syrup|take|once daily|twice daily|od|bd|tid|tramadol|paracetamol|amoxicillin)/.test(src)) {
+    return "rx";
+  }
+
   return "";
 }
 
@@ -276,19 +415,30 @@ async function extractTextAndParsed(file, mode) {
   } else if (kind.image || kind.pdf) {
     try {
       const ocr = await withTempFile(file, async (p) => extractTextPlus(p));
-      extractedText = String(ocr?.text || "");
+      extractedText = normalizeExtractedText(ocr?.text || "");
+      if (extractedText) parsed.ocrEngine = parsed.ocrEngine || "local-ocr";
     } catch (err) {
       debugErrors.push(`ocr_text_failed:${err?.message || "unknown"}`);
       extractedText = "";
     }
 
-    if (mode === "rx" || mode === "medicine") {
-      try {
-        const ocrItems = await withTempFile(file, async (p) => extractPrescriptionItems(p));
-        parsed.rxItems = Array.isArray(ocrItems?.items) ? ocrItems.items : [];
-        parsed.ocrEngine = ocrItems?.engine || "";
-      } catch (err) {
-        debugErrors.push(`ocr_rx_failed:${err?.message || "unknown"}`);
+    if (!extractedText && kind.pdf) {
+      const pdfText = await extractPdfTextWithPdfParse(file.buffer);
+      if (pdfText) {
+        extractedText = pdfText;
+        parsed.ocrEngine = parsed.ocrEngine || "pdf-parse";
+      } else {
+        debugErrors.push("pdf_parse_empty");
+      }
+    }
+
+    if (!extractedText && kind.pdf) {
+      const pdfTextHeuristic = extractPdfTextHeuristic(file.buffer);
+      if (pdfTextHeuristic) {
+        extractedText = pdfTextHeuristic;
+        parsed.ocrEngine = parsed.ocrEngine || "pdf-heuristic-text";
+      } else {
+        debugErrors.push("pdf_heuristic_empty");
       }
     }
 
@@ -297,22 +447,28 @@ async function extractTextAndParsed(file, mode) {
       if (viaOpenAI) {
         extractedText = viaOpenAI;
         parsed.ocrEngine = parsed.ocrEngine || "openai-image-ocr";
+      } else {
+        debugErrors.push("openai_image_ocr_empty");
       }
     }
 
     if (!extractedText && kind.pdf) {
-      const pdfText = extractPdfTextHeuristic(file.buffer);
-      if (pdfText) {
-        extractedText = pdfText;
-        parsed.ocrEngine = parsed.ocrEngine || "pdf-heuristic-text";
-      }
-    }
-
-    if (!extractedText && kind.pdf) {
-      const viaImage = await extractPdfViaImageFallback(file.buffer);
+      const viaImage = await extractPdfViaImageFallback(file.buffer, debugErrors);
       if (viaImage) {
         extractedText = viaImage;
         parsed.ocrEngine = parsed.ocrEngine || "pdf-image-ocr-fallback";
+      }
+    }
+
+    if ((mode === "rx" || mode === "medicine") && !parsed.rxItems?.length) {
+      try {
+        const ocrItems = await withTempFile(file, async (p) => extractPrescriptionItems(p));
+        parsed.rxItems = Array.isArray(ocrItems?.items) ? ocrItems.items : [];
+        if (parsed.rxItems.length) {
+          parsed.ocrEngine = parsed.ocrEngine || ocrItems?.engine || "prescription-item-parser";
+        }
+      } catch (err) {
+        debugErrors.push(`ocr_rx_failed:${err?.message || "unknown"}`);
       }
     }
   } else {
@@ -324,7 +480,9 @@ async function extractTextAndParsed(file, mode) {
     }
   }
 
-  if ((mode === "rx" || mode === "medicine") && !parsed.rxItems?.length && extractedText) {
+  extractedText = normalizeExtractedText(extractedText);
+
+  if (!parsed.rxItems?.length && extractedText) {
     const meds = parseMeds(extractedText).map((m) => ({
       name: m.name,
       strength: m.strength || "",
@@ -332,11 +490,14 @@ async function extractTextAndParsed(file, mode) {
       qty: m.quantity || 1,
       confidence: m.confidence || 0.6,
     }));
-    parsed.rxItems = meds;
+    if (meds.length) parsed.rxItems = meds;
   }
 
-  if (mode === "lab" && extractedText) {
-    parsed.labMarkers = parseLabMarkers(extractedText);
+  parsed.labMarkers = extractedText ? parseLabMarkers(extractedText) : [];
+
+  const inferred = inferModeFromContent("", extractedText, parsed);
+  if (mode === "symptom" && inferred) {
+    mode = inferred;
   }
 
   return {
@@ -344,7 +505,7 @@ async function extractTextAndParsed(file, mode) {
     parsed: {
       mode,
       fileType: kind.mime || kind.ext || "unknown",
-      debug: debugErrors.slice(0, 5),
+      debug: debugErrors.slice(0, 10),
       ...parsed,
     },
   };
@@ -353,42 +514,47 @@ async function extractTextAndParsed(file, mode) {
 function buildModeInstructions(mode) {
   if (mode === "lab") {
     return [
-      "User wants a lab report explanation.",
-      "Explain visible abnormal/borderline values in very simple language.",
-      "Tell the user what low/high/borderline generally means.",
-      "Mention if findings look mild or potentially important, but do not give final diagnosis.",
-      "Give practical next steps in easy language.",
+      "User uploaded a medical file and wants a clear explanation.",
+      "Explain important visible values in simple language.",
+      "Say whether values appear low, high, borderline, or normal where visible.",
+      "Do not ask for values again if visible text is already extracted.",
+      "If some values are missing, mention they are not clearly visible.",
     ].join("\n");
   }
 
   if (mode === "rx") {
     return [
-      "User wants a prescription explanation.",
-      "Explain medicine name, visible dose/timing, common use, common side effects, and one useful caution if identifiable.",
-      "Keep it simple and user-friendly.",
+      "User uploaded a medical file and wants medicine/prescription explanation.",
+      "Explain medicine name, visible dosage/timing, common use, common side effects, and one practical caution if identifiable.",
+      "Do not invent unclear fields.",
     ].join("\n");
   }
 
   if (mode === "medicine") {
     return [
-      "User wants medicine understanding.",
-      "Explain what medicine is commonly used for, common side effects, and practical caution points.",
+      "User wants medicine understanding from uploaded file.",
+      "Explain common use, common side effects, and practical cautions.",
       "Do not invent dosage if not visible.",
     ].join("\n");
   }
 
   return [
-    "User wants symptom guidance in simple language.",
-    "Explain likely meaning and practical next steps.",
+    "User uploaded a medical file.",
+    "Read the extracted content carefully and explain what is visible in simple language.",
+    "If the file looks like a report or prescription, respond accordingly.",
   ].join("\n");
 }
 
 async function analyzeFileForAssistant({ file, message, history, context, userId }) {
   const persisted = await persistUploadedFile(file);
-  const mode = normalizeFocus(message, context?.focus);
-  const { extractedText, parsed } = await extractTextAndParsed(file, mode);
+  let mode = normalizeFocus(message, context?.focus);
 
-  const textPreview = extractedText ? extractedText.slice(0, 8000) : "";
+  const { extractedText, parsed } = await extractTextAndParsed(file, mode);
+  if (parsed?.mode && parsed.mode !== mode) {
+    mode = parsed.mode;
+  }
+
+  const textPreview = extractedText ? extractedText.slice(0, 10000) : "";
   const parsedSummary =
     mode === "lab"
       ? buildLabSummary(parsed.labMarkers)
@@ -397,11 +563,12 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
         : "";
 
   const mergedMessage = [
-    String(message || "").trim() || "Please analyze this uploaded medical file.",
+    String(message || "").trim() || "Please read and explain this uploaded medical file.",
     "",
     buildModeInstructions(mode),
     parsedSummary ? `\n\n${parsedSummary}` : "",
     textPreview ? `\n\nFile Extracted Text:\n${textPreview}` : "\n\nNo extractable text was found in the file.",
+    parsed?.debug?.length ? `\n\nDebug info:\n${parsed.debug.map((d) => `- ${d}`).join("\n")}` : "",
   ].join("");
 
   const ai = await generateAssistantReply({
@@ -423,7 +590,7 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
     parsed: {
       ...parsed,
       storedFileUrl: persisted.relativePath,
-      extractedTextPreview: textPreview.slice(0, 1200),
+      extractedTextPreview: textPreview.slice(0, 1500),
     },
   };
 }
