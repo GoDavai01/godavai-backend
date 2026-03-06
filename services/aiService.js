@@ -50,6 +50,9 @@ function buildSystemPrompt(ctx) {
     profileBits.length ? `Context data: ${profileBits.join(" | ")}` : "Context data: limited.",
     "If extracted file text is provided in the user message, treat that as observed file content.",
     "Do not say you cannot see files/images when extracted content is present.",
+    "If report values are available, explain in simple non-technical Hinglish/English based on language preference.",
+    "Use short bullets and plain words so a non-medical user understands quickly.",
+    "Never invent missing report values. If value is unavailable, explicitly say 'not visible in report'.",
     "Always provide practical triage guidance, do not claim final diagnosis.",
     "Always answer in these exact sections and in this order:",
     "Assessment:",
@@ -120,18 +123,49 @@ async function upsertSession({ userId, context, userText, assistantText, attachm
   return session._id;
 }
 
+async function getRecentAttachmentContext({ userId, context }) {
+  if (!userId) return null;
+  const whoFor = context?.whoFor || "self";
+  const whoForLabel = String(context?.whoForLabel || "");
+
+  const session = await AiSession.findOne({ userId, whoFor, whoForLabel })
+    .sort({ updatedAt: -1 })
+    .lean();
+  if (!session?.attachments?.length) return null;
+
+  const last = session.attachments[session.attachments.length - 1];
+  if (!last?.extractedText) return null;
+
+  return {
+    name: last.name || "previous file",
+    type: last.type || "",
+    text: String(last.extractedText || "").slice(0, 5000),
+  };
+}
+
 async function generateAssistantReply({ message, history, context, userId, attachment }) {
-  const userMessage = String(message || "").trim();
+  const baseUserMessage = String(message || "").trim();
   const cleanHistory = compactHistory(history, 16);
   const resolvedContext = await buildHealthContext({ userId, context });
-  const redFlags = detectRedFlags([userMessage, ...cleanHistory.map((m) => m.content)].join("\n"));
+  const recalledAttachment = attachment ? null : await getRecentAttachmentContext({ userId, context: resolvedContext });
+  const userMessage = recalledAttachment
+    ? [
+        baseUserMessage,
+        "",
+        `Previous uploaded file in this chat: ${recalledAttachment.name}`,
+        "Use this extracted text context for continuity:",
+        recalledAttachment.text,
+      ].join("\n")
+    : baseUserMessage;
+
+  const redFlags = detectRedFlags([baseUserMessage, ...cleanHistory.map((m) => m.content)].join("\n"));
 
   let reply = "";
   const client = getOpenAIClient();
   const model = process.env.AI_CHAT_MODEL || process.env.GPT_MED_MODEL || "gpt-4o-mini";
   const temperature = clampTemperature(process.env.AI_TEMPERATURE || 0.6);
 
-  if (client && userMessage) {
+  if (client && baseUserMessage) {
     try {
       const messages = [
         { role: "system", content: buildSystemPrompt(resolvedContext) },
@@ -154,7 +188,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
   }
 
   if (!reply) {
-    reply = buildFallbackReply(userMessage, resolvedContext, redFlags);
+    reply = buildFallbackReply(baseUserMessage, resolvedContext, redFlags);
   }
 
   reply = ensureStructuredSections(reply, { redFlags });
@@ -162,7 +196,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
   const sessionId = await upsertSession({
     userId,
     context: resolvedContext,
-    userText: userMessage,
+    userText: baseUserMessage,
     assistantText: reply,
     attachment,
   });

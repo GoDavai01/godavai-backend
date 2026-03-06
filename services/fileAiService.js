@@ -128,6 +128,33 @@ function parseLabMarkers(text) {
   return rows.slice(0, 80);
 }
 
+function buildLabSummary(markers) {
+  const rows = Array.isArray(markers) ? markers : [];
+  if (!rows.length) return "";
+  const top = rows.slice(0, 12);
+  const lines = top.map((r) => {
+    const val = Number.isFinite(r.value) ? r.value : r.value;
+    const unit = r.unit ? ` ${r.unit}` : "";
+    const range = r.range ? ` (range ${r.range})` : "";
+    const tag = r.flag && r.flag !== "normal" ? ` -> ${String(r.flag).toUpperCase()}` : "";
+    return `- ${r.marker}: ${val}${unit}${range}${tag}`;
+  });
+  return ["Lab markers parsed from report:", ...lines].join("\n");
+}
+
+function buildRxSummary(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return "";
+  const top = rows.slice(0, 12);
+  const lines = top.map((r) => {
+    const strength = r.strength ? ` ${r.strength}` : "";
+    const form = r.form ? ` (${r.form})` : "";
+    const qty = r.qty ? ` qty:${r.qty}` : "";
+    return `- ${r.name || "unknown"}${strength}${form}${qty}`;
+  });
+  return ["Prescription items parsed:", ...lines].join("\n");
+}
+
 function extractPdfTextHeuristic(buffer) {
   try {
     const src = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
@@ -280,8 +307,15 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
   const { extractedText, parsed } = await extractTextAndParsed(file, mode);
 
   const textPreview = extractedText ? extractedText.slice(0, 8000) : "";
+  const parsedSummary =
+    mode === "lab"
+      ? buildLabSummary(parsed.labMarkers)
+      : (mode === "rx" || mode === "medicine")
+        ? buildRxSummary(parsed.rxItems)
+        : "";
   const mergedMessage = [
     String(message || "").trim() || "Please analyze this uploaded medical file.",
+    parsedSummary ? `\n\n${parsedSummary}` : "",
     textPreview ? `\n\nFile Extracted Text:\n${textPreview}` : "\n\nNo extractable text was found in the file.",
   ].join("");
 
