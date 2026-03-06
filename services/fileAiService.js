@@ -1,14 +1,33 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const os = require("os");
 const { extractTextPlus, extractPrescriptionItems } = require("../utils/ocr");
 const { parse: parseMeds } = require("../utils/ai/medParser");
 const { generateAssistantReply } = require("./aiService");
 
 const TMP_DIR = path.join(process.cwd(), "uploads", "ai-temp");
+const FILES_DIR = path.join(process.cwd(), "uploads", "ai-files");
+let resolvedTmpDir = null;
+let resolvedFilesDir = null;
 
 function ensureTmpDir() {
-  fs.mkdirSync(TMP_DIR, { recursive: true });
+  if (resolvedTmpDir && resolvedFilesDir) return;
+  try {
+    fs.mkdirSync(TMP_DIR, { recursive: true });
+    fs.mkdirSync(FILES_DIR, { recursive: true });
+    resolvedTmpDir = TMP_DIR;
+    resolvedFilesDir = FILES_DIR;
+    return;
+  } catch (_) {
+    const base = path.join(os.tmpdir(), "godavaii-ai");
+    const tmp = path.join(base, "temp");
+    const files = path.join(base, "files");
+    fs.mkdirSync(tmp, { recursive: true });
+    fs.mkdirSync(files, { recursive: true });
+    resolvedTmpDir = tmp;
+    resolvedFilesDir = files;
+  }
 }
 
 function normalizeFocus(message, focus) {
@@ -34,13 +53,28 @@ async function withTempFile(file, fn) {
   ensureTmpDir();
   const ext = path.extname(file.originalname || "") || ".bin";
   const name = `${Date.now()}-${crypto.randomBytes(5).toString("hex")}${ext}`;
-  const p = path.join(TMP_DIR, name);
+  const p = path.join(resolvedTmpDir, name);
   await fs.promises.writeFile(p, file.buffer);
   try {
     return await fn(p);
   } finally {
     fs.promises.unlink(p).catch(() => {});
   }
+}
+
+async function persistUploadedFile(file) {
+  ensureTmpDir();
+  const safeBase = path.basename(file.originalname || "upload.bin").replace(/[^\w.\-]/g, "_");
+  const stamp = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const abs = path.join(resolvedFilesDir, `${stamp}-${safeBase}`);
+  await fs.promises.writeFile(abs, file.buffer);
+  const rel = abs.startsWith(process.cwd())
+    ? `/${path.relative(process.cwd(), abs).replace(/\\/g, "/")}`
+    : "";
+  return {
+    absPath: abs,
+    relativePath: rel || abs,
+  };
 }
 
 function parseCsvToObjects(text) {
@@ -146,6 +180,7 @@ async function extractTextAndParsed(file, mode) {
 }
 
 async function analyzeFileForAssistant({ file, message, history, context, userId }) {
+  const persisted = await persistUploadedFile(file);
   const mode = normalizeFocus(message, context?.focus);
   const { extractedText, parsed } = await extractTextAndParsed(file, mode);
 
@@ -162,6 +197,7 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
     userId,
     attachment: {
       name: file?.originalname || "",
+      url: persisted.relativePath,
       type: file?.mimetype || "",
       extractedText: extractedText.slice(0, 12000),
     },
@@ -172,6 +208,7 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
     sessionId: ai.sessionId,
     parsed: {
       ...parsed,
+      storedFileUrl: persisted.relativePath,
       extractedTextPreview: textPreview.slice(0, 1200),
     },
   };

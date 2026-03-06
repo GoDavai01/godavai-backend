@@ -48,6 +48,8 @@ function buildSystemPrompt(ctx) {
     `Audience: ${ctx.whoFor} (${whoLabel}). Focus: ${ctx.focus}.`,
     `Context vault enabled: ${ctx?.vault?.enabled ? "yes" : "no"}.`,
     profileBits.length ? `Context data: ${profileBits.join(" | ")}` : "Context data: limited.",
+    "If extracted file text is provided in the user message, treat that as observed file content.",
+    "Do not say you cannot see files/images when extracted content is present.",
     "Always provide practical triage guidance, do not claim final diagnosis.",
     "Always answer in these exact sections and in this order:",
     "Assessment:",
@@ -172,7 +174,21 @@ async function generateAssistantReply({ message, history, context, userId, attac
   };
 }
 
+async function listSessions({ userId, limit = 20 }) {
+  if (!userId) return [];
+  return AiSession.find({ userId })
+    .sort({ updatedAt: -1 })
+    .limit(Math.max(1, Math.min(Number(limit) || 20, 50)))
+    .lean();
+}
+
+async function getSessionById({ userId, sessionId }) {
+  if (!userId || !sessionId) return null;
+  return AiSession.findOne({ _id: sessionId, userId }).lean();
+}
+
 module.exports = {
   generateAssistantReply,
+  listSessions,
+  getSessionById,
 };
-

@@ -38,6 +38,11 @@ function optionalAuth(req, _res, next) {
   next();
 }
 
+function requireAuth(req, res, next) {
+  if (!req?.user?.userId) return res.status(401).json({ error: "Unauthorized" });
+  return next();
+}
+
 router.use(optionalAuth);
 
 router.post("/assistant/chat", aiController.chat);
@@ -49,5 +54,7 @@ router.post("/analyze-file", withUpload(fileUpload.single("file")), aiController
 
 router.post("/stt", withUpload(audioUpload.single("audio")), aiController.stt);
 router.post("/tts", aiController.tts);
+router.get("/sessions", requireAuth, aiController.listSessions);
+router.get("/sessions/:sessionId", requireAuth, aiController.getSession);
 
 module.exports = router;

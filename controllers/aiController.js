@@ -1,4 +1,4 @@
-const { generateAssistantReply } = require("../services/aiService");
+const { generateAssistantReply, listSessions, getSessionById } = require("../services/aiService");
 const { analyzeFileForAssistant } = require("../services/fileAiService");
 const { transcribeAudio, synthesizeSpeech } = require("../services/audioService");
 
@@ -108,4 +108,27 @@ module.exports = {
   analyzeFile,
   stt,
   tts,
+  listSessions: async (req, res) => {
+    try {
+      const userId = req?.user?.userId;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      const sessions = await listSessions({ userId, limit: req.query?.limit });
+      return res.json({ sessions });
+    } catch (err) {
+      console.error("AI list sessions error:", err?.message || err);
+      return res.status(500).json({ error: "Failed to list sessions" });
+    }
+  },
+  getSession: async (req, res) => {
+    try {
+      const userId = req?.user?.userId;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      const session = await getSessionById({ userId, sessionId: req.params?.sessionId });
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      return res.json({ session });
+    } catch (err) {
+      console.error("AI get session error:", err?.message || err);
+      return res.status(500).json({ error: "Failed to get session" });
+    }
+  },
 };
