@@ -47,7 +47,7 @@ function normalizeFocus(message, focus) {
   const src = String(message || "").toLowerCase();
   if (/(report|cbc|lipid|tsh|vitamin|platelet|hba1c|creatinine)/.test(src)) return "lab";
   if (/(prescription|rx|dose|tablet|capsule|bd|tid|od)/.test(src)) return "rx";
-  if (/(medicine|drug|dawai|paracetamol|azithromycin)/.test(src)) return "medicine";
+  if (/(medicine|drug|dawai|paracetamol|azithromycin|tramadol)/.test(src)) return "medicine";
   return "symptom";
 }
 
@@ -131,15 +131,25 @@ function parseLabMarkers(text) {
 function buildLabSummary(markers) {
   const rows = Array.isArray(markers) ? markers : [];
   if (!rows.length) return "";
-  const top = rows.slice(0, 12);
+  const top = rows.slice(0, 15);
   const lines = top.map((r) => {
     const val = Number.isFinite(r.value) ? r.value : r.value;
     const unit = r.unit ? ` ${r.unit}` : "";
     const range = r.range ? ` (range ${r.range})` : "";
-    const tag = r.flag && r.flag !== "normal" ? ` -> ${String(r.flag).toUpperCase()}` : "";
+    const tag = r.flag && r.flag !== "normal" ? ` -> ${String(r.flag).toUpperCase()}` : " -> NORMAL/UNSPECIFIED";
     return `- ${r.marker}: ${val}${unit}${range}${tag}`;
   });
-  return ["Lab markers parsed from report:", ...lines].join("\n");
+
+  return [
+    "Lab markers parsed from report:",
+    ...lines,
+    "",
+    "Explain these in simple non-technical language.",
+    "Prioritize values that are low, high, or borderline.",
+    "Tell the user what each important visible value generally means.",
+    "If values look mildly abnormal, say that clearly and calmly.",
+    "Do not claim final diagnosis.",
+  ].join("\n");
 }
 
 function buildRxSummary(items) {
@@ -152,7 +162,18 @@ function buildRxSummary(items) {
     const qty = r.qty ? ` qty:${r.qty}` : "";
     return `- ${r.name || "unknown"}${strength}${form}${qty}`;
   });
-  return ["Prescription items parsed:", ...lines].join("\n");
+
+  return [
+    "Prescription items parsed:",
+    ...lines,
+    "",
+    "For each visible medicine, explain in simple language:",
+    "- what it is generally used for",
+    "- visible dosage/timing if present",
+    "- common side effects",
+    "- one useful caution if appropriate",
+    "If any field is unclear, say not clearly visible.",
+  ].join("\n");
 }
 
 function extractPdfTextHeuristic(buffer) {
@@ -271,7 +292,6 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
-    // Strong fallback for images when local OCR engines fail.
     if (!extractedText && kind.image) {
       const viaOpenAI = await ocrImageWithOpenAI(file.buffer, kind.mime || "image/png");
       if (viaOpenAI) {
@@ -280,7 +300,6 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
-    // Fallback for text-based PDFs.
     if (!extractedText && kind.pdf) {
       const pdfText = extractPdfTextHeuristic(file.buffer);
       if (pdfText) {
@@ -289,7 +308,6 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
-    // Fallback for scanned PDFs: render page(s) to image then OCR.
     if (!extractedText && kind.pdf) {
       const viaImage = await extractPdfViaImageFallback(file.buffer);
       if (viaImage) {
@@ -332,6 +350,39 @@ async function extractTextAndParsed(file, mode) {
   };
 }
 
+function buildModeInstructions(mode) {
+  if (mode === "lab") {
+    return [
+      "User wants a lab report explanation.",
+      "Explain visible abnormal/borderline values in very simple language.",
+      "Tell the user what low/high/borderline generally means.",
+      "Mention if findings look mild or potentially important, but do not give final diagnosis.",
+      "Give practical next steps in easy language.",
+    ].join("\n");
+  }
+
+  if (mode === "rx") {
+    return [
+      "User wants a prescription explanation.",
+      "Explain medicine name, visible dose/timing, common use, common side effects, and one useful caution if identifiable.",
+      "Keep it simple and user-friendly.",
+    ].join("\n");
+  }
+
+  if (mode === "medicine") {
+    return [
+      "User wants medicine understanding.",
+      "Explain what medicine is commonly used for, common side effects, and practical caution points.",
+      "Do not invent dosage if not visible.",
+    ].join("\n");
+  }
+
+  return [
+    "User wants symptom guidance in simple language.",
+    "Explain likely meaning and practical next steps.",
+  ].join("\n");
+}
+
 async function analyzeFileForAssistant({ file, message, history, context, userId }) {
   const persisted = await persistUploadedFile(file);
   const mode = normalizeFocus(message, context?.focus);
@@ -344,8 +395,11 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
       : (mode === "rx" || mode === "medicine")
         ? buildRxSummary(parsed.rxItems)
         : "";
+
   const mergedMessage = [
     String(message || "").trim() || "Please analyze this uploaded medical file.",
+    "",
+    buildModeInstructions(mode),
     parsedSummary ? `\n\n${parsedSummary}` : "",
     textPreview ? `\n\nFile Extracted Text:\n${textPreview}` : "\n\nNo extractable text was found in the file.",
   ].join("");

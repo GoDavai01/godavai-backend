@@ -16,8 +16,8 @@ function getOpenAIClient() {
 
 function clampTemperature(v) {
   const n = Number(v);
-  if (!Number.isFinite(n)) return 0.6;
-  return Math.max(0.4, Math.min(0.7, n));
+  if (!Number.isFinite(n)) return 0.55;
+  return Math.max(0.35, Math.min(0.7, n));
 }
 
 function compactHistory(history, limit = 16) {
@@ -43,24 +43,49 @@ function buildSystemPrompt(ctx) {
   }
 
   return [
-    "You are GoDavaii AI, a careful health assistant.",
+    "You are GoDavaii AI, a careful and practical health assistant.",
     `Language preference: ${ctx.language}.`,
     `Audience: ${ctx.whoFor} (${whoLabel}). Focus: ${ctx.focus}.`,
     `Context vault enabled: ${ctx?.vault?.enabled ? "yes" : "no"}.`,
     profileBits.length ? `Context data: ${profileBits.join(" | ")}` : "Context data: limited.",
     "If extracted file text is provided in the user message, treat that as observed file content.",
     "Do not say you cannot see files/images when extracted content is present.",
-    "If report values are available, explain in simple non-technical Hinglish/English based on language preference.",
-    "Use short bullets and plain words so a non-medical user understands quickly.",
-    "Never invent missing report values. If value is unavailable, explicitly say 'not visible in report'.",
+    "Use very simple Hinglish/English that a normal non-medical user can understand.",
     "Do not use markdown formatting symbols like **, __, #, or code blocks.",
-    "Always provide practical triage guidance, do not claim final diagnosis.",
-    "Always answer in these exact sections and in this order:",
+    "Do not invent missing report values, diagnoses, dosages, frequencies, or medicine purposes if they are not visible or not reasonably inferable.",
+    "If something is not visible, say: not clearly visible in report/prescription.",
+    "Do not overuse 'consult doctor' in every line. Give practical explanation first, then safety guidance.",
+    "Be reassuring when findings look mild or near-normal, but remain safety-first.",
+    "For LAB REPORT queries:",
+    "- Explain what each important value means in plain language.",
+    "- Clearly say whether each visible important value is low, high, borderline, or normal.",
+    "- Mention if findings look mild, moderate, or potentially important based only on visible data.",
+    "- Briefly explain likely significance, but do not claim final diagnosis.",
+    "For PRESCRIPTION queries:",
+    "- Explain what each visible medicine is generally used for, in simple words.",
+    "- Explain visible dosage/timing in easy language.",
+    "- Mention 2-4 common side effects if medicine is identifiable.",
+    "- Mention one practical caution, such as drowsiness, stomach upset, taking after food, or avoiding alcohol, only if generally appropriate.",
+    "For MEDICINE queries:",
+    "- Explain what the medicine is commonly used for.",
+    "- Explain common side effects in plain language.",
+    "- Mention when it should be used carefully.",
+    "- Mention common interactions/cautions only if reasonably known and high value.",
+    "For SYMPTOM queries:",
+    "- Explain likely low-risk possibilities in plain language.",
+    "- Give simple home-care steps when appropriate.",
+    "- Clearly separate red flags.",
+    "Always answer in these exact sections and in this exact order:",
     "Assessment:",
     "Next steps:",
     "Red flags:",
     "When to see doctor:",
-    "Keep advice concise, actionable, and safety-first.",
+    "Formatting rules:",
+    "- Keep each section useful and not too short.",
+    "- Assessment should usually have 4-8 bullet points when enough information is available.",
+    "- Next steps should usually have 3-6 practical bullet points.",
+    "- If medicine is involved, include common side effects inside Assessment or Next steps.",
+    "- Keep the tone user-friendly, calm, practical, and clear.",
   ].join("\n");
 }
 
@@ -68,15 +93,212 @@ function sanitizeReplyFormatting(text) {
   return String(text || "")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1")
-    .replace(/^\s*[-*]\s+/gm, "- ")
+    .replace(/^\s*[*•]\s+/gm, "- ")
     .replace(/`{1,3}/g, "")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function normalizeSectionBody(text) {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.trimRight())
+    .join("\n")
+    .trim();
+}
+
+function extractSection(text, heading) {
+  const src = String(text || "");
+  const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const headings = ["Assessment", "Next steps", "Red flags", "When to see doctor"];
+  const other = headings.filter((h) => h !== heading).map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`${esc}:\\s*([\\s\\S]*?)(?=\\n(?:${other.join("|")}):|$)`, "i");
+  const m = src.match(re);
+  return m ? normalizeSectionBody(m[1]) : "";
+}
+
+function ensureUsefulBullets(block, fallbackLines = []) {
+  const raw = normalizeSectionBody(block);
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (!lines.length) {
+    return fallbackLines.map((x) => `- ${x}`).join("\n");
+  }
+
+  return lines
+    .map((line) => {
+      if (/^- /.test(line)) return line;
+      return `- ${line}`;
+    })
+    .join("\n");
+}
+
+function postProcessReply(reply, ctx, redFlags) {
+  const raw = sanitizeReplyFormatting(reply);
+
+  let assessment = extractSection(raw, "Assessment");
+  let nextSteps = extractSection(raw, "Next steps");
+  let redFlagsBody = extractSection(raw, "Red flags");
+  let whenDoctor = extractSection(raw, "When to see doctor");
+
+  const focus = String(ctx?.focus || "").toLowerCase();
+
+  if (!assessment) {
+    if (focus === "lab") {
+      assessment = [
+        "- Report ke visible values ke basis par summary di ja rahi hai.",
+        "- Jo values high, low, ya borderline hain unka simple meaning bataya jana chahiye.",
+      ].join("\n");
+    } else if (focus === "rx" || focus === "medicine") {
+      assessment = [
+        "- Visible medicine/prescription details ko simple language me explain kiya jana chahiye.",
+        "- Common use aur common side effects bataye jane chahiye agar medicine identify ho rahi ho.",
+      ].join("\n");
+    } else {
+      assessment = [
+        "- Symptoms ki simple triage summary di ja rahi hai.",
+        "- Final diagnosis claim nahi kiya ja raha.",
+      ].join("\n");
+    }
+  }
+
+  if (!nextSteps) {
+    nextSteps = [
+      "- Symptoms ya report ko track karein.",
+      "- Agar condition mild ho to basic care continue karein.",
+      "- Agar problem worsen ho to medical help lein.",
+    ].join("\n");
+  }
+
+  if (!redFlagsBody) {
+    redFlagsBody = redFlags && redFlags.length
+      ? redFlags.map((x) => `- ${x}`).join("\n")
+      : "- Severe breathing problem, chest pain, confusion, fainting, seizures, ya uncontrolled bleeding ho to urgent care lein.";
+  }
+
+  if (!whenDoctor) {
+    whenDoctor = [
+      "- Agar symptoms 1-3 din me better na ho.",
+      "- Agar dard, weakness, fever, vomiting, rash, ya breathing issue badhe.",
+      "- Agar medicine se unusual side effects mehsoos hon.",
+    ].join("\n");
+  }
+
+  assessment = ensureUsefulBullets(assessment, [
+    "Simple explanation based on visible information.",
+    "Final diagnosis confirm nahi ki ja rahi.",
+  ]);
+
+  nextSteps = ensureUsefulBullets(nextSteps, [
+    "Hydration, rest, aur symptom monitoring rakhein.",
+    "Jo advice clearly visible hai usko follow karein.",
+    "Agar worsening ho to doctor se baat karein.",
+  ]);
+
+  redFlagsBody = ensureUsefulBullets(redFlagsBody, [
+    "Severe symptoms me urgent care lein.",
+  ]);
+
+  whenDoctor = ensureUsefulBullets(whenDoctor, [
+    "Agar symptoms persist ya worsen karein to doctor ko dikhayein.",
+  ]);
+
+  return [
+    "Assessment:",
+    assessment,
+    "",
+    "Next steps:",
+    nextSteps,
+    "",
+    "Red flags:",
+    redFlagsBody,
+    "",
+    "When to see doctor:",
+    whenDoctor,
+  ].join("\n");
 }
 
 function buildFallbackReply(message, ctx, redFlags) {
   const who = ctx.whoForLabel || (ctx.whoFor === "self" ? "you" : ctx.whoFor);
-  const core = `For ${who}, I need a bit more detail to be precise. Current query: ${message || "No message."}`;
-  return ensureStructuredSections(core, { redFlags });
+  const focus = String(ctx?.focus || "").toLowerCase();
+
+  if (focus === "lab") {
+    return postProcessReply(
+      [
+        "Assessment:",
+        `- ${who} ke liye report ka simple summary dene ke liye visible values chahiye.`,
+        "- Agar Hb, WBC, Platelet, TSH, Creatinine, Sugar, ya koi highlighted value visible hai to uska meaning samjhaya ja sakta hai.",
+        "- Abhi jo value clear nahi hai usko guess nahi kiya jayega.",
+        "",
+        "Next steps:",
+        "- Report ki clear image/PDF bhejein.",
+        "- Important values + unit + reference range share karein.",
+        "- Agar weakness, fever, bleeding, severe pain, ya breathing issue hai to mention karein.",
+        "",
+        "Red flags:",
+        redFlags.length ? redFlags.map((x) => `- ${x}`).join("\n") : "- Severe weakness, heavy bleeding, chest pain, breathing problem, confusion, ya fainting ho to urgent care lein.",
+        "",
+        "When to see doctor:",
+        "- Agar abnormal values clearly high/low hon.",
+        "- Agar symptoms bhi saath me present hon.",
+        "- Agar repeated reports me pattern abnormal aa raha ho.",
+      ].join("\n"),
+      ctx,
+      redFlags
+    );
+  }
+
+  if (focus === "rx" || focus === "medicine") {
+    return postProcessReply(
+      [
+        "Assessment:",
+        `- ${who} ke liye medicine/prescription ko simple language me explain kiya ja sakta hai.`,
+        "- Isme use, common side effects, aur important cautions bataye ja sakte hain.",
+        "- Jo cheez prescription me clearly visible nahi hogi usko guess nahi kiya jayega.",
+        "",
+        "Next steps:",
+        "- Medicine ka naam aur strength share karein, jaise Paracetamol 650.",
+        "- Prescription image clear bhejein.",
+        "- Age, pregnancy, allergy, kidney/liver disease, aur current medicines bhi batayein agar relevant ho.",
+        "",
+        "Red flags:",
+        redFlags.length ? redFlags.map((x) => `- ${x}`).join("\n") : "- Severe allergy, swelling, breathing issue, fainting, severe vomiting, black stools, ya severe drowsiness ho to urgent care lein.",
+        "",
+        "When to see doctor:",
+        "- Agar medicine se relief na mile.",
+        "- Agar side effects troublesome hon.",
+        "- Agar dosage ya duration clear na ho.",
+      ].join("\n"),
+      ctx,
+      redFlags
+    );
+  }
+
+  return postProcessReply(
+    [
+      "Assessment:",
+      `- ${who} ke symptoms ka simple first-level guidance diya ja sakta hai.`,
+      "- Better answer ke liye age, symptom duration, severity, fever value, aur current medicines useful honge.",
+      "",
+      "Next steps:",
+      "- Main symptom, kab se hai, kitna severe hai, yeh likhein.",
+      "- Existing diseases aur medicines bhi share karein.",
+      "- Agar fever/sugar/BP/oxygen reading hai to add karein.",
+      "",
+      "Red flags:",
+      redFlags.length ? redFlags.map((x) => `- ${x}`).join("\n") : "- Severe chest pain, breathing trouble, confusion, seizures, fainting, severe dehydration, ya uncontrolled bleeding ho to urgent care lein.",
+      "",
+      "When to see doctor:",
+      "- Agar symptoms worsen karein.",
+      "- Agar 1-3 din me improve na ho.",
+      "- Agar severe pain, weakness, ya persistent vomiting ho.",
+    ].join("\n"),
+    ctx,
+    redFlags
+  );
 }
 
 async function upsertSession({ userId, context, userText, assistantText, attachment }) {
@@ -173,7 +395,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
   let reply = "";
   const client = getOpenAIClient();
   const model = process.env.AI_CHAT_MODEL || process.env.GPT_MED_MODEL || "gpt-4o-mini";
-  const temperature = clampTemperature(process.env.AI_TEMPERATURE || 0.6);
+  const temperature = clampTemperature(process.env.AI_TEMPERATURE || 0.55);
 
   if (client && baseUserMessage) {
     try {
@@ -187,7 +409,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
         model,
         messages,
         temperature,
-        max_tokens: Number(process.env.AI_MAX_TOKENS || 700),
+        max_tokens: Number(process.env.AI_MAX_TOKENS || 950),
       });
 
       reply = String(out?.choices?.[0]?.message?.content || "").trim();
@@ -203,6 +425,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
 
   reply = sanitizeReplyFormatting(reply);
   reply = ensureStructuredSections(reply, { redFlags });
+  reply = postProcessReply(reply, resolvedContext, redFlags);
 
   const sessionId = await upsertSession({
     userId,
