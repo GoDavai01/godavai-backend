@@ -3,9 +3,13 @@ const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
 const zlib = require("zlib");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 const { extractTextPlus, extractPrescriptionItems } = require("../utils/ocr");
 const { parse: parseMeds } = require("../utils/ai/medParser");
 const { generateAssistantReply } = require("./aiService");
+
+const execFileAsync = promisify(execFile);
 
 const TMP_DIR = path.join(process.cwd(), "uploads", "ai-temp");
 const FILES_DIR = path.join(process.cwd(), "uploads", "ai-files");
@@ -55,10 +59,18 @@ function ensureTmpDir() {
 function normalizeFocus(message, focus) {
   const forced = String(focus || "").toLowerCase();
   if (forced && forced !== "auto") return forced;
+
   const src = String(message || "").toLowerCase();
-  if (/(report|cbc|lipid|tsh|vitamin|platelet|hba1c|creatinine)/.test(src)) return "lab";
-  if (/(prescription|rx|dose|tablet|capsule|bd|tid|od)/.test(src)) return "rx";
-  if (/(medicine|drug|dawai|paracetamol|azithromycin|tramadol)/.test(src)) return "medicine";
+
+  if (/(report|cbc|lipid|tsh|vitamin|platelet|hba1c|creatinine|hemoglobin|wbc|rbc|uric acid|bilirubin|sgpt|sgot|lab report|blood test)/.test(src)) {
+    return "lab";
+  }
+  if (/(prescription|rx|dose|tablet|capsule|bd|tid|od|syrup|tab|cap)/.test(src)) {
+    return "rx";
+  }
+  if (/(medicine|drug|dawai|paracetamol|azithromycin|tramadol|amoxicillin|pantoprazole)/.test(src)) {
+    return "medicine";
+  }
   return "symptom";
 }
 
@@ -104,12 +116,17 @@ function parseCsvToObjects(text) {
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
+
   if (lines.length < 2) return [];
+
   const headers = lines[0].split(",").map((h) => h.trim());
+
   return lines.slice(1).map((line) => {
     const cols = line.split(",").map((c) => c.trim());
     const row = {};
-    headers.forEach((h, i) => { row[h || `col${i + 1}`] = cols[i] || ""; });
+    headers.forEach((h, i) => {
+      row[h || `col${i + 1}`] = cols[i] || "";
+    });
     return row;
   });
 }
@@ -124,39 +141,171 @@ function normalizeExtractedText(text) {
 }
 
 function parseLabMarkers(text) {
+  const src = normalizeExtractedText(text);
+  const lines = src.split(/\r?\n/);
+
+  const markerHints = [
+    "hemoglobin", "hb", "wbc", "rbc", "platelet", "platelets", "pcv", "hct", "mcv", "mch", "mchc",
+    "neutrophils", "lymphocytes", "monocytes", "eosinophils", "basophils", "esr",
+    "glucose", "sugar", "fasting", "pp", "hba1c", "creatinine", "urea", "bun", "uric acid",
+    "bilirubin", "sgpt", "sgot", "alt", "ast", "alkaline phosphatase", "albumin", "globulin",
+    "cholesterol", "triglycerides", "hdl", "ldl", "vldl",
+    "tsh", "t3", "t4", "vitamin d", "vitamin b12", "ferritin", "iron", "calcium",
+    "sodium", "potassium", "chloride", "crp"
+  ];
+
+  function cleanMarkerName(name) {
+    return String(name || "")
+      .replace(/\s{2,}/g, " ")
+      .replace(/[:\-–—]+$/, "")
+      .trim();
+  }
+
+  function parseRange(str) {
+    const s = String(str || "").replace(/,/g, " ");
+    const m = s.match(/(-?\d+(?:\.\d+)?)\s*(?:to|-|–|—)\s*(-?\d+(?:\.\d+)?)/i);
+    if (!m) return { low: null, high: null };
+    return { low: Number(m[1]), high: Number(m[2]) };
+  }
+
+  function inferFlag(value, low, high, rawLine) {
+    const line = String(rawLine || "").toLowerCase();
+
+    if (/\b(borderline)\b/.test(line)) return "borderline";
+    if (/\b(low|below normal|decreased)\b/.test(line)) return "low";
+    if (/\b(high|raised|elevated|above normal)\b/.test(line)) return "high";
+
+    if (Number.isFinite(value) && Number.isFinite(low) && value < low) return "low";
+    if (Number.isFinite(value) && Number.isFinite(high) && value > high) return "high";
+
+    if (Number.isFinite(value) && Number.isFinite(low) && Number.isFinite(high)) {
+      const span = Math.abs(high - low);
+      if (span > 0) {
+        const nearLow = value >= low && value <= low + span * 0.08;
+        const nearHigh = value <= high && value >= high - span * 0.08;
+        if (nearLow || nearHigh) return "borderline";
+      }
+    }
+
+    return "normal";
+  }
+
   const rows = [];
-  const lines = String(text || "").split(/\r?\n/);
+
   for (const raw of lines) {
     const line = raw.trim();
     if (!line || line.length < 4) continue;
 
-    const m = line.match(/^([A-Za-z][A-Za-z0-9()/%\s\-\._]{1,45})\s*[:\-]?\s*([<>]?\d+(?:\.\d+)?)\s*([A-Za-z/%]+)?(?:\s*\(?\s*(\d+(?:\.\d+)?)\s*[-to]+\s*(\d+(?:\.\d+)?)\s*\)?)?/i);
-    if (!m) continue;
+    const lower = line.toLowerCase();
+    const looksRelevant = markerHints.some((h) => lower.includes(h));
+    const numberHits = line.match(/-?\d+(?:,\d{3})*(?:\.\d+)?/g) || [];
 
-    const marker = m[1].trim();
-    const value = Number(m[2]);
-    const unit = (m[3] || "").trim();
-    const low = m[4] ? Number(m[4]) : null;
-    const high = m[5] ? Number(m[5]) : null;
+    if (!looksRelevant && numberHits.length < 1) continue;
 
-    let flag = "normal";
-    if (Number.isFinite(value) && Number.isFinite(low) && value < low) flag = "low";
-    if (Number.isFinite(value) && Number.isFinite(high) && value > high) flag = "high";
+    const patterns = [
+      /^(.{2,80}?)\s+([<>]?\d+(?:,\d{3})*(?:\.\d+)?)\s+(low|high|borderline)?\s*(\d+(?:\.\d+)?)\s*(?:to|-|–|—)\s*(\d+(?:\.\d+)?)\s*([A-Za-z/%][A-Za-z0-9/%\-\s\.]*)?$/i,
+      /^(.{2,80}?)\s*[:\-]?\s*([<>]?\d+(?:,\d{3})*(?:\.\d+)?)\s*(low|high|borderline)?\s*([A-Za-z/%][A-Za-z0-9/%\-\s\.]*)?\s*(.*)$/i,
+      /^(.{2,80}?)\s+([<>]?\d+(?:,\d{3})*(?:\.\d+)?)\s*([A-Za-z/%][A-Za-z0-9/%\-\s\.]*)?\s*(.*)$/i,
+    ];
 
-    rows.push({ marker, value, unit, range: low != null && high != null ? `${low}-${high}` : "", flag });
+    let match = null;
+    let patternIndex = -1;
+
+    for (let i = 0; i < patterns.length; i += 1) {
+      const m = line.match(patterns[i]);
+      if (m) {
+        match = m;
+        patternIndex = i;
+        break;
+      }
+    }
+
+    if (!match) continue;
+
+    let marker = "";
+    let value = NaN;
+    let unit = "";
+    let tail = "";
+    let explicitFlag = "";
+
+    if (patternIndex === 0) {
+      marker = cleanMarkerName(match[1]);
+      value = Number(String(match[2]).replace(/,/g, ""));
+      explicitFlag = String(match[3] || "").trim().toLowerCase();
+      const low = Number(match[4]);
+      const high = Number(match[5]);
+      unit = String(match[6] || "").trim();
+
+      if (!marker || !Number.isFinite(value)) continue;
+
+      rows.push({
+        marker,
+        value,
+        unit,
+        range: `${low}-${high}`,
+        flag: explicitFlag || inferFlag(value, low, high, line),
+      });
+      continue;
+    }
+
+    marker = cleanMarkerName(match[1]);
+    value = Number(String(match[2]).replace(/,/g, ""));
+    if (!marker || !Number.isFinite(value)) continue;
+
+    if (patternIndex === 1) {
+      explicitFlag = String(match[3] || "").trim().toLowerCase();
+      unit = String(match[4] || "").trim();
+      tail = String(match[5] || "").trim();
+    } else {
+      unit = String(match[3] || "").trim();
+      tail = String(match[4] || "").trim();
+    }
+
+    const { low, high } = parseRange(`${tail} ${line}`);
+    const flag = explicitFlag || inferFlag(value, low, high, line);
+
+    rows.push({
+      marker,
+      value,
+      unit,
+      range: Number.isFinite(low) && Number.isFinite(high) ? `${low}-${high}` : "",
+      flag,
+    });
   }
-  return rows.slice(0, 80);
+
+  const deduped = [];
+  const seen = new Set();
+
+  for (const row of rows) {
+    const key = `${row.marker.toLowerCase()}|${row.value}|${row.unit}|${row.range}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+
+  deduped.sort((a, b) => {
+    const rank = { high: 0, low: 0, borderline: 1, normal: 2 };
+    return (rank[a.flag] ?? 3) - (rank[b.flag] ?? 3);
+  });
+
+  return deduped.slice(0, 120);
 }
 
 function buildLabSummary(markers) {
   const rows = Array.isArray(markers) ? markers : [];
   if (!rows.length) return "";
-  const top = rows.slice(0, 15);
+
+  const top = rows.slice(0, 24);
   const lines = top.map((r) => {
     const val = Number.isFinite(r.value) ? r.value : r.value;
     const unit = r.unit ? ` ${r.unit}` : "";
     const range = r.range ? ` (range ${r.range})` : "";
-    const tag = r.flag && r.flag !== "normal" ? ` -> ${String(r.flag).toUpperCase()}` : " -> NORMAL/UNSPECIFIED";
+    const tag =
+      r.flag === "high" ? " -> HIGH" :
+      r.flag === "low" ? " -> LOW" :
+      r.flag === "borderline" ? " -> BORDERLINE" :
+      " -> NORMAL/UNSPECIFIED";
+
     return `- ${r.marker}: ${val}${unit}${range}${tag}`;
   });
 
@@ -164,8 +313,10 @@ function buildLabSummary(markers) {
     "Lab markers parsed from report:",
     ...lines,
     "",
-    "Explain these in simple non-technical language.",
-    "Prioritize values that are low, high, or borderline.",
+    "First give a brief overall summary of the visible report in simple language.",
+    "Then explain important abnormal or borderline values clearly.",
+    "After that, briefly cover other clearly visible relevant values so the user understands the full report.",
+    "Keep normal values shorter than abnormal ones.",
     "Tell the user what each important visible value generally means.",
     "If values look mildly abnormal, say that clearly and calmly.",
     "Do not claim final diagnosis.",
@@ -175,6 +326,7 @@ function buildLabSummary(markers) {
 function buildRxSummary(items) {
   const rows = Array.isArray(items) ? items : [];
   if (!rows.length) return "";
+
   const top = rows.slice(0, 12);
   const lines = top.map((r) => {
     const strength = r.strength ? ` ${r.strength}` : "";
@@ -248,10 +400,12 @@ async function extractPdfTextWithPdfParse(buffer) {
 async function ocrImageWithOpenAI(buffer, mime) {
   const client = getOpenAIClient();
   if (!client) return "";
+
   try {
     const model = process.env.AI_OCR_MODEL || "gpt-4o-mini";
     const b64 = buffer.toString("base64");
     const dataUrl = `data:${mime || "image/png"};base64,${b64}`;
+
     const out = await client.chat.completions.create({
       model,
       temperature: 0,
@@ -259,57 +413,122 @@ async function ocrImageWithOpenAI(buffer, mime) {
         {
           role: "system",
           content: [
-            "Extract all visible medical text exactly.",
-            "Keep rows, values, units and reference ranges as visible.",
+            "Extract all visible medical text as accurately as possible.",
+            "Preserve rows, values, units, dates, medicine names, dosages and reference ranges.",
             "Keep line breaks.",
             "Do not summarize.",
-            "Return plain text only."
+            "Do not explain.",
+            "Return only plain extracted text."
           ].join(" "),
         },
         {
           role: "user",
           content: [
-            { type: "text", text: "Read this medical image carefully and return plain extracted text only." },
+            {
+              type: "text",
+              text: "Read this medical image very carefully. Return only the extracted plain text. Include report values, ranges, medicine names, strength, timing, notes, headers, and page text if visible."
+            },
             { type: "image_url", image_url: { url: dataUrl } },
           ],
         },
       ],
-      max_tokens: 2200,
+      max_tokens: 2600,
     });
+
     return normalizeExtractedText(out?.choices?.[0]?.message?.content || "");
-  } catch (err) {
+  } catch (_) {
     return "";
   }
 }
 
 async function extractPdfViaImageFallback(buffer, debugErrors = []) {
-  let sharp;
-  try {
-    sharp = require("sharp");
-  } catch (err) {
-    debugErrors.push(`sharp_missing:${err?.message || "unknown"}`);
-    return "";
-  }
+  ensureTmpDir();
 
+  const createdFiles = [];
   let combined = "";
 
-  for (let page = 0; page < 3; page += 1) {
-    try {
-      const img = await sharp(buffer, { density: 240, page })
-        .flatten({ background: "#ffffff" })
-        .png({ quality: 100 })
-        .toBuffer();
-
-      const text = await ocrImageWithOpenAI(img, "image/png");
-      if (text && text.length > 20) {
-        combined += `${combined ? "\n\n" : ""}${text}`;
-      }
-    } catch (err) {
-      debugErrors.push(`pdf_image_fallback_failed_page_${page + 1}:${err?.message || "unknown"}`);
-    }
+  async function cleanup() {
+    await Promise.all(
+      createdFiles.map((p) => fs.promises.unlink(p).catch(() => {}))
+    );
   }
 
-  return normalizeExtractedText(combined);
+  try {
+    const stamp = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    const pdfPath = path.join(resolvedTmpDir, `${stamp}.pdf`);
+    const outBase = path.join(resolvedTmpDir, `${stamp}-page`);
+    createdFiles.push(pdfPath);
+
+    await fs.promises.writeFile(pdfPath, buffer);
+
+    let imagePaths = [];
+
+    try {
+      await execFileAsync(
+        "pdftoppm",
+        ["-f", "1", "-l", "3", "-png", pdfPath, outBase],
+        { windowsHide: true, timeout: 20000 }
+      );
+
+      for (let i = 1; i <= 3; i += 1) {
+        const imgPath = `${outBase}-${i}.png`;
+        if (fs.existsSync(imgPath)) {
+          imagePaths.push(imgPath);
+          createdFiles.push(imgPath);
+        }
+      }
+    } catch (err) {
+      debugErrors.push(`pdftoppm_failed:${err?.message || "unknown"}`);
+    }
+
+    if (!imagePaths.length) {
+      let sharp;
+      try {
+        sharp = require("sharp");
+      } catch (err) {
+        debugErrors.push(`sharp_missing:${err?.message || "unknown"}`);
+      }
+
+      if (sharp) {
+        for (let page = 0; page < 3; page += 1) {
+          try {
+            const img = await sharp(buffer, { density: 240, page })
+              .flatten({ background: "#ffffff" })
+              .png({ quality: 100 })
+              .toBuffer();
+
+            const text = await ocrImageWithOpenAI(img, "image/png");
+            if (text && text.length > 20) {
+              combined += `${combined ? "\n\n" : ""}${text}`;
+            }
+          } catch (err) {
+            debugErrors.push(`sharp_pdf_render_failed_page_${page + 1}:${err?.message || "unknown"}`);
+          }
+        }
+
+        return normalizeExtractedText(combined);
+      }
+    }
+
+    for (const imgPath of imagePaths) {
+      try {
+        const imgBuffer = await fs.promises.readFile(imgPath);
+        const text = await ocrImageWithOpenAI(imgBuffer, "image/png");
+        if (text && text.length > 20) {
+          combined += `${combined ? "\n\n" : ""}${text}`;
+        }
+      } catch (err) {
+        debugErrors.push(`page_ocr_failed:${path.basename(imgPath)}:${err?.message || "unknown"}`);
+      }
+    }
+
+    return normalizeExtractedText(combined);
+  } catch (err) {
+    debugErrors.push(`pdf_image_fallback_root_failed:${err?.message || "unknown"}`);
+    return "";
+  } finally {
+    await cleanup();
+  }
 }
 
 async function extractTextAndParsed(file, mode) {
@@ -320,7 +539,9 @@ async function extractTextAndParsed(file, mode) {
 
   if (kind.text) {
     extractedText = file.buffer.toString("utf8");
-    if (kind.ext === ".csv") parsed.csv = parseCsvToObjects(extractedText).slice(0, 120);
+    if (kind.ext === ".csv") {
+      parsed.csv = parseCsvToObjects(extractedText).slice(0, 120);
+    }
   } else if (kind.image || kind.pdf) {
     try {
       const ocr = await withTempFile(file, async (p) => extractTextPlus(p));
@@ -391,6 +612,8 @@ async function extractTextAndParsed(file, mode) {
     }
   }
 
+  extractedText = normalizeExtractedText(extractedText);
+
   if ((mode === "rx" || mode === "medicine") && !parsed.rxItems?.length && extractedText) {
     const meds = parseMeds(extractedText).map((m) => ({
       name: m.name,
@@ -402,8 +625,14 @@ async function extractTextAndParsed(file, mode) {
     parsed.rxItems = meds;
   }
 
-  if (mode === "lab" && extractedText) {
-    parsed.labMarkers = parseLabMarkers(extractedText);
+  if (extractedText) {
+    const labMarkers = parseLabMarkers(extractedText);
+    if (labMarkers.length) {
+      parsed.labMarkers = labMarkers;
+      if (mode === "symptom") {
+        mode = "lab";
+      }
+    }
   }
 
   return {
@@ -421,7 +650,9 @@ function buildModeInstructions(mode) {
   if (mode === "lab") {
     return [
       "User wants a lab report explanation.",
-      "Explain visible abnormal/borderline values in very simple language.",
+      "Start with a short overall summary of the full visible report.",
+      "Then explain visible abnormal or borderline values in very simple language.",
+      "After that, briefly explain other clearly visible relevant values so the user understands the report better.",
       "Tell the user what low/high/borderline generally means.",
       "Mention if findings look mild or potentially important, but do not give final diagnosis.",
       "Give practical next steps in easy language.",
@@ -452,8 +683,12 @@ function buildModeInstructions(mode) {
 
 async function analyzeFileForAssistant({ file, message, history, context, userId }) {
   const persisted = await persistUploadedFile(file);
-  const mode = normalizeFocus(message, context?.focus);
+  let mode = normalizeFocus(message, context?.focus);
+
   const { extractedText, parsed } = await extractTextAndParsed(file, mode);
+  if (parsed?.mode && parsed.mode !== mode) {
+    mode = parsed.mode;
+  }
 
   const textPreview = extractedText ? extractedText.slice(0, 8000) : "";
   const parsedSummary =

@@ -57,10 +57,13 @@ function buildSystemPrompt(ctx) {
     "Do not overuse 'consult doctor' in every line. Give practical explanation first, then safety guidance.",
     "Be reassuring when findings look mild or near-normal, but remain safety-first.",
     "For LAB REPORT queries:",
-    "- Explain what each important value means in plain language.",
-    "- Clearly say whether each visible important value is low, high, borderline, or normal.",
-    "- Mention if findings look mild, moderate, or potentially important based only on visible data.",
-    "- Briefly explain likely significance, but do not claim final diagnosis.",
+"- Start with a short overall summary of the full visible report in 2-3 bullets.",
+"- Then explain the important visible values in plain language.",
+"- Clearly say whether each visible important value is low, high, borderline, or normal.",
+"- Prioritize abnormal and borderline values, but do not ignore other clearly visible relevant values just because they are normal.",
+"- If many values are visible, keep normal ones brief and easy to understand.",
+"- Mention if findings look mild, moderate, or potentially important based only on visible data.",
+"- Briefly explain likely significance, but do not claim final diagnosis.",
     "For PRESCRIPTION queries:",
     "- Explain what each visible medicine is generally used for, in simple words.",
     "- Explain visible dosage/timing in easy language.",
@@ -409,7 +412,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
         model,
         messages,
         temperature,
-        max_tokens: Number(process.env.AI_MAX_TOKENS || 950),
+        max_tokens: Number(process.env.AI_MAX_TOKENS || 1250),
       });
 
       reply = String(out?.choices?.[0]?.message?.content || "").trim();
