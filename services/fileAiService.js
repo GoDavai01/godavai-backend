@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
+const zlib = require("zlib");
 const { extractTextPlus, extractPrescriptionItems } = require("../utils/ocr");
 const { parse: parseMeds } = require("../utils/ai/medParser");
 const { generateAssistantReply } = require("./aiService");
@@ -10,6 +11,16 @@ const TMP_DIR = path.join(process.cwd(), "uploads", "ai-temp");
 const FILES_DIR = path.join(process.cwd(), "uploads", "ai-files");
 let resolvedTmpDir = null;
 let resolvedFilesDir = null;
+let cachedOpenAI = null;
+
+function getOpenAIClient() {
+  if (cachedOpenAI) return cachedOpenAI;
+  if (!process.env.OPENAI_API_KEY) return null;
+  let OpenAI = require("openai");
+  OpenAI = OpenAI?.default || OpenAI;
+  cachedOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return cachedOpenAI;
+}
 
 function ensureTmpDir() {
   if (resolvedTmpDir && resolvedFilesDir) return;
@@ -117,6 +128,72 @@ function parseLabMarkers(text) {
   return rows.slice(0, 80);
 }
 
+function extractPdfTextHeuristic(buffer) {
+  try {
+    const src = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
+    const out = [];
+
+    const rawAscii = src.toString("latin1");
+    const rawHits = rawAscii.match(/\(([^()]{2,200})\)\s*Tj/g) || [];
+    for (const hit of rawHits) {
+      const t = hit.replace(/\)\s*Tj$/, "").replace(/^\(/, "");
+      out.push(t);
+    }
+
+    const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    let m;
+    while ((m = streamRegex.exec(rawAscii)) !== null) {
+      const chunk = Buffer.from(m[1], "latin1");
+      try {
+        const inflated = zlib.inflateSync(chunk);
+        const txt = inflated.toString("latin1");
+        const hits = txt.match(/\(([^()]{2,200})\)\s*Tj/g) || [];
+        for (const h of hits) {
+          const t = h.replace(/\)\s*Tj$/, "").replace(/^\(/, "");
+          out.push(t);
+        }
+      } catch (_) {
+        // ignore non-deflated streams
+      }
+    }
+
+    return out.join("\n").replace(/[^\x09\x0A\x0D\x20-\x7E]/g, " ").replace(/\s{2,}/g, " ").trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+async function ocrImageWithOpenAI(buffer, mime) {
+  const client = getOpenAIClient();
+  if (!client) return "";
+  try {
+    const model = process.env.AI_OCR_MODEL || "gpt-4o-mini";
+    const b64 = buffer.toString("base64");
+    const dataUrl = `data:${mime || "image/png"};base64,${b64}`;
+    const out = await client.chat.completions.create({
+      model,
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: "Extract all visible medical text exactly. Keep line breaks. Do not summarize.",
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Read this medical image and return plain extracted text only." },
+            { type: "image_url", image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      max_tokens: 1800,
+    });
+    return String(out?.choices?.[0]?.message?.content || "").trim();
+  } catch (err) {
+    return "";
+  }
+}
+
 async function extractTextAndParsed(file, mode) {
   const kind = fileKind(file);
   let extractedText = "";
@@ -142,6 +219,24 @@ async function extractTextAndParsed(file, mode) {
         parsed.ocrEngine = ocrItems?.engine || "";
       } catch (err) {
         debugErrors.push(`ocr_rx_failed:${err?.message || "unknown"}`);
+      }
+    }
+
+    // Strong fallback for images when local OCR engines fail.
+    if (!extractedText && kind.image) {
+      const viaOpenAI = await ocrImageWithOpenAI(file.buffer, kind.mime || "image/png");
+      if (viaOpenAI) {
+        extractedText = viaOpenAI;
+        parsed.ocrEngine = parsed.ocrEngine || "openai-image-ocr";
+      }
+    }
+
+    // Fallback for text-based PDFs.
+    if (!extractedText && kind.pdf) {
+      const pdfText = extractPdfTextHeuristic(file.buffer);
+      if (pdfText) {
+        extractedText = pdfText;
+        parsed.ocrEngine = parsed.ocrEngine || "pdf-heuristic-text";
       }
     }
   } else {
