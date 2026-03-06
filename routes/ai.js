@@ -7,13 +7,23 @@ const router = express.Router();
 
 const fileUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 30 * 1024 * 1024 },
 });
 
 const audioUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
 });
+
+function withUpload(singleUpload) {
+  return (req, res, next) => {
+    singleUpload(req, res, (err) => {
+      if (!err) return next();
+      const msg = err?.message || "Upload failed";
+      return res.status(400).json({ error: msg });
+    });
+  };
+}
 
 function optionalAuth(req, _res, next) {
   const authHeader = req.headers.authorization || "";
@@ -34,11 +44,10 @@ router.post("/assistant/chat", aiController.chat);
 router.post("/chat", aiController.chat);
 router.post("/assistant", aiController.chat);
 
-router.post("/assistant/analyze-file", fileUpload.single("file"), aiController.analyzeFile);
-router.post("/analyze-file", fileUpload.single("file"), aiController.analyzeFile);
+router.post("/assistant/analyze-file", withUpload(fileUpload.single("file")), aiController.analyzeFile);
+router.post("/analyze-file", withUpload(fileUpload.single("file")), aiController.analyzeFile);
 
-router.post("/stt", audioUpload.single("audio"), aiController.stt);
+router.post("/stt", withUpload(audioUpload.single("audio")), aiController.stt);
 router.post("/tts", aiController.tts);
 
 module.exports = router;
-

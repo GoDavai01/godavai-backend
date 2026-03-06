@@ -68,7 +68,10 @@ async function analyzeFile(req, res) {
     });
   } catch (err) {
     console.error("AI analyze-file controller error:", err?.message || err);
-    return res.status(500).json({ error: "Failed to analyze file" });
+    return res.status(500).json({
+      error: "Failed to analyze file",
+      details: String(err?.message || "unknown"),
+    });
   }
 }
 
@@ -106,4 +109,3 @@ module.exports = {
   stt,
   tts,
 };
-

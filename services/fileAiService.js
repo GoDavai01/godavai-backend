@@ -86,22 +86,37 @@ function parseLabMarkers(text) {
 async function extractTextAndParsed(file, mode) {
   const kind = fileKind(file);
   let extractedText = "";
-  let parsed = {};
+  const parsed = {};
+  const debugErrors = [];
 
   if (kind.text) {
     extractedText = file.buffer.toString("utf8");
     if (kind.ext === ".csv") parsed.csv = parseCsvToObjects(extractedText).slice(0, 120);
   } else if (kind.image || kind.pdf) {
-    const ocr = await withTempFile(file, async (p) => extractTextPlus(p));
-    extractedText = String(ocr?.text || "");
+    try {
+      const ocr = await withTempFile(file, async (p) => extractTextPlus(p));
+      extractedText = String(ocr?.text || "");
+    } catch (err) {
+      debugErrors.push(`ocr_text_failed:${err?.message || "unknown"}`);
+      extractedText = "";
+    }
 
     if (mode === "rx" || mode === "medicine") {
-      const ocrItems = await withTempFile(file, async (p) => extractPrescriptionItems(p));
-      parsed.rxItems = Array.isArray(ocrItems?.items) ? ocrItems.items : [];
-      parsed.ocrEngine = ocrItems?.engine || "";
+      try {
+        const ocrItems = await withTempFile(file, async (p) => extractPrescriptionItems(p));
+        parsed.rxItems = Array.isArray(ocrItems?.items) ? ocrItems.items : [];
+        parsed.ocrEngine = ocrItems?.engine || "";
+      } catch (err) {
+        debugErrors.push(`ocr_rx_failed:${err?.message || "unknown"}`);
+      }
     }
   } else {
-    extractedText = file.buffer.toString("utf8");
+    try {
+      extractedText = file.buffer.toString("utf8");
+    } catch (err) {
+      debugErrors.push(`buffer_to_text_failed:${err?.message || "unknown"}`);
+      extractedText = "";
+    }
   }
 
   if ((mode === "rx" || mode === "medicine") && !parsed.rxItems?.length && extractedText) {
@@ -124,6 +139,7 @@ async function extractTextAndParsed(file, mode) {
     parsed: {
       mode,
       fileType: kind.mime || kind.ext || "unknown",
+      debug: debugErrors.slice(0, 5),
       ...parsed,
     },
   };
@@ -164,4 +180,3 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
 module.exports = {
   analyzeFileForAssistant,
 };
-
