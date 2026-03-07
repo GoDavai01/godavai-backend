@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const Medicine = require("../models/Medicine");
 const Pharmacy = require("../models/Pharmacy");
+const Doctor = require("../models/Doctor");
 
 // Helper to escape regex special chars
 function escapeRegex(str) {
@@ -34,16 +35,14 @@ async function autocompleteHandler(req, res) {
       results.push(...medNames);
     }
 
-    // === If you add doctor/lab search in future, add here ===
-    /*
     if (type === "doctor" || type === "all") {
       const docNames = await Doctor.distinct("name", {
         name: { $regex: escapeRegex(q), $options: "i" },
-        city: new RegExp(escapeRegex(city), "i")
+        active: true,
+        ...(city ? { city: new RegExp(escapeRegex(city), "i") } : {}),
       });
       results.push(...docNames);
     }
-    */
 
     // Remove duplicates, just in case
     results = [...new Set(results)];

@@ -5,16 +5,22 @@ const router = express.Router();
 const Payment = require("../models/Payment");
 const Pharmacy = require("../models/Pharmacy");
 const DeliveryPartner = require("../models/DeliveryPartner");
+const DoctorAppointment = require("../models/DoctorAppointment");
 
-// Razorpay instance
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+const razorpayEnabled = !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
+const razorpay = razorpayEnabled
+  ? new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+  })
+  : null;
 
 // Create Razorpay Order
 router.post("/razorpay/order", async (req, res) => {
   try {
+    if (!razorpayEnabled || !razorpay) {
+      return res.status(503).json({ error: "Razorpay is not configured on server" });
+    }
     const { amount } = req.body;
     if (!amount || isNaN(amount) || Number(amount) <= 0) {
       return res.status(400).json({ error: "Amount is required and must be a positive number" });
@@ -88,6 +94,61 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("Error in GET /api/payments:", err);
     res.status(500).json({ error: "Failed to fetch payments", details: err.message });
+  }
+});
+
+// Verify doctor consult payment and confirm booking
+router.post("/verify", async (req, res) => {
+  try {
+    const consultId = String(req.body?.consultId || "").trim();
+    const paymentRef = String(req.body?.paymentRef || "").trim();
+    const paymentMethod = String(req.body?.paymentMethod || "").trim().toLowerCase();
+    const transactionId = String(req.body?.transactionId || "").trim();
+
+    if (!consultId) return res.status(400).json({ error: "consultId is required" });
+    const consult = await DoctorAppointment.findById(consultId);
+    if (!consult) return res.status(404).json({ error: "Consult not found" });
+
+    if (consult.status !== "pending_payment") {
+      return res.status(409).json({ error: "Consult is not in pending payment state" });
+    }
+
+    const now = new Date();
+    if (consult.holdExpiresAt && new Date(consult.holdExpiresAt) <= now) {
+      consult.status = "cancelled";
+      consult.cancelReason = "Payment hold expired";
+      consult.cancelledAt = now;
+      consult.paymentStatus = "failed";
+      await consult.save();
+      return res.status(409).json({ error: "Payment hold expired. Please book again." });
+    }
+
+    if (!paymentMethod || !["upi", "card", "netbanking", "cash"].includes(paymentMethod)) {
+      return res.status(400).json({ error: "Valid paymentMethod is required" });
+    }
+    if (!transactionId) return res.status(400).json({ error: "transactionId is required" });
+
+    if (paymentRef && consult.paymentRef && paymentRef !== consult.paymentRef) {
+      return res.status(400).json({ error: "paymentRef mismatch" });
+    }
+
+    consult.paymentMethod = paymentMethod;
+    consult.transactionId = transactionId;
+    consult.paymentStatus = "paid";
+    consult.amountPaid = consult.fee || 0;
+    consult.status = "confirmed";
+    consult.holdExpiresAt = null;
+    await consult.save();
+
+    res.json({
+      ok: true,
+      consultId: consult._id,
+      status: consult.status,
+      paymentStatus: consult.paymentStatus,
+    });
+  } catch (err) {
+    console.error("POST /api/payments/verify error:", err?.message || err);
+    res.status(500).json({ error: "Failed to verify payment" });
   }
 });
 
