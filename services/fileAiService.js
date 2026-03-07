@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 
 const TMP_DIR = path.join(process.cwd(), "uploads", "ai-temp");
 const FILES_DIR = path.join(process.cwd(), "uploads", "ai-files");
+
 let resolvedTmpDir = null;
 let resolvedFilesDir = null;
 let cachedOpenAI = null;
@@ -21,6 +22,7 @@ let cachedPdfParse = null;
 function getOpenAIClient() {
   if (cachedOpenAI) return cachedOpenAI;
   if (!process.env.OPENAI_API_KEY) return null;
+
   let OpenAI = require("openai");
   OpenAI = OpenAI?.default || OpenAI;
   cachedOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -39,6 +41,7 @@ function getPdfParse() {
 
 function ensureTmpDir() {
   if (resolvedTmpDir && resolvedFilesDir) return;
+
   try {
     fs.mkdirSync(TMP_DIR, { recursive: true });
     fs.mkdirSync(FILES_DIR, { recursive: true });
@@ -71,24 +74,30 @@ function normalizeFocus(message, focus) {
   if (/(medicine|drug|dawai|paracetamol|azithromycin|tramadol|amoxicillin|pantoprazole)/.test(src)) {
     return "medicine";
   }
+
   return "symptom";
 }
 
 function fileKind(file) {
   const mime = String(file?.mimetype || "").toLowerCase();
   const ext = path.extname(String(file?.originalname || "")).toLowerCase();
+
   const image = mime.startsWith("image/") || [".png", ".jpg", ".jpeg", ".webp"].includes(ext);
   const pdf = mime === "application/pdf" || ext === ".pdf";
   const text = mime.startsWith("text/") || [".txt", ".csv", ".md"].includes(ext);
+
   return { image, pdf, text, mime, ext };
 }
 
 async function withTempFile(file, fn) {
   ensureTmpDir();
+
   const ext = path.extname(file.originalname || "") || ".bin";
   const name = `${Date.now()}-${crypto.randomBytes(5).toString("hex")}${ext}`;
   const p = path.join(resolvedTmpDir, name);
+
   await fs.promises.writeFile(p, file.buffer);
+
   try {
     return await fn(p);
   } finally {
@@ -98,13 +107,17 @@ async function withTempFile(file, fn) {
 
 async function persistUploadedFile(file) {
   ensureTmpDir();
+
   const safeBase = path.basename(file.originalname || "upload.bin").replace(/[^\w.\-]/g, "_");
   const stamp = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
   const abs = path.join(resolvedFilesDir, `${stamp}-${safeBase}`);
+
   await fs.promises.writeFile(abs, file.buffer);
+
   const rel = abs.startsWith(process.cwd())
     ? `/${path.relative(process.cwd(), abs).replace(/\\/g, "/")}`
     : "";
+
   return {
     absPath: abs,
     relativePath: rel || abs,
@@ -691,6 +704,7 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
   }
 
   const textPreview = extractedText ? extractedText.slice(0, 8000) : "";
+
   const parsedSummary =
     mode === "lab"
       ? buildLabSummary(parsed.labMarkers)

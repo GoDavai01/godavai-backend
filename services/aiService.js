@@ -31,6 +31,50 @@ function compactHistory(history, limit = 16) {
     .filter((m) => m.content);
 }
 
+function inferPromptIntent(text) {
+  const src = String(text || "").toLowerCase();
+
+  if (/(report|cbc|lipid|tsh|vitamin|platelet|hba1c|creatinine|hemoglobin|wbc|rbc|uric acid|bilirubin|sgpt|sgot|lab report|blood test)/.test(src)) {
+    return "lab";
+  }
+
+  if (/(prescription|rx|dose|tablet|capsule|bd|tid|od|syrup|tab|cap)/.test(src)) {
+    return "rx";
+  }
+
+  if (/(medicine|drug|dawai|paracetamol|azithromycin|tramadol|amoxicillin|pantoprazole)/.test(src)) {
+    return "medicine";
+  }
+
+  return "symptom";
+}
+
+function looksLikeFollowupToPreviousFile(message) {
+  const src = String(message || "").toLowerCase().trim();
+  if (!src) return false;
+
+  return (
+    /^(yeh|ye|is|iss|isme|isme kya|isko|iska|iski|ye report|ye prescription|same|continue|continue karo|aur batao|aur samjhao|detail me batao|is hisaab se|according to this|according to report|according to prescription)\b/.test(src) ||
+    /\b(iss report|is report|iss prescription|is prescription|iss medicine|is medicine|same report|same prescription|same medicine|uploaded file|previous file|upar wali report|upar wali prescription|report ke hisaab se|prescription ke hisaab se|same file)\b/.test(src)
+  );
+}
+
+function shouldReuseRecentAttachment({ message, attachment, context, recalledAttachment }) {
+  if (attachment) return false;
+  if (!recalledAttachment?.text) return false;
+
+  const currentIntent = inferPromptIntent(message);
+  const focus = String(context?.focus || "").toLowerCase();
+  const followup = looksLikeFollowupToPreviousFile(message);
+
+  if (followup) return true;
+
+  if (currentIntent === "symptom") return false;
+  if (focus === "symptom") return false;
+
+  return ["lab", "rx", "medicine"].includes(currentIntent);
+}
+
 function buildSystemPrompt(ctx) {
   const whoLabel = ctx.whoForLabel || (ctx.whoFor === "self" ? "self" : ctx.whoFor);
   const profileBits = [];
@@ -49,6 +93,7 @@ function buildSystemPrompt(ctx) {
     `Context vault enabled: ${ctx?.vault?.enabled ? "yes" : "no"}.`,
     profileBits.length ? `Context data: ${profileBits.join(" | ")}` : "Context data: limited.",
     "If extracted file text is provided in the user message, treat that as observed file content.",
+    "If previous uploaded file text is included for continuity, use it only when the current user message is clearly referring to that same file, medicine, report, or prescription. If the current message is a new unrelated symptom question, do not anchor the answer on the previous file.",
     "Do not say you cannot see files/images when extracted content is present.",
     "Use very simple Hinglish/English that a normal non-medical user can understand.",
     "Do not use markdown formatting symbols like **, __, #, or code blocks.",
@@ -57,13 +102,13 @@ function buildSystemPrompt(ctx) {
     "Do not overuse 'consult doctor' in every line. Give practical explanation first, then safety guidance.",
     "Be reassuring when findings look mild or near-normal, but remain safety-first.",
     "For LAB REPORT queries:",
-"- Start with a short overall summary of the full visible report in 2-3 bullets.",
-"- Then explain the important visible values in plain language.",
-"- Clearly say whether each visible important value is low, high, borderline, or normal.",
-"- Prioritize abnormal and borderline values, but do not ignore other clearly visible relevant values just because they are normal.",
-"- If many values are visible, keep normal ones brief and easy to understand.",
-"- Mention if findings look mild, moderate, or potentially important based only on visible data.",
-"- Briefly explain likely significance, but do not claim final diagnosis.",
+    "- Start with a short overall summary of the full visible report in 2-3 bullets.",
+    "- Then explain the important visible values in plain language.",
+    "- Clearly say whether each visible important value is low, high, borderline, or normal.",
+    "- Prioritize abnormal and borderline values, but do not ignore other clearly visible relevant values just because they are normal.",
+    "- If many values are visible, keep normal ones brief and easy to understand.",
+    "- Mention if findings look mild, moderate, or potentially important based only on visible data.",
+    "- Briefly explain likely significance, but do not claim final diagnosis.",
     "For PRESCRIPTION queries:",
     "- Explain what each visible medicine is generally used for, in simple words.",
     "- Explain visible dosage/timing in easy language.",
@@ -366,6 +411,7 @@ async function getRecentAttachmentContext({ userId, context }) {
   const session = await AiSession.findOne({ userId, whoFor, whoForLabel })
     .sort({ updatedAt: -1 })
     .lean();
+
   if (!session?.attachments?.length) return null;
 
   const last = session.attachments[session.attachments.length - 1];
@@ -382,13 +428,24 @@ async function generateAssistantReply({ message, history, context, userId, attac
   const baseUserMessage = String(message || "").trim();
   const cleanHistory = compactHistory(history, 16);
   const resolvedContext = await buildHealthContext({ userId, context });
-  const recalledAttachment = attachment ? null : await getRecentAttachmentContext({ userId, context: resolvedContext });
-  const userMessage = recalledAttachment
+
+  const recalledAttachment = attachment
+    ? null
+    : await getRecentAttachmentContext({ userId, context: resolvedContext });
+
+  const reusePreviousAttachment = shouldReuseRecentAttachment({
+    message: baseUserMessage,
+    attachment,
+    context: resolvedContext,
+    recalledAttachment,
+  });
+
+  const userMessage = reusePreviousAttachment
     ? [
         baseUserMessage,
         "",
         `Previous uploaded file in this chat: ${recalledAttachment.name}`,
-        "Use this extracted text context for continuity:",
+        "Use this extracted text context for continuity only if directly relevant to the current user message:",
         recalledAttachment.text,
       ].join("\n")
     : baseUserMessage;
