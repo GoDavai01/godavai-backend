@@ -223,6 +223,7 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/chat", require("./routes/chat"));
 app.use("/api/ai", require("./routes/ai"));
 app.use("/api/health-vault", require("./routes/healthVault"));
+app.use("/api/doctors", require("./routes/doctors"));
 app.use("/api/support-chat", require("./routes/supportChat"));
 app.use('/api/admin', require('./routes/admin'));
 app.use("/api/suggest", suggestRouter);
