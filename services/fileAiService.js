@@ -156,6 +156,53 @@ function normalizeExtractedText(text) {
     .trim();
 }
 
+/* ─────────────────────────────────────────────────────────────
+   FIX #1: Improved parseLabMarkers with QUALITY CHECKS
+   - Requires marker names to have real alphabetic content
+   - Rejects garbage OCR noise like /0@#A, X7, 5=$#
+   - If most markers look bad, returns empty (forces GPT fallback)
+   ───────────────────────────────────────────────────────────── */
+function isValidMarkerName(name) {
+  const cleaned = String(name || "").trim();
+  if (cleaned.length < 2) return false;
+
+  // Count alphabetic characters
+  const alphaChars = (cleaned.match(/[a-zA-Z]/g) || []).length;
+  const totalChars = cleaned.replace(/\s/g, "").length;
+
+  // Must have at least 2 alpha chars and at least 40% of name must be letters
+  if (alphaChars < 2) return false;
+  if (totalChars > 0 && alphaChars / totalChars < 0.4) return false;
+
+  // Reject names that are mostly special characters
+  const specialCount = (cleaned.match(/[^a-zA-Z0-9\s\-\.\/()]/g) || []).length;
+  if (specialCount > alphaChars) return false;
+
+  // Known valid lab marker substrings (at least one should match for confidence)
+  const knownPatterns = [
+    /hemoglobin|hb\b|wbc|rbc|platelet|pcv|hct|mcv|mch\b|mchc/i,
+    /neutrophil|lymphocyte|monocyte|eosinophil|basophil|esr\b/i,
+    /glucose|sugar|fasting|hba1c|creatinine|urea|bun\b|uric/i,
+    /bilirubin|sgpt|sgot|alt\b|ast\b|alkaline|albumin|globulin/i,
+    /cholesterol|triglyceride|hdl\b|ldl\b|vldl/i,
+    /tsh\b|t3\b|t4\b|vitamin|ferritin|iron\b|calcium/i,
+    /sodium|potassium|chloride|crp\b|phosph/i,
+    /protein|blood|serum|plasma|urine|count|total|diff/i,
+    /liver|kidney|thyroid|lipid|panel|profile|test/i,
+    /magnesium|zinc|folate|folic|b12|d3\b|copper/i,
+  ];
+
+  // If it matches a known pattern, it's very likely valid
+  for (const p of knownPatterns) {
+    if (p.test(cleaned)) return true;
+  }
+
+  // If name is short (< 4 chars) and doesn't match known patterns, reject
+  if (alphaChars < 4) return false;
+
+  return true;
+}
+
 function parseLabMarkers(text) {
   const src = normalizeExtractedText(text);
   const lines = src.split(/\r?\n/);
@@ -254,6 +301,9 @@ function parseLabMarkers(text) {
 
       if (!marker || !Number.isFinite(value)) continue;
 
+      // ✅ FIX: Validate marker name quality
+      if (!isValidMarkerName(marker)) continue;
+
       rows.push({
         marker,
         value,
@@ -267,6 +317,9 @@ function parseLabMarkers(text) {
     marker = cleanMarkerName(match[1]);
     value = Number(String(match[2]).replace(/,/g, ""));
     if (!marker || !Number.isFinite(value)) continue;
+
+    // ✅ FIX: Validate marker name quality
+    if (!isValidMarkerName(marker)) continue;
 
     if (patternIndex === 1) {
       explicitFlag = String(match[3] || "").trim().toLowerCase();
@@ -297,6 +350,17 @@ function parseLabMarkers(text) {
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(row);
+  }
+
+  // ✅ FIX: Quality gate — if too many markers look suspicious, return empty
+  // This forces the system to rely on GPT analysis of raw text instead
+  if (deduped.length > 0) {
+    const validCount = deduped.filter((r) => isValidMarkerName(r.marker)).length;
+    const validRatio = validCount / deduped.length;
+    if (validRatio < 0.3) {
+      console.warn(`[parseLabMarkers] Quality too low: ${validCount}/${deduped.length} valid markers. Skipping parsed markers.`);
+      return [];
+    }
   }
 
   deduped.sort((a, b) => {
@@ -547,6 +611,27 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
   }
 }
 
+/* ─────────────────────────────────────────────────────────────
+   FIX #2: Improved OCR text quality check
+   Detects if extracted text is mostly garbage/noise
+   ───────────────────────────────────────────────────────────── */
+function isExtractedTextUsable(text) {
+  if (!text || text.length < 20) return false;
+
+  // Count readable vs total characters
+  const readable = (text.match(/[a-zA-Z0-9\s.,:\-/()%+]/g) || []).length;
+  const total = text.length;
+
+  // If less than 30% readable, it's garbage
+  if (total > 0 && readable / total < 0.3) return false;
+
+  // Check for common medical/report words
+  const medicalWords = /\b(test|result|normal|range|value|report|patient|date|name|age|doctor|lab|hospital|blood|urine|serum|plasma|total|count)\b/i;
+  if (!medicalWords.test(text) && text.length < 200) return false;
+
+  return true;
+}
+
 async function extractTextAndParsed(file, mode) {
   const kind = fileKind(file);
   let extractedText = "";
@@ -559,40 +644,36 @@ async function extractTextAndParsed(file, mode) {
       parsed.csv = parseCsvToObjects(extractedText).slice(0, 120);
     }
   } else if (kind.image || kind.pdf) {
+    // ✅ FIX: Try local OCR first
     try {
       const ocr = await withTempFile(file, async (p) => extractTextPlus(p));
       extractedText = normalizeExtractedText(ocr?.text || "");
-      if (extractedText) {
+      if (extractedText && isExtractedTextUsable(extractedText)) {
         parsed.ocrEngine = parsed.ocrEngine || "local-ocr";
+      } else {
+        debugErrors.push("local_ocr_unusable_text");
+        extractedText = ""; // Reset — text is garbage
       }
     } catch (err) {
       debugErrors.push(`ocr_text_failed:${err?.message || "unknown"}`);
       extractedText = "";
     }
 
+    // ✅ FIX: For PDFs, try pdf-parse
     if (!extractedText && kind.pdf) {
       const pdfText = await extractPdfTextWithPdfParse(file.buffer);
-      if (pdfText) {
+      if (pdfText && isExtractedTextUsable(pdfText)) {
         extractedText = pdfText;
         parsed.ocrEngine = parsed.ocrEngine || "pdf-parse";
       } else {
-        debugErrors.push("pdf_parse_empty");
+        debugErrors.push("pdf_parse_empty_or_unusable");
       }
     }
 
-    if (!extractedText && kind.pdf) {
-      const pdfText = extractPdfTextHeuristic(file.buffer);
-      if (pdfText) {
-        extractedText = pdfText;
-        parsed.ocrEngine = parsed.ocrEngine || "pdf-heuristic-text";
-      } else {
-        debugErrors.push("pdf_heuristic_empty");
-      }
-    }
-
+    // ✅ FIX: For images, try OpenAI vision OCR BEFORE heuristic (it's much better)
     if (!extractedText && kind.image) {
       const viaOpenAI = await ocrImageWithOpenAI(file.buffer, kind.mime || "image/png");
-      if (viaOpenAI) {
+      if (viaOpenAI && isExtractedTextUsable(viaOpenAI)) {
         extractedText = viaOpenAI;
         parsed.ocrEngine = parsed.ocrEngine || "openai-image-ocr";
       } else {
@@ -600,11 +681,28 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
+    // ✅ FIX: For PDFs where text extraction failed, go straight to image-based OCR
+    // This is the KEY fix for multi-page scanned PDFs
     if (!extractedText && kind.pdf) {
+      // Skip heuristic text extraction — it produces garbage on scanned PDFs
+      // Go directly to image-based OCR (renders pages as images, then OCR each)
       const viaImage = await extractPdfViaImageFallback(file.buffer, debugErrors);
-      if (viaImage) {
+      if (viaImage && isExtractedTextUsable(viaImage)) {
         extractedText = viaImage;
         parsed.ocrEngine = parsed.ocrEngine || "pdf-image-ocr-fallback";
+      } else {
+        debugErrors.push("pdf_image_ocr_unusable");
+      }
+    }
+
+    // Last resort: heuristic PDF text (only if nothing else worked)
+    if (!extractedText && kind.pdf) {
+      const pdfText = extractPdfTextHeuristic(file.buffer);
+      if (pdfText && isExtractedTextUsable(pdfText)) {
+        extractedText = pdfText;
+        parsed.ocrEngine = parsed.ocrEngine || "pdf-heuristic-text";
+      } else {
+        debugErrors.push("pdf_heuristic_empty_or_unusable");
       }
     }
 
@@ -719,19 +817,25 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
 
   const textPreview = extractedText ? extractedText.slice(0, 15000) : "";
 
+  // ✅ FIX: Only build parsed summary if markers are valid
   const parsedSummary =
-    mode === "lab"
+    mode === "lab" && parsed.labMarkers?.length
       ? buildLabSummary(parsed.labMarkers)
       : (mode === "rx" || mode === "medicine")
         ? buildRxSummary(parsed.rxItems)
         : "";
+
+  // ✅ FIX: If no usable text was extracted, tell GPT clearly
+  const noTextMessage = !textPreview
+    ? "\n\nIMPORTANT: No readable text could be extracted from this file. The file may be a scanned image with low quality, or the OCR failed. Please tell the user to upload a clearer image or PDF of their report. Do NOT make up or guess any values."
+    : "";
 
   const mergedMessage = [
     String(message || "").trim() || "Please analyze this uploaded medical file.",
     "",
     buildModeInstructions(mode),
     parsedSummary ? `\n\n${parsedSummary}` : "",
-    textPreview ? `\n\nFile Extracted Text:\n${textPreview}` : "\n\nNo extractable text was found in the file.",
+    textPreview ? `\n\nFile Extracted Text:\n${textPreview}` : noTextMessage,
   ].join("");
 
   const ai = await generateAssistantReply({

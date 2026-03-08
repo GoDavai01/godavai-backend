@@ -59,16 +59,46 @@ async function synthesizeSpeech({ text, language }) {
 
   const voice = String(process.env.AI_TTS_VOICE || "ash");
 
+  // ✅ FIX: Much better Hinglish TTS instructions
+  // Previous issue: voice was pronouncing Hindi words in English accent
+  // and English words in Hindi accent randomly
+  const hindiInstructions = [
+    "Speak clearly in Hindi (Devanagari pronunciation).",
+    "Use a warm, caring, professional doctor-like tone.",
+    "Pronounce medical terms (like hemoglobin, creatinine, paracetamol) in their standard English pronunciation.",
+    "Speak at a natural conversational pace, not too fast.",
+  ].join(" ");
+
+  const hinglishInstructions = [
+    "You are speaking in Hinglish — a natural mix of Hindi and English as spoken in urban India.",
+    "CRITICAL PRONUNCIATION RULES:",
+    "- Hindi words must be pronounced with proper Hindi/Devanagari pronunciation (e.g., 'dawai' = दवाई, 'doodh' = दूध, 'haldi' = हल्दी).",
+    "- English medical terms must be pronounced in standard English (e.g., 'hemoglobin', 'vitamin D', 'creatinine', 'paracetamol').",
+    "- Common Hinglish fillers like 'basically', 'actually', 'so' should be in English pronunciation.",
+    "- Numbers can be in English.",
+    "- DO NOT pronounce Hindi words with an English accent.",
+    "- DO NOT pronounce English words with a Hindi accent.",
+    "Tone: warm, caring, like a friendly Indian doctor explaining to a patient. Natural conversational pace.",
+  ].join(" ");
+
+  const englishInstructions = [
+    "Speak clearly in English with a warm, professional medical tone.",
+    "Pronounce all medical terms clearly and correctly.",
+    "Use a caring, doctor-like conversational pace.",
+  ].join(" ");
+
+  const instructions = language === "hi"
+    ? hindiInstructions
+    : language === "hinglish"
+      ? hinglishInstructions
+      : englishInstructions;
+
   try {
     const out = await client.audio.speech.create({
       model: process.env.AI_TTS_MODEL || "gpt-4o-mini-tts",
       voice,
       input: clean.slice(0, 4000),
-      instructions: language === "hi"
-        ? "Speak clearly in Hindi with a warm, caring doctor-like tone. Pronounce medical terms clearly."
-        : language === "hinglish"
-          ? "Speak in a natural Hinglish mix — Hindi sentences with English medical terms. Clear pronunciation, warm tone, like a friendly doctor explaining to a patient."
-          : "Speak clearly in English with a warm, professional medical tone.",
+      instructions,
       format: "mp3",
     });
 
