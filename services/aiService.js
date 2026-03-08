@@ -103,7 +103,7 @@ function buildSystemPrompt(ctx) {
     "- If extracted file text is provided in the user message, treat that as observed file content.",
     "- If previous uploaded file text is included for continuity, use it only when the current user message is clearly referring to that same file.",
     "- Do not say you cannot see files/images when extracted content is present.",
-    "- Do not use markdown formatting symbols like **, __, #, or code blocks.",
+    "- Do not use markdown formatting symbols like **, __, #, ##, ###, or code blocks. Write section headers as plain text like 'Assessment:' NOT '### Assessment:' or '**Assessment:**'.",
     "- Do not invent missing values, diagnoses, dosages if they are not visible.",
     "- If something is not visible, say: not clearly visible in report/prescription.",
     "- Do not overuse 'consult doctor' in every line. Give practical explanation FIRST, then safety guidance.",
@@ -190,6 +190,7 @@ function sanitizeReplyFormatting(text) {
     .replace(/__([^_]+)__/g, "$1")
     .replace(/^\s*[*•]\s+/gm, "- ")
     .replace(/`{1,3}/g, "")
+    .replace(/^#{1,6}\s*/gm, "")       // ✅ Strip ### markdown headers (ROOT CAUSE of repeat)
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
