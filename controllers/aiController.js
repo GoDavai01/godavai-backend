@@ -1,3 +1,9 @@
+// controllers/aiController.js — GoDavaii AI Controller (merged)
+// ✅ Keeps: parseMaybeJson safety, pickUserId fallback (from OLD)
+// ✅ Fixed: listSessions returns raw array (frontend does Array.isArray(data))
+// ✅ Fixed: getSession returns raw object (frontend does data?.messages)
+// ✅ Fixed: tts passes language properly to synthesizeSpeech
+
 const { generateAssistantReply, listSessions, getSessionById } = require("../services/aiService");
 const { analyzeFileForAssistant } = require("../services/fileAiService");
 const { transcribeAudio, synthesizeSpeech } = require("../services/audioService");
@@ -13,7 +19,7 @@ function parseMaybeJson(value, fallback) {
 }
 
 function pickUserId(req, context) {
-  return req?.user?.userId || context?.userSummary?.id || null;
+  return req?.user?.userId || req?.user?._id || context?.userSummary?.id || null;
 }
 
 async function chat(req, res) {
@@ -91,11 +97,11 @@ async function stt(req, res) {
 async function tts(req, res) {
   try {
     const text = String(req.body?.text || "").trim();
-    const language = String(req.body?.language || "en");
+    const language = String(req.body?.language || "hinglish");
     if (!text) {
       return res.status(400).json({ error: "text is required" });
     }
-    const out = await synthesizeSpeech({ text, language });
+    const out = await synthesizeSpeech({ text: text.slice(0, 4000), language });
     return res.json(out);
   } catch (err) {
     console.error("AI TTS controller error:", err?.message || err);
@@ -108,24 +114,29 @@ module.exports = {
   analyzeFile,
   stt,
   tts,
+
+  // Returns RAW ARRAY — frontend: setChatSessions(Array.isArray(data) ? data : [])
   listSessions: async (req, res) => {
     try {
-      const userId = req?.user?.userId;
+      const userId = req?.user?.userId || req?.user?._id;
       if (!userId) return res.status(401).json({ error: "Unauthorized" });
       const sessions = await listSessions({ userId, limit: req.query?.limit });
-      return res.json({ sessions });
+      return res.json(sessions);
     } catch (err) {
       console.error("AI list sessions error:", err?.message || err);
       return res.status(500).json({ error: "Failed to list sessions" });
     }
   },
+
+  // Returns RAW OBJECT — frontend: if (data?.messages?.length)
   getSession: async (req, res) => {
     try {
-      const userId = req?.user?.userId;
+      const userId = req?.user?.userId || req?.user?._id;
       if (!userId) return res.status(401).json({ error: "Unauthorized" });
-      const session = await getSessionById({ userId, sessionId: req.params?.sessionId });
+      const sessionId = req.params?.sessionId || req.params?.id;
+      const session = await getSessionById({ userId, sessionId });
       if (!session) return res.status(404).json({ error: "Session not found" });
-      return res.json({ session });
+      return res.json(session);
     } catch (err) {
       console.error("AI get session error:", err?.message || err);
       return res.status(500).json({ error: "Failed to get session" });
