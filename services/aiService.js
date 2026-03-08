@@ -89,12 +89,13 @@ function buildSystemPrompt(ctx) {
   return [
     "You are GoDavaii AI — India's most trusted personal health assistant. You aim to give such thorough, practical, and caring guidance that users feel confident managing their health without rushing to a doctor for every small issue.",
     "",
-    "LANGUAGE RULE (CRITICAL):",
-    "- Detect the language the user writes in and reply in the EXACT SAME language.",
-    "- If user writes in Hindi (Devanagari), reply fully in Hindi.",
-    "- If user writes in English, reply in English.",
-    "- If user writes in Hinglish (mixed), reply in Hinglish.",
-    "- NEVER mix languages unless the user does.",
+    "LANGUAGE RULE (CRITICAL — THIS IS THE #1 PRIORITY RULE):",
+    "- You MUST detect the language the user writes in and reply in the EXACT SAME language.",
+    "- If user writes FULLY in English → reply FULLY in English. Do NOT mix Hindi words.",
+    "- If user writes in Hindi (Devanagari script) → reply fully in Hindi.",
+    "- If user writes in Hinglish (mixed Hindi-English in Roman script like 'mujhe bukhar hai') → reply in Hinglish.",
+    "- NEVER default to Hinglish when the user wrote in English.",
+    "- The language of the CURRENT message determines your reply language, not previous messages.",
     "",
     `Audience: ${ctx.whoFor} (${whoLabel}). Focus: ${ctx.focus}.`,
     profileBits.length ? `Context data: ${profileBits.join(" | ")}` : "Context data: limited.",
@@ -155,30 +156,27 @@ function buildSystemPrompt(ctx) {
     "- 3-6 specific, actionable practical steps.",
     "- Include diet advice, lifestyle changes, OTC medicines with dosage when appropriate.",
     "",
-    "Red flags:",
-    "- MUST have 3-5 SPECIFIC red flag symptoms relevant to THIS condition.",
-    "- Not generic — tailor to what the user asked about.",
-    "- Example for fever: 'Agar fever 103°F+ ho', 'Agar rash aaye', 'Agar neck stiffness ho', 'Agar breathing fast ho ya difficulty ho'.",
-    "",
-    "When to see doctor:",
-    "- MUST have 3-4 specific triggers telling user EXACTLY when to visit doctor.",
-    "- Include timeframes: 'Agar 3 din me fever na utre', 'Agar 1 week me pain same rahe'.",
-    "- Include severity markers: 'Agar dard itna ho ki neend na aaye', 'Agar khana-peena band ho jaye'.",
+    "Warning signs:",
+    "- This section combines red flags AND when to see a doctor into ONE clear list.",
+    "- MUST have 5-8 items total.",
+    "- Mix urgent red flags (go to ER immediately) with doctor-visit triggers (see doctor within X days).",
+    "- Format each item with a clear action: 'Go to ER if...' or 'See doctor within 2-3 days if...'",
+    "- Include timeframes and severity markers.",
+    "- Example: 'Go to ER immediately if fever goes above 103°F or you have chest pain'",
+    "- Example: 'See a doctor within 2-3 days if fever doesn't come down with medication'",
+    "- Example: 'See a doctor if pain is so severe you can't sleep or walk'",
     "",
     "Desi ilaaj:",
     "- ALWAYS include this section in EVERY response.",
     "- Suggest 2-4 evidence-backed Indian home remedies relevant to the specific condition.",
-    "- Be specific: 'Haldi wala doodh — 1 glass garam doodh me 1/2 teaspoon haldi, raat ko sone se pehle' NOT just 'haldi doodh piyo'.",
-    "- Include preparation method and timing.",
-    "- Examples: adrak chai for cold, jeera paani for digestion, tulsi kadha for immunity, nimbu-shahad for throat.",
-    "- End with: 'Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.'",
+    "- Be specific with preparation method and timing.",
+    "- End with a note that these help but for serious symptoms see a doctor.",
     "",
     "Formatting rules:",
     "- Keep each section detailed and useful — do NOT give 1-2 line sections.",
     "- Assessment should usually have 4-8 bullet points.",
     "- Next steps should have 3-6 practical bullet points.",
-    "- Red flags MUST have 3-5 items (NEVER just 1 generic line).",
-    "- When to see doctor MUST have 3-4 items.",
+    "- Warning signs MUST have 5-8 items mixing ER triggers + doctor visit triggers.",
     "- Desi ilaaj MUST have 2-4 items with preparation details.",
     "- Keep the tone warm, caring, like a trusted family doctor who takes time to explain everything.",
   ].join("\n");
@@ -190,7 +188,7 @@ function sanitizeReplyFormatting(text) {
     .replace(/__([^_]+)__/g, "$1")
     .replace(/^\s*[*•]\s+/gm, "- ")
     .replace(/`{1,3}/g, "")
-    .replace(/^#{1,6}\s*/gm, "")       // ✅ Strip ### markdown headers (ROOT CAUSE of repeat)
+    .replace(/^#{1,6}\s*/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -206,7 +204,7 @@ function normalizeSectionBody(text) {
 function extractSection(text, heading) {
   const src = String(text || "");
   const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const headings = ["Assessment", "Next steps", "Red flags", "When to see doctor", "Desi ilaaj", "Home remedies"];
+  const headings = ["Assessment", "Next steps", "Warning signs", "Red flags", "When to see doctor", "Desi ilaaj", "Home remedies"];
   const other = headings
     .filter((h) => h !== heading)
     .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -239,10 +237,21 @@ function postProcessReply(reply, ctx, redFlags) {
 
   let assessment = extractSection(raw, "Assessment");
   let nextSteps = extractSection(raw, "Next steps");
-  let redFlagsBody = extractSection(raw, "Red flags");
-  let whenDoctor = extractSection(raw, "When to see doctor");
   let desiIlaajBody = extractSection(raw, "Desi ilaaj");
   if (!desiIlaajBody) desiIlaajBody = extractSection(raw, "Home remedies");
+
+  // ✅ FIX: Merged section — try "Warning signs" first, then fall back to old separate sections
+  let warningSignsBody = extractSection(raw, "Warning signs");
+
+  // If GPT still used old format, merge the two old sections
+  if (!warningSignsBody) {
+    const redFlagsBody = extractSection(raw, "Red flags");
+    const whenDoctor = extractSection(raw, "When to see doctor");
+    const merged = [redFlagsBody, whenDoctor].filter(Boolean).join("\n");
+    if (merged.trim()) {
+      warningSignsBody = merged;
+    }
+  }
 
   const focus = String(ctx?.focus || "").toLowerCase();
 
@@ -280,74 +289,46 @@ function postProcessReply(reply, ctx, redFlags) {
   }
 
   if (!assessment) {
-    if (focus === "lab") {
-      assessment = [
-        "- Report ke visible values ke basis par summary di ja rahi hai.",
-        "- Jo values high, low, ya borderline hain unka simple meaning bataya jana chahiye.",
-      ].join("\n");
-    } else if (focus === "rx" || focus === "medicine") {
-      assessment = [
-        "- Visible medicine/prescription details ko simple language me explain kiya jana chahiye.",
-        "- Common use aur common side effects bataye jane chahiye agar medicine identify ho rahi ho.",
-      ].join("\n");
-    } else if (focus === "xray") {
-      assessment = [
-        "- Visible scan/x-ray findings ko simple language me explain kiya jana chahiye.",
-        "- Jo cheez image me clearly visible nahi hai usko guess nahi kiya jana chahiye.",
-      ].join("\n");
-    } else {
-      assessment = [
-        "- Symptoms ki simple triage summary di ja rahi hai.",
-        "- Final diagnosis claim nahi kiya ja raha.",
-      ].join("\n");
-    }
+    assessment = [
+      "- Need more details for a thorough assessment.",
+      "- Please share specific symptoms, duration, and severity for better guidance.",
+    ].join("\n");
   }
 
   if (!nextSteps) {
     nextSteps = [
-      "- Symptoms ya report ko track karein.",
-      "- Agar condition mild ho to basic care continue karein.",
-      "- Agar problem worsen ho to medical help lein.",
+      "- Track your symptoms carefully.",
+      "- If condition is mild, continue basic care.",
+      "- If problem worsens, seek medical help.",
     ].join("\n");
   }
 
-  if (!redFlagsBody) {
-    redFlagsBody = redFlags && redFlags.length
+  if (!warningSignsBody) {
+    warningSignsBody = redFlags && redFlags.length
       ? redFlags.map((x) => `- ${x}`).join("\n")
       : [
-          "- Severe breathing problem, chest pain, ya confusion ho to turant hospital jayein.",
-          "- High fever (103°F+) jo 2 din se na utre.",
-          "- Severe weakness, fainting, seizures, ya uncontrolled bleeding.",
-          "- Rash, swelling, ya allergic reaction ka koi sign.",
+          "- Go to ER immediately if you have severe breathing problems, chest pain, or confusion.",
+          "- Go to ER if high fever (103°F+) doesn't respond to medication for 2+ days.",
+          "- See a doctor within 1-2 days if symptoms don't improve with home care.",
+          "- See a doctor if pain is severe enough to disrupt sleep or daily activities.",
+          "- See a doctor if you notice unusual rash, swelling, or allergic reaction signs.",
         ].join("\n");
-  }
-
-  if (!whenDoctor) {
-    whenDoctor = [
-      "- Agar symptoms 2-3 din me better na hon — doctor ko dikhayein.",
-      "- Agar dard itna ho ki daily kaam na kar paayein ya neend na aaye.",
-      "- Agar fever, weakness, vomiting, rash, ya breathing issue badhe.",
-      "- Agar medicine se unusual side effects mehsoos hon.",
-    ].join("\n");
   }
 
   assessment = ensureUsefulBullets(assessment, [
     "Simple explanation based on visible information.",
-    "Final diagnosis confirm nahi ki ja rahi.",
+    "Final diagnosis cannot be confirmed without proper examination.",
   ]);
 
   nextSteps = ensureUsefulBullets(nextSteps, [
-    "Hydration, rest, aur symptom monitoring rakhein.",
-    "Jo advice clearly visible hai usko follow karein.",
-    "Agar worsening ho to doctor se baat karein.",
+    "Stay hydrated, rest, and monitor symptoms.",
+    "Follow any visible medical advice.",
+    "If worsening, consult a doctor.",
   ]);
 
-  redFlagsBody = ensureUsefulBullets(redFlagsBody, [
-    "Severe symptoms me urgent care lein.",
-  ]);
-
-  whenDoctor = ensureUsefulBullets(whenDoctor, [
-    "Agar symptoms persist ya worsen karein to doctor ko dikhayein.",
+  warningSignsBody = ensureUsefulBullets(warningSignsBody, [
+    "Go to ER for severe symptoms like chest pain, breathing trouble, or confusion.",
+    "See a doctor within 2-3 days if symptoms persist or worsen.",
   ]);
 
   desiIlaajBody = ensureUsefulBullets(desiIlaajBody, [
@@ -363,11 +344,8 @@ function postProcessReply(reply, ctx, redFlags) {
     "Next steps:",
     nextSteps,
     "",
-    "Red flags:",
-    redFlagsBody,
-    "",
-    "When to see doctor:",
-    whenDoctor,
+    "Warning signs:",
+    warningSignsBody,
     "",
     "Desi ilaaj:",
     desiIlaajBody,
@@ -382,22 +360,20 @@ function buildFallbackReply(message, ctx, redFlags) {
     return postProcessReply(
       [
         "Assessment:",
-        `- ${who} ke liye report ka simple summary dene ke liye visible values chahiye.`,
-        "- Agar Hb, WBC, Platelet, TSH, Creatinine, Sugar, ya koi highlighted value visible hai to uska meaning samjhaya ja sakta hai.",
-        "- Abhi jo value clear nahi hai usko guess nahi kiya jayega.",
+        `- For ${who}, a simple summary requires visible report values.`,
+        "- If Hb, WBC, Platelet, TSH, Creatinine, Sugar, or any highlighted value is visible, it can be explained.",
+        "- Values that are not clear will not be guessed.",
         "",
         "Next steps:",
-        "- Report ki clear image/PDF bhejein.",
-        "- Important values + unit + reference range share karein.",
-        "- Agar weakness, fever, bleeding, severe pain, ya breathing issue hai to mention karein.",
+        "- Please send a clear image/PDF of the report.",
+        "- Share important values + units + reference ranges.",
+        "- Mention if there is weakness, fever, bleeding, severe pain, or breathing issues.",
         "",
-        "Red flags:",
-        redFlags.length ? redFlags.map((x) => `- ${x}`).join("\n") : "- Severe weakness, heavy bleeding, chest pain, breathing problem, confusion, ya fainting ho to urgent care lein.",
-        "",
-        "When to see doctor:",
-        "- Agar abnormal values clearly high/low hon.",
-        "- Agar symptoms bhi saath me present hon.",
-        "- Agar repeated reports me pattern abnormal aa raha ho.",
+        "Warning signs:",
+        "- Go to ER immediately for severe weakness, heavy bleeding, chest pain, breathing problems, confusion, or fainting.",
+        "- See a doctor if abnormal values are clearly high/low.",
+        "- See a doctor if symptoms are present alongside abnormal values.",
+        "- See a doctor if repeated reports show an abnormal pattern.",
       ].join("\n"),
       ctx,
       redFlags
@@ -408,21 +384,19 @@ function buildFallbackReply(message, ctx, redFlags) {
     return postProcessReply(
       [
         "Assessment:",
-        `- ${who} ke liye medicine/prescription ko simple language me explain kiya ja sakta hai.`,
-        "- Isme use, common side effects, aur important cautions bataye ja sakte hain.",
+        `- For ${who}, the medicine/prescription can be explained in simple language.`,
+        "- This includes use, common side effects, and important cautions.",
         "",
         "Next steps:",
-        "- Medicine ka naam aur strength share karein, jaise Paracetamol 650.",
-        "- Prescription image clear bhejein.",
-        "- Age, pregnancy, allergy, kidney/liver disease bhi batayein.",
+        "- Share the medicine name and strength, like Paracetamol 650.",
+        "- Send a clear prescription image.",
+        "- Mention age, pregnancy, allergies, kidney/liver disease.",
         "",
-        "Red flags:",
-        "- Severe allergy, swelling, breathing issue, fainting ho to urgent care lein.",
-        "- Severe vomiting, black stools, ya severe drowsiness ho to turant hospital jayein.",
-        "",
-        "When to see doctor:",
-        "- Agar medicine se relief na mile 2-3 din me.",
-        "- Agar side effects troublesome hon.",
+        "Warning signs:",
+        "- Go to ER for severe allergy, swelling, breathing issues, or fainting.",
+        "- Go to ER for severe vomiting, black stools, or severe drowsiness.",
+        "- See a doctor within 2-3 days if medicine doesn't provide relief.",
+        "- See a doctor if side effects are troublesome.",
       ].join("\n"),
       ctx,
       redFlags
@@ -433,20 +407,18 @@ function buildFallbackReply(message, ctx, redFlags) {
     return postProcessReply(
       [
         "Assessment:",
-        `- ${who} ke liye x-ray/scan image ka simple explanation diya ja sakta hai agar visible findings clear hon.`,
-        "- Fracture, shadow, opacity, swelling, mass, effusion ka general meaning samjhaya ja sakta hai.",
+        `- For ${who}, x-ray/scan findings can be explained simply if visible findings are clear.`,
+        "- Fracture, shadow, opacity, swelling, mass, effusion meanings can be explained.",
         "",
         "Next steps:",
-        "- Clear x-ray/scan image ya report upload karein.",
-        "- Bataein pain, injury, breathing issue, fever, ya trauma history hai ya nahi.",
+        "- Upload a clear x-ray/scan image or report.",
+        "- Mention if there is pain, injury, breathing issues, fever, or trauma history.",
         "",
-        "Red flags:",
-        "- Severe trauma, breathing issue, chest pain ho to urgent care lein.",
-        "- Limb deformity, weakness, numbness, ya severe swelling ho to turant hospital jayein.",
-        "",
-        "When to see doctor:",
-        "- Agar image me fracture ya concerning shadow ka doubt ho.",
-        "- Agar pain ya symptoms worsen kar rahe hon.",
+        "Warning signs:",
+        "- Go to ER for severe trauma, breathing issues, or chest pain.",
+        "- Go to ER for limb deformity, weakness, numbness, or severe swelling.",
+        "- See a doctor if there is suspicion of fracture or concerning shadow.",
+        "- See a doctor if pain or symptoms are worsening.",
       ].join("\n"),
       ctx,
       redFlags
@@ -456,23 +428,20 @@ function buildFallbackReply(message, ctx, redFlags) {
   return postProcessReply(
     [
       "Assessment:",
-      `- ${who} ke symptoms ka simple first-level guidance diya ja sakta hai.`,
-      "- Better answer ke liye age, symptom duration, severity, fever value, aur current medicines useful honge.",
+      `- For ${who}, first-level symptom guidance can be provided.`,
+      "- For a better answer, age, symptom duration, severity, fever value, and current medicines are helpful.",
       "",
       "Next steps:",
-      "- Main symptom, kab se hai, kitna severe hai, yeh likhein.",
-      "- Existing diseases aur medicines bhi share karein.",
-      "- Agar fever/sugar/BP/oxygen reading hai to add karein.",
+      "- Describe the main symptom, when it started, and how severe it is.",
+      "- Share existing diseases and medicines.",
+      "- Add fever/sugar/BP/oxygen readings if available.",
       "",
-      "Red flags:",
-      "- Severe chest pain, breathing trouble, confusion ho to turant hospital jayein.",
-      "- Seizures, fainting, severe dehydration, ya uncontrolled bleeding ho to emergency care lein.",
-      "- High fever (103°F+) jo 2 din se na utre.",
-      "",
-      "When to see doctor:",
-      "- Agar symptoms 2-3 din me improve na hon.",
-      "- Agar severe pain, weakness, ya persistent vomiting ho.",
-      "- Agar daily kaam karna mushkil ho raha ho.",
+      "Warning signs:",
+      "- Go to ER immediately for severe chest pain, breathing trouble, or confusion.",
+      "- Go to ER for seizures, fainting, severe dehydration, or uncontrolled bleeding.",
+      "- See a doctor within 2-3 days if symptoms don't improve.",
+      "- See a doctor if severe pain, weakness, or persistent vomiting occurs.",
+      "- See a doctor if daily activities become difficult.",
     ].join("\n"),
     ctx,
     redFlags
@@ -498,7 +467,7 @@ async function upsertSession({ userId, context, userText, assistantText, attachm
       userId,
       whoFor,
       whoForLabel,
-      language: context?.language || "hinglish",
+      language: context?.language || "auto",
       focus: context?.focus || "auto",
       messages: [],
       attachments: [],
