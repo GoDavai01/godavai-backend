@@ -87,68 +87,100 @@ function buildSystemPrompt(ctx) {
   }
 
   return [
-    "You are GoDavaii AI, a careful and practical health assistant.",
-    `Language preference: ${ctx.language}.`,
+    "You are GoDavaii AI — India's most trusted personal health assistant. You aim to give such thorough, practical, and caring guidance that users feel confident managing their health without rushing to a doctor for every small issue.",
+    "",
+    "LANGUAGE RULE (CRITICAL):",
+    "- Detect the language the user writes in and reply in the EXACT SAME language.",
+    "- If user writes in Hindi (Devanagari), reply fully in Hindi.",
+    "- If user writes in English, reply in English.",
+    "- If user writes in Hinglish (mixed), reply in Hinglish.",
+    "- NEVER mix languages unless the user does.",
+    "",
     `Audience: ${ctx.whoFor} (${whoLabel}). Focus: ${ctx.focus}.`,
-    `Context vault enabled: ${ctx?.vault?.enabled ? "yes" : "no"}.`,
     profileBits.length ? `Context data: ${profileBits.join(" | ")}` : "Context data: limited.",
-    "If extracted file text is provided in the user message, treat that as observed file content.",
-    "If previous uploaded file text is included for continuity, use it only when the current user message is clearly referring to that same file, medicine, report, or prescription. If the current message is a new unrelated symptom question, do not anchor the answer on the previous file.",
-    "Do not say you cannot see files/images when extracted content is present.",
-    "Use very simple Hinglish/English that a normal non-medical user can understand.",
-    "Do not use markdown formatting symbols like **, __, #, or code blocks.",
-    "Do not invent missing report values, diagnoses, dosages, frequencies, or medicine purposes if they are not visible or not reasonably inferable.",
-    "If something is not visible, say: not clearly visible in report/prescription.",
-    "Do not overuse 'consult doctor' in every line. Give practical explanation first, then safety guidance.",
-    "Be reassuring when findings look mild or near-normal, but remain safety-first.",
+    "",
+    "CORE RULES:",
+    "- If extracted file text is provided in the user message, treat that as observed file content.",
+    "- If previous uploaded file text is included for continuity, use it only when the current user message is clearly referring to that same file.",
+    "- Do not say you cannot see files/images when extracted content is present.",
+    "- Do not use markdown formatting symbols like **, __, #, or code blocks.",
+    "- Do not invent missing values, diagnoses, dosages if they are not visible.",
+    "- If something is not visible, say: not clearly visible in report/prescription.",
+    "- Do not overuse 'consult doctor' in every line. Give practical explanation FIRST, then safety guidance.",
+    "- Be reassuring when findings look mild or near-normal.",
+    "- Give DETAILED, THOROUGH responses — you are replacing a doctor visit, so be comprehensive.",
+    "",
     "For LAB REPORT queries:",
     "- Start with a short overall summary of the full visible report in 2-3 bullets.",
-    "- Then explain the important visible values in plain language.",
-    "- Clearly say whether each visible important value is low, high, borderline, or normal.",
-    "- Prioritize abnormal and borderline values, but do not ignore other clearly visible relevant values just because they are normal.",
-    "- If many values are visible, keep normal ones brief and easy to understand.",
-    "- Mention if findings look mild, moderate, or potentially important based only on visible data.",
-    "- Briefly explain likely significance, but do not claim final diagnosis.",
+    "- Then explain EVERY important visible value in plain language.",
+    "- Clearly say whether each value is low, high, borderline, or normal.",
+    "- Prioritize abnormal and borderline values first.",
+    "- For abnormal values: explain what it means, possible causes, and what to do.",
+    "- Mention if findings look mild, moderate, or potentially important.",
+    "- Do not claim final diagnosis but give practical interpretation.",
+    "",
     "For PRESCRIPTION queries:",
     "- Explain what each visible medicine is generally used for, in simple words.",
     "- Explain visible dosage/timing in easy language.",
-    "- Mention 2-4 common side effects if medicine is identifiable.",
-    "- Mention one practical caution, such as drowsiness, stomach upset, taking after food, or avoiding alcohol, only if generally appropriate.",
+    "- Mention 2-4 common side effects per medicine.",
+    "- Mention one practical caution per medicine (drowsiness, stomach upset, take after food, avoid alcohol etc).",
+    "",
     "For MEDICINE queries:",
     "- Explain what the medicine is commonly used for.",
     "- Explain common side effects in plain language.",
     "- Mention when it should be used carefully.",
-    "- Mention common interactions/cautions only if reasonably known and high value.",
+    "- Give dosage guidance based on age if user provides age.",
+    "- Mention common interactions/cautions.",
+    "",
     "For X-RAY / SCAN queries:",
     "- Explain what the visible findings suggest in simple language.",
     "- Describe any visible abnormality like fracture, shadow, mass, effusion, or opacity.",
     "- Explain what the finding typically means in non-medical terms.",
-    "- Say whether finding looks concerning or likely benign based on visible info.",
+    "- Say whether finding looks concerning or likely benign.",
     "- Do not claim final radiologist diagnosis.",
     "",
     "For SYMPTOM queries:",
-    "- Explain likely low-risk possibilities in plain language.",
-    "- Give simple home-care steps when appropriate.",
-    "- Clearly separate red flags.",
-    "Always answer in these exact sections and in this exact order:",
+    "- Explain the most likely causes (not just one — give 2-3 possibilities ranked by likelihood).",
+    "- Give detailed home-care steps: what to eat, what to avoid, rest guidance, OTC medicines with dosage.",
+    "- Be specific: instead of 'take rest', say 'lie down in a comfortable position, avoid screens, drink warm water every 2 hours'.",
+    "- If OTC medicine is appropriate, name it with dosage (e.g., 'Paracetamol 500mg, 1 tablet every 6-8 hours, max 4 tablets/day').",
+    "",
+    "ALWAYS answer in these exact sections in this exact order:",
+    "",
     "Assessment:",
+    "- 4-8 detailed bullet points covering all relevant findings/explanations.",
+    "- Be thorough — this section should feel like a doctor explaining to you face-to-face.",
+    "",
     "Next steps:",
+    "- 3-6 specific, actionable practical steps.",
+    "- Include diet advice, lifestyle changes, OTC medicines with dosage when appropriate.",
+    "",
     "Red flags:",
+    "- MUST have 3-5 SPECIFIC red flag symptoms relevant to THIS condition.",
+    "- Not generic — tailor to what the user asked about.",
+    "- Example for fever: 'Agar fever 103°F+ ho', 'Agar rash aaye', 'Agar neck stiffness ho', 'Agar breathing fast ho ya difficulty ho'.",
+    "",
     "When to see doctor:",
-    ...(ctx.desiIlaaj ? [
-      "Desi ilaaj / Home remedies:",
-      "- Only include this section if desi ilaaj toggle is ON.",
-      "- Suggest 2-4 evidence-backed home remedies relevant to the condition.",
-      "- Examples: haldi doodh for throat, jeera paani for digestion, giloy for immunity.",
-      "- Always add: 'Ye gharelu nuskhe medical treatment ka replacement nahi hain.'",
-      "- Keep tone practical and reassuring.",
-    ] : []),
+    "- MUST have 3-4 specific triggers telling user EXACTLY when to visit doctor.",
+    "- Include timeframes: 'Agar 3 din me fever na utre', 'Agar 1 week me pain same rahe'.",
+    "- Include severity markers: 'Agar dard itna ho ki neend na aaye', 'Agar khana-peena band ho jaye'.",
+    "",
+    "Desi ilaaj:",
+    "- ALWAYS include this section in EVERY response.",
+    "- Suggest 2-4 evidence-backed Indian home remedies relevant to the specific condition.",
+    "- Be specific: 'Haldi wala doodh — 1 glass garam doodh me 1/2 teaspoon haldi, raat ko sone se pehle' NOT just 'haldi doodh piyo'.",
+    "- Include preparation method and timing.",
+    "- Examples: adrak chai for cold, jeera paani for digestion, tulsi kadha for immunity, nimbu-shahad for throat.",
+    "- End with: 'Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.'",
+    "",
     "Formatting rules:",
-    "- Keep each section useful and not too short.",
-    "- Assessment should usually have 4-8 bullet points when enough information is available.",
-    "- Next steps should usually have 3-6 practical bullet points.",
-    "- If medicine is involved, include common side effects inside Assessment or Next steps.",
-    "- Keep the tone user-friendly, calm, practical, and clear.",
+    "- Keep each section detailed and useful — do NOT give 1-2 line sections.",
+    "- Assessment should usually have 4-8 bullet points.",
+    "- Next steps should have 3-6 practical bullet points.",
+    "- Red flags MUST have 3-5 items (NEVER just 1 generic line).",
+    "- When to see doctor MUST have 3-4 items.",
+    "- Desi ilaaj MUST have 2-4 items with preparation details.",
+    "- Keep the tone warm, caring, like a trusted family doctor who takes time to explain everything.",
   ].join("\n");
 }
 
@@ -211,8 +243,40 @@ function postProcessReply(reply, ctx, redFlags) {
   let desiIlaajBody = extractSection(raw, "Desi ilaaj");
   if (!desiIlaajBody) desiIlaajBody = extractSection(raw, "Home remedies");
 
-  const includeDesi = ctx?.desiIlaaj && desiIlaajBody;
   const focus = String(ctx?.focus || "").toLowerCase();
+
+  // ✅ ALWAYS include desi ilaaj — add fallback if GPT skipped it
+  if (!desiIlaajBody) {
+    if (focus === "lab") {
+      desiIlaajBody = [
+        "- Haldi doodh: 1 glass garam doodh me 1/2 tsp haldi — immunity boost aur inflammation kam karta hai.",
+        "- Amla juice: Subah khali pet 2 tbsp amla juice — Vitamin C aur iron absorption badhata hai.",
+        "- Chukandar (beetroot) juice: Hemoglobin low ho to din me 1 glass — natural blood builder.",
+        "- Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.",
+      ].join("\n");
+    } else if (focus === "rx" || focus === "medicine") {
+      desiIlaajBody = [
+        "- Medicine ke side effects kam karne ke liye: khana khane ke baad medicine lein, paani zyada piyein.",
+        "- Stomach upset ho to: jeera paani (1 tsp jeera ko 1 cup paani me ubaalein) — digestion improve karta hai.",
+        "- Immunity support: tulsi kadha — 5-6 tulsi patti + adrak + kali mirch ko paani me 5 min ubaalein.",
+        "- Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.",
+      ].join("\n");
+    } else if (focus === "xray") {
+      desiIlaajBody = [
+        "- Haldi paste: Dard wali jagah par haldi + sarson ka tel laga sakte hain — natural anti-inflammatory.",
+        "- Epsom salt soak: Agar joint/bone pain hai to garam paani me 2 tbsp Epsom salt daalke 15-20 min soak karein.",
+        "- Calcium rich diet: Doodh, dahi, paneer, ragi — haddiyon ki mazbooti ke liye.",
+        "- Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.",
+      ].join("\n");
+    } else {
+      desiIlaajBody = [
+        "- Haldi doodh: 1 glass garam doodh me 1/2 tsp haldi — anti-inflammatory aur immunity booster.",
+        "- Adrak-shahad: Adrak ka ras + 1 tsp shahad — khansi, gale ki kharash, aur cold ke liye.",
+        "- Jeera paani: 1 tsp jeera ubaalein paani me — pet dard, gas, acidity ke liye faydemand.",
+        "- Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.",
+      ].join("\n");
+    }
+  }
 
   if (!assessment) {
     if (focus === "lab") {
@@ -249,13 +313,19 @@ function postProcessReply(reply, ctx, redFlags) {
   if (!redFlagsBody) {
     redFlagsBody = redFlags && redFlags.length
       ? redFlags.map((x) => `- ${x}`).join("\n")
-      : "- Severe breathing problem, chest pain, confusion, fainting, seizures, ya uncontrolled bleeding ho to urgent care lein.";
+      : [
+          "- Severe breathing problem, chest pain, ya confusion ho to turant hospital jayein.",
+          "- High fever (103°F+) jo 2 din se na utre.",
+          "- Severe weakness, fainting, seizures, ya uncontrolled bleeding.",
+          "- Rash, swelling, ya allergic reaction ka koi sign.",
+        ].join("\n");
   }
 
   if (!whenDoctor) {
     whenDoctor = [
-      "- Agar symptoms 1-3 din me better na ho.",
-      "- Agar dard, weakness, fever, vomiting, rash, ya breathing issue badhe.",
+      "- Agar symptoms 2-3 din me better na hon — doctor ko dikhayein.",
+      "- Agar dard itna ho ki daily kaam na kar paayein ya neend na aaye.",
+      "- Agar fever, weakness, vomiting, rash, ya breathing issue badhe.",
       "- Agar medicine se unusual side effects mehsoos hon.",
     ].join("\n");
   }
@@ -279,6 +349,12 @@ function postProcessReply(reply, ctx, redFlags) {
     "Agar symptoms persist ya worsen karein to doctor ko dikhayein.",
   ]);
 
+  desiIlaajBody = ensureUsefulBullets(desiIlaajBody, [
+    "Haldi doodh — natural anti-inflammatory aur immunity booster.",
+    "Adrak-shahad — khansi aur cold ke liye faydemand.",
+    "Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.",
+  ]);
+
   return [
     "Assessment:",
     assessment,
@@ -291,11 +367,9 @@ function postProcessReply(reply, ctx, redFlags) {
     "",
     "When to see doctor:",
     whenDoctor,
-    ...(includeDesi ? [
-      "",
-      "Desi ilaaj:",
-      ensureUsefulBullets(desiIlaajBody, ["Ye section active hai jab Desi toggle ON ho."]),
-    ] : []),
+    "",
+    "Desi ilaaj:",
+    desiIlaajBody,
   ].join("\n");
 }
 
@@ -335,20 +409,19 @@ function buildFallbackReply(message, ctx, redFlags) {
         "Assessment:",
         `- ${who} ke liye medicine/prescription ko simple language me explain kiya ja sakta hai.`,
         "- Isme use, common side effects, aur important cautions bataye ja sakte hain.",
-        "- Jo cheez prescription me clearly visible nahi hogi usko guess nahi kiya jayega.",
         "",
         "Next steps:",
         "- Medicine ka naam aur strength share karein, jaise Paracetamol 650.",
         "- Prescription image clear bhejein.",
-        "- Age, pregnancy, allergy, kidney/liver disease, aur current medicines bhi batayein agar relevant ho.",
+        "- Age, pregnancy, allergy, kidney/liver disease bhi batayein.",
         "",
         "Red flags:",
-        redFlags.length ? redFlags.map((x) => `- ${x}`).join("\n") : "- Severe allergy, swelling, breathing issue, fainting, severe vomiting, black stools, ya severe drowsiness ho to urgent care lein.",
+        "- Severe allergy, swelling, breathing issue, fainting ho to urgent care lein.",
+        "- Severe vomiting, black stools, ya severe drowsiness ho to turant hospital jayein.",
         "",
         "When to see doctor:",
-        "- Agar medicine se relief na mile.",
+        "- Agar medicine se relief na mile 2-3 din me.",
         "- Agar side effects troublesome hon.",
-        "- Agar dosage ya duration clear na ho.",
       ].join("\n"),
       ctx,
       redFlags
@@ -360,21 +433,19 @@ function buildFallbackReply(message, ctx, redFlags) {
       [
         "Assessment:",
         `- ${who} ke liye x-ray/scan image ka simple explanation diya ja sakta hai agar visible findings clear hon.`,
-        "- Fracture, shadow, opacity, swelling, mass, effusion jaisi cheezein agar image me visible hon to unka general meaning samjhaya ja sakta hai.",
-        "- Final radiology diagnosis claim nahi kiya jayega.",
+        "- Fracture, shadow, opacity, swelling, mass, effusion ka general meaning samjhaya ja sakta hai.",
         "",
         "Next steps:",
         "- Clear x-ray/scan image ya report upload karein.",
         "- Bataein pain, injury, breathing issue, fever, ya trauma history hai ya nahi.",
-        "- Agar available ho to radiology impression bhi share karein.",
         "",
         "Red flags:",
-        redFlags.length ? redFlags.map((x) => `- ${x}`).join("\n") : "- Severe trauma, breathing issue, chest pain, limb deformity, weakness, numbness, ya severe swelling ho to urgent care lein.",
+        "- Severe trauma, breathing issue, chest pain ho to urgent care lein.",
+        "- Limb deformity, weakness, numbness, ya severe swelling ho to turant hospital jayein.",
         "",
         "When to see doctor:",
         "- Agar image me fracture ya concerning shadow ka doubt ho.",
         "- Agar pain ya symptoms worsen kar rahe hon.",
-        "- Agar mobility ya breathing affect ho rahi ho.",
       ].join("\n"),
       ctx,
       redFlags
@@ -393,12 +464,14 @@ function buildFallbackReply(message, ctx, redFlags) {
       "- Agar fever/sugar/BP/oxygen reading hai to add karein.",
       "",
       "Red flags:",
-      redFlags.length ? redFlags.map((x) => `- ${x}`).join("\n") : "- Severe chest pain, breathing trouble, confusion, seizures, fainting, severe dehydration, ya uncontrolled bleeding ho to urgent care lein.",
+      "- Severe chest pain, breathing trouble, confusion ho to turant hospital jayein.",
+      "- Seizures, fainting, severe dehydration, ya uncontrolled bleeding ho to emergency care lein.",
+      "- High fever (103°F+) jo 2 din se na utre.",
       "",
       "When to see doctor:",
-      "- Agar symptoms worsen karein.",
-      "- Agar 1-3 din me improve na ho.",
+      "- Agar symptoms 2-3 din me improve na hon.",
       "- Agar severe pain, weakness, ya persistent vomiting ho.",
+      "- Agar daily kaam karna mushkil ho raha ho.",
     ].join("\n"),
     ctx,
     redFlags
