@@ -72,7 +72,7 @@ function shouldReuseRecentAttachment({ message, attachment, context, recalledAtt
   if (currentIntent === "symptom") return false;
   if (focus === "symptom") return false;
 
-  return ["lab", "rx", "medicine"].includes(currentIntent);
+  return ["lab", "rx", "medicine", "xray"].includes(currentIntent) || focus === "xray";
 }
 
 function buildSystemPrompt(ctx) {
@@ -119,6 +119,13 @@ function buildSystemPrompt(ctx) {
     "- Explain common side effects in plain language.",
     "- Mention when it should be used carefully.",
     "- Mention common interactions/cautions only if reasonably known and high value.",
+    "For X-RAY / SCAN queries:",
+    "- Explain what the visible findings suggest in simple language.",
+    "- Describe any visible abnormality like fracture, shadow, mass, effusion, or opacity.",
+    "- Explain what the finding typically means in non-medical terms.",
+    "- Say whether finding looks concerning or likely benign based on visible info.",
+    "- Do not claim final radiologist diagnosis.",
+    "",
     "For SYMPTOM queries:",
     "- Explain likely low-risk possibilities in plain language.",
     "- Give simple home-care steps when appropriate.",
@@ -128,6 +135,14 @@ function buildSystemPrompt(ctx) {
     "Next steps:",
     "Red flags:",
     "When to see doctor:",
+    ...(ctx.desiIlaaj ? [
+      "Desi ilaaj / Home remedies:",
+      "- Only include this section if desi ilaaj toggle is ON.",
+      "- Suggest 2-4 evidence-backed home remedies relevant to the condition.",
+      "- Examples: haldi doodh for throat, jeera paani for digestion, giloy for immunity.",
+      "- Always add: 'Ye gharelu nuskhe medical treatment ka replacement nahi hain.'",
+      "- Keep tone practical and reassuring.",
+    ] : []),
     "Formatting rules:",
     "- Keep each section useful and not too short.",
     "- Assessment should usually have 4-8 bullet points when enough information is available.",
@@ -158,8 +173,10 @@ function normalizeSectionBody(text) {
 function extractSection(text, heading) {
   const src = String(text || "");
   const esc = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const headings = ["Assessment", "Next steps", "Red flags", "When to see doctor"];
-  const other = headings.filter((h) => h !== heading).map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const headings = ["Assessment", "Next steps", "Red flags", "When to see doctor", "Desi ilaaj", "Home remedies"];
+  const other = headings
+    .filter((h) => h !== heading)
+    .map((h) => h.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const re = new RegExp(`${esc}:\\s*([\\s\\S]*?)(?=\\n(?:${other.join("|")}):|$)`, "i");
   const m = src.match(re);
   return m ? normalizeSectionBody(m[1]) : "";
@@ -191,7 +208,10 @@ function postProcessReply(reply, ctx, redFlags) {
   let nextSteps = extractSection(raw, "Next steps");
   let redFlagsBody = extractSection(raw, "Red flags");
   let whenDoctor = extractSection(raw, "When to see doctor");
+  let desiIlaajBody = extractSection(raw, "Desi ilaaj");
+  if (!desiIlaajBody) desiIlaajBody = extractSection(raw, "Home remedies");
 
+  const includeDesi = ctx?.desiIlaaj && desiIlaajBody;
   const focus = String(ctx?.focus || "").toLowerCase();
 
   if (!assessment) {
@@ -204,6 +224,11 @@ function postProcessReply(reply, ctx, redFlags) {
       assessment = [
         "- Visible medicine/prescription details ko simple language me explain kiya jana chahiye.",
         "- Common use aur common side effects bataye jane chahiye agar medicine identify ho rahi ho.",
+      ].join("\n");
+    } else if (focus === "xray") {
+      assessment = [
+        "- Visible scan/x-ray findings ko simple language me explain kiya jana chahiye.",
+        "- Jo cheez image me clearly visible nahi hai usko guess nahi kiya jana chahiye.",
       ].join("\n");
     } else {
       assessment = [
@@ -266,6 +291,11 @@ function postProcessReply(reply, ctx, redFlags) {
     "",
     "When to see doctor:",
     whenDoctor,
+    ...(includeDesi ? [
+      "",
+      "Desi ilaaj:",
+      ensureUsefulBullets(desiIlaajBody, ["Ye section active hai jab Desi toggle ON ho."]),
+    ] : []),
   ].join("\n");
 }
 
@@ -319,6 +349,32 @@ function buildFallbackReply(message, ctx, redFlags) {
         "- Agar medicine se relief na mile.",
         "- Agar side effects troublesome hon.",
         "- Agar dosage ya duration clear na ho.",
+      ].join("\n"),
+      ctx,
+      redFlags
+    );
+  }
+
+  if (focus === "xray") {
+    return postProcessReply(
+      [
+        "Assessment:",
+        `- ${who} ke liye x-ray/scan image ka simple explanation diya ja sakta hai agar visible findings clear hon.`,
+        "- Fracture, shadow, opacity, swelling, mass, effusion jaisi cheezein agar image me visible hon to unka general meaning samjhaya ja sakta hai.",
+        "- Final radiology diagnosis claim nahi kiya jayega.",
+        "",
+        "Next steps:",
+        "- Clear x-ray/scan image ya report upload karein.",
+        "- Bataein pain, injury, breathing issue, fever, ya trauma history hai ya nahi.",
+        "- Agar available ho to radiology impression bhi share karein.",
+        "",
+        "Red flags:",
+        redFlags.length ? redFlags.map((x) => `- ${x}`).join("\n") : "- Severe trauma, breathing issue, chest pain, limb deformity, weakness, numbness, ya severe swelling ho to urgent care lein.",
+        "",
+        "When to see doctor:",
+        "- Agar image me fracture ya concerning shadow ka doubt ho.",
+        "- Agar pain ya symptoms worsen kar rahe hon.",
+        "- Agar mobility ya breathing affect ho rahi ho.",
       ].join("\n"),
       ctx,
       redFlags
@@ -469,7 +525,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
         model,
         messages,
         temperature,
-        max_tokens: Number(process.env.AI_MAX_TOKENS || 1250),
+        max_tokens: Number(process.env.AI_MAX_TOKENS || 2000),
       });
 
       reply = String(out?.choices?.[0]?.message?.content || "").trim();

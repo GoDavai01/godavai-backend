@@ -57,14 +57,21 @@ async function synthesizeSpeech({ text, language }) {
   const client = getOpenAIClient();
   if (!client) return { audioBase64: "" };
 
-  const voice = String(process.env.AI_TTS_VOICE || (language === "hi" ? "sage" : "alloy"));
+  const voice = String(process.env.AI_TTS_VOICE || "ash");
+
   try {
     const out = await client.audio.speech.create({
       model: process.env.AI_TTS_MODEL || "gpt-4o-mini-tts",
       voice,
       input: clean.slice(0, 4000),
+      instructions: language === "hi"
+        ? "Speak clearly in Hindi with a warm, caring doctor-like tone. Pronounce medical terms clearly."
+        : language === "hinglish"
+          ? "Speak in a natural Hinglish mix — Hindi sentences with English medical terms. Clear pronunciation, warm tone, like a friendly doctor explaining to a patient."
+          : "Speak clearly in English with a warm, professional medical tone.",
       format: "mp3",
     });
+
     const ab = await out.arrayBuffer();
     return { audioBase64: Buffer.from(ab).toString("base64") };
   } catch (err) {
@@ -77,4 +84,3 @@ module.exports = {
   transcribeAudio,
   synthesizeSpeech,
 };
-

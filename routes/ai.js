@@ -54,7 +54,11 @@ router.post("/analyze-file", withUpload(fileUpload.single("file")), aiController
 
 router.post("/stt", withUpload(audioUpload.single("audio")), aiController.stt);
 router.post("/tts", aiController.tts);
+router.post("/assistant/tts", aiController.tts);
+
 router.get("/sessions", requireAuth, aiController.listSessions);
 router.get("/sessions/:sessionId", requireAuth, aiController.getSession);
+router.get("/assistant/sessions", requireAuth, aiController.listSessions);
+router.get("/assistant/sessions/:sessionId", requireAuth, aiController.getSession);
 
 module.exports = router;

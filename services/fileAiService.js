@@ -65,6 +65,9 @@ function normalizeFocus(message, focus) {
 
   const src = String(message || "").toLowerCase();
 
+  if (/(xray|x-ray|x ray|ct scan|mri|ultrasound|sonography|scan report|chest pa|lateral view)/.test(src)) {
+    return "xray";
+  }
   if (/(report|cbc|lipid|tsh|vitamin|platelet|hba1c|creatinine|hemoglobin|wbc|rbc|uric acid|bilirubin|sgpt|sgot|lab report|blood test)/.test(src)) {
     return "lab";
   }
@@ -479,11 +482,11 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
     try {
       await execFileAsync(
         "pdftoppm",
-        ["-f", "1", "-l", "3", "-png", pdfPath, outBase],
+        ["-f", "1", "-l", "10", "-png", pdfPath, outBase],
         { windowsHide: true, timeout: 20000 }
       );
 
-      for (let i = 1; i <= 3; i += 1) {
+      for (let i = 1; i <= 10; i += 1) {
         const imgPath = `${outBase}-${i}.png`;
         if (fs.existsSync(imgPath)) {
           imagePaths.push(imgPath);
@@ -503,7 +506,7 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
       }
 
       if (sharp) {
-        for (let page = 0; page < 3; page += 1) {
+        for (let page = 0; page < 10; page += 1) {
           try {
             const img = await sharp(buffer, { density: 240, page })
               .flatten({ background: "#ffffff" })
@@ -672,6 +675,17 @@ function buildModeInstructions(mode) {
     ].join("\n");
   }
 
+  if (mode === "xray") {
+    return [
+      "User wants an X-Ray/scan image explanation.",
+      "Describe any visible findings: fractures, shadows, opacities, masses, effusions.",
+      "Explain what each finding typically means in simple language.",
+      "Say whether it looks concerning or likely normal/benign.",
+      "Do not claim final radiologist diagnosis.",
+      "Be reassuring for mild findings.",
+    ].join("\n");
+  }
+
   if (mode === "rx") {
     return [
       "User wants a prescription explanation.",
@@ -703,7 +717,7 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
     mode = parsed.mode;
   }
 
-  const textPreview = extractedText ? extractedText.slice(0, 8000) : "";
+  const textPreview = extractedText ? extractedText.slice(0, 15000) : "";
 
   const parsedSummary =
     mode === "lab"
