@@ -49,6 +49,29 @@ function inferPromptIntent(text) {
   return "symptom";
 }
 
+function hasMedicalIntent(text) {
+  const src = String(text || "").toLowerCase();
+  return /(symptom|bukhar|fever|cold|cough|khansi|pain|dard|headache|migraine|vomit|ultee|diarrhea|loose motion|sugar|bp|oxygen|report|lab|xray|x-ray|scan|prescription|rx|medicine|dawai|tablet|capsule|hba1c|cbc|cholesterol|thyroid|creatinine|hemoglobin|infection|allergy)/.test(src);
+}
+
+function isCasualConversation(text) {
+  const src = String(text || "").toLowerCase().trim();
+  if (!src) return true;
+  if (hasMedicalIntent(src)) return false;
+  return /^(hi|hii|hello|hey|yo|namaste|namaskar|kaise ho|kya haal|kya hal|kya scene|how are you|good morning|good evening|good night|thanks|thank you|thx|ok|okay|acha|accha|hmm|hmmm|bro|bhai)\b/.test(src);
+}
+
+function shouldIncludeDesiIlaaj({ message, ctx }) {
+  const src = String(message || "").toLowerCase();
+  if (!src) return false;
+  if (/(desi|gharelu|home remedy|nuskh|kadha|ilaaj)/.test(src)) return true;
+  if (isCasualConversation(src)) return false;
+  if (hasMedicalIntent(src)) return true;
+
+  const focus = String(ctx?.focus || "").toLowerCase();
+  return ["lab", "rx", "medicine", "xray", "symptom"].includes(focus);
+}
+
 function looksLikeFollowupToPreviousFile(message) {
   const src = String(message || "").toLowerCase().trim();
   if (!src) return false;
@@ -188,7 +211,7 @@ function buildSystemPrompt(ctx) {
     "- Example: 'See a doctor if pain is so severe you can't sleep or walk'",
     "",
     "Desi ilaaj:",
-    "- ALWAYS include this section in EVERY response.",
+    "- Include this section ONLY when user has a medical query or explicitly asks for desi/gharelu remedies.",
     "- Suggest 2-4 evidence-backed Indian home remedies relevant to the specific condition.",
     "- Be specific with preparation method and timing.",
     "- End with a note that these help but for serious symptoms see a doctor.",
@@ -198,7 +221,7 @@ function buildSystemPrompt(ctx) {
     "- Assessment should usually have 4-8 bullet points.",
     "- Next steps should have 3-6 practical bullet points.",
     "- Warning signs MUST have 5-8 items mixing ER triggers + doctor visit triggers.",
-    "- Desi ilaaj MUST have 2-4 items with preparation details.",
+    "- If included, Desi ilaaj should have 2-4 items with preparation details.",
     "- Keep the tone warm, caring, like a trusted family doctor who takes time to explain everything.",
   ].join("\n");
 }
@@ -253,7 +276,7 @@ function ensureUsefulBullets(block, fallbackLines = []) {
     .join("\n");
 }
 
-function postProcessReply(reply, ctx, redFlags) {
+function postProcessReply(reply, ctx, redFlags, sourceMessage = "") {
   const raw = sanitizeReplyFormatting(reply);
 
   let assessment = extractSection(raw, "Assessment");
@@ -276,8 +299,9 @@ function postProcessReply(reply, ctx, redFlags) {
 
   const focus = String(ctx?.focus || "").toLowerCase();
 
-  // ✅ ALWAYS include desi ilaaj — add fallback if GPT skipped it
-  if (!desiIlaajBody) {
+  const includeDesiIlaaj = shouldIncludeDesiIlaaj({ message: sourceMessage, ctx });
+
+  if (includeDesiIlaaj && !desiIlaajBody) {
     if (focus === "lab") {
       desiIlaajBody = [
         "- Haldi doodh: 1 glass garam doodh me 1/2 tsp haldi — immunity boost aur inflammation kam karta hai.",
@@ -352,13 +376,7 @@ function postProcessReply(reply, ctx, redFlags) {
     "See a doctor within 2-3 days if symptoms persist or worsen.",
   ]);
 
-  desiIlaajBody = ensureUsefulBullets(desiIlaajBody, [
-    "Haldi doodh — natural anti-inflammatory aur immunity booster.",
-    "Adrak-shahad — khansi aur cold ke liye faydemand.",
-    "Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.",
-  ]);
-
-  return [
+  const output = [
     "Assessment:",
     assessment,
     "",
@@ -367,10 +385,18 @@ function postProcessReply(reply, ctx, redFlags) {
     "",
     "Warning signs:",
     warningSignsBody,
-    "",
-    "Desi ilaaj:",
-    desiIlaajBody,
-  ].join("\n");
+  ];
+
+  if (includeDesiIlaaj) {
+    desiIlaajBody = ensureUsefulBullets(desiIlaajBody, [
+      "Haldi doodh — natural anti-inflammatory aur immunity booster.",
+      "Adrak-shahad — khansi aur cold ke liye faydemand.",
+      "Ye gharelu nuskhe madad karte hain lekin serious symptoms me doctor zaroor dikhayein.",
+    ]);
+    output.push("", "Desi ilaaj:", desiIlaajBody);
+  }
+
+  return output.join("\n");
 }
 
 function buildFallbackReply(message, ctx, redFlags) {
@@ -397,7 +423,8 @@ function buildFallbackReply(message, ctx, redFlags) {
         "- See a doctor if repeated reports show an abnormal pattern.",
       ].join("\n"),
       ctx,
-      redFlags
+      redFlags,
+      message
     );
   }
 
@@ -420,7 +447,8 @@ function buildFallbackReply(message, ctx, redFlags) {
         "- See a doctor if side effects are troublesome.",
       ].join("\n"),
       ctx,
-      redFlags
+      redFlags,
+      message
     );
   }
 
@@ -442,7 +470,8 @@ function buildFallbackReply(message, ctx, redFlags) {
         "- See a doctor if pain or symptoms are worsening.",
       ].join("\n"),
       ctx,
-      redFlags
+      redFlags,
+      message
     );
   }
 
@@ -465,7 +494,8 @@ function buildFallbackReply(message, ctx, redFlags) {
       "- See a doctor if daily activities become difficult.",
     ].join("\n"),
     ctx,
-    redFlags
+    redFlags,
+    message
   );
 }
 
@@ -629,7 +659,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
 
   reply = sanitizeReplyFormatting(reply);
   reply = ensureStructuredSections(reply, { redFlags });
-  reply = postProcessReply(reply, resolvedContext, redFlags);
+  reply = postProcessReply(reply, resolvedContext, redFlags, baseUserMessage);
 
   const sessionId = await upsertSession({
     userId,
