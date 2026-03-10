@@ -82,6 +82,21 @@ function normalizeFocus(message, focus) {
   return "symptom";
 }
 
+function inferModeFromFileName(fileName) {
+  const src = String(fileName || "").toLowerCase();
+  if (!src) return "";
+  if (/(xray|x-ray|x ray|fracture|radius|ulna|wrist|ct|mri|scan|sonography|ultrasound|chest-pa|pa-view)/.test(src)) {
+    return "xray";
+  }
+  if (/(prescription|rx|tab|tablet|capsule|medicine)/.test(src)) {
+    return "rx";
+  }
+  if (/(lab|cbc|lipid|thyroid|hba1c|report)/.test(src)) {
+    return "lab";
+  }
+  return "";
+}
+
 function fileKind(file) {
   const mime = String(file?.mimetype || "").toLowerCase();
   const ext = path.extname(String(file?.originalname || "")).toLowerCase();
@@ -856,6 +871,8 @@ function buildModeInstructions(mode) {
 async function analyzeFileForAssistant({ file, message, history, context, userId }) {
   const persisted = await persistUploadedFile(file);
   let mode = normalizeFocus(message, context?.focus);
+  const inferredFromName = inferModeFromFileName(file?.originalname);
+  if (inferredFromName === "xray") mode = "xray";
 
   const { extractedText, parsed } = await extractTextAndParsed(file, mode);
   if (parsed?.mode && parsed.mode !== mode) {
@@ -890,6 +907,32 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
     imageFindingsSummary,
     textPreview ? `\n\nFile Extracted Text:\n${textPreview}` : noTextMessage,
   ].join("");
+
+  if (!textPreview && !imageFindingsSummary) {
+    return {
+      reply: [
+        "Assessment:",
+        "- Mujhe is file se reliable readable text ya visual findings nahi mile.",
+        "- Isliye main guess-based analysis nahi dunga.",
+        "",
+        "Next steps:",
+        "- Clear original report/PDF upload karein (screenshot ya watermarked image ke bajay).",
+        "- X-ray ke liye full-resolution image ya radiologist impression page upload karein.",
+        "- Multi-page PDF me complete pages include karein.",
+        "",
+        "Warning signs:",
+        "- Severe pain, deformity, numbness, swelling ya movement loss ho to turant doctor/ER visit karein.",
+        "- Chest pain, breathing issue, confusion, ya heavy bleeding me emergency care lein.",
+      ].join("\n"),
+      sessionId: null,
+      parsed: {
+        ...parsed,
+        storedFileUrl: persisted.relativePath,
+        extractedTextPreview: "",
+        hardFailure: true,
+      },
+    };
+  }
 const ai = await generateAssistantReply({
     message: mergedMessage,
     history,
