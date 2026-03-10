@@ -75,6 +75,16 @@ function shouldReuseRecentAttachment({ message, attachment, context, recalledAtt
   return ["lab", "rx", "medicine", "xray"].includes(currentIntent) || focus === "xray";
 }
 
+function isVaultReportAnalysisRequest(text) {
+  const src = String(text || "").toLowerCase();
+  return (
+    /(health vault|healthvault|vault)/.test(src) &&
+    /(latest|recent|last|naya|new|upload|attached|saved)/.test(src) &&
+    /(lab report|report|xray|x-ray|scan|test)/.test(src) &&
+    /(analy|explain|samjha|interpret)/.test(src)
+  );
+}
+
 function buildSystemPrompt(ctx) {
   const whoLabel = ctx.whoForLabel || (ctx.whoFor === "self" ? "self" : ctx.whoFor);
   const profileBits = [];
@@ -550,13 +560,39 @@ async function generateAssistantReply({ message, history, context, userId, attac
     : baseUserMessage;
 
   const redFlags = detectRedFlags([baseUserMessage, ...cleanHistory.map((m) => m.content)].join("\n"));
+  const askedForVaultReport = isVaultReportAnalysisRequest(baseUserMessage);
+  const hasExtractedReportText = Boolean(
+    attachment?.extractedText || (reusePreviousAttachment && recalledAttachment?.text)
+  );
 
   let reply = "";
   const client = getOpenAIClient();
   const model = process.env.AI_CHAT_MODEL || process.env.GPT_MED_MODEL || "gpt-4o-mini";
   const temperature = clampTemperature(process.env.AI_TEMPERATURE || 0.55);
 
-  if (client && baseUserMessage) {
+  if (askedForVaultReport && !hasExtractedReportText) {
+    reply = [
+      "Assessment:",
+      "- I cannot safely analyze your latest Health Vault report yet because report text is not available in this chat context.",
+      "- I will not guess lab values from memory or old reports.",
+      "- Please open the exact report and upload it in AI using file analysis so interpretation is based on visible findings only.",
+      "",
+      "Next steps:",
+      "- In AI, use Attach File and upload the same report image/PDF from Health Vault.",
+      "- Then ask: analyze this uploaded report only.",
+      "- If text is blurry, upload clearer image or PDF for accurate extraction.",
+      "",
+      "Warning signs:",
+      "- Go to ER immediately for severe chest pain, breathing difficulty, confusion, fainting, or heavy bleeding.",
+      "- Go to ER for severe trauma, deformity, or inability to move a limb after injury.",
+      "- See a doctor urgently if high fever, uncontrolled vomiting, or worsening weakness is present.",
+      "",
+      "Desi ilaaj:",
+      "- For injury pain/swelling: rest + cold compress 10-15 min, 3-4 times/day in first 24-48 hrs.",
+      "- Keep injured part elevated when possible to reduce swelling.",
+      "- Ye gharelu steps supportive hain; severe symptoms me doctor ko turant dikhayein.",
+    ].join("\n");
+  } else if (client && baseUserMessage) {
     try {
       const messages = [
         { role: "system", content: buildSystemPrompt(resolvedContext) },

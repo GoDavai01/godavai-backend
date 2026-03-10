@@ -3,6 +3,7 @@ require('dotenv').config();
 require('./utils/ensureFolders');
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 // REMOVE or COMMENT OUT debug logs in production
 // console.log('SERVER STARTED, ENV:', process.env.NODE_ENV, 'PORT:', process.env.PORT);
@@ -143,11 +144,35 @@ app.options("*", cors(corsOptions)); // respond to all preflights
 
 // Upload folders
 const UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "uploads");
-if (!isS3 && !fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
+try { fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (_) {}
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 if (!isS3) app.use("/uploads", express.static(UPLOADS_DIR));
+
+// Backward-compatible local file serving for report/docs paths even when S3 env is present.
+const FALLBACK_UPLOADS_DIR = path.join(process.cwd(), "uploads");
+const uploadServeDirs = [...new Set([UPLOADS_DIR, FALLBACK_UPLOADS_DIR])];
+uploadServeDirs.forEach((dir) => {
+  try {
+    if (fs.existsSync(dir)) app.use("/uploads", express.static(dir));
+  } catch (_) {
+    // Ignore invalid directories; keep server boot resilient.
+  }
+});
+
+[
+  { route: "/uploads/lab-reports", dir: path.join(os.tmpdir(), "godavaii-lab-reports") },
+  { route: "/uploads/health-vault", dir: path.join(os.tmpdir(), "godavaii-health-vault") },
+  { route: "/uploads/lab-bookings", dir: path.join(os.tmpdir(), "godavaii-lab-bookings") },
+  { route: "/uploads/lab-partner-docs", dir: path.join(os.tmpdir(), "godavaii-lab-partner-docs") },
+].forEach(({ route, dir }) => {
+  try {
+    if (fs.existsSync(dir)) app.use(route, express.static(dir));
+  } catch (_) {
+    // keep boot resilient
+  }
+});
 
 console.log("BOOT: suggestions routes should be mounted");
 app.get("/api/whoami", (req,res)=>res.json({ ok:true, tag:"whoami" }));

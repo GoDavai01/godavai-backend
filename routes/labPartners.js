@@ -18,6 +18,9 @@ const upload = multer({
 });
 let PARTNER_DOCS_DIR = path.join(process.cwd(), "uploads", "lab-partner-docs");
 let LAB_REPORTS_DIR = path.join(process.cwd(), "uploads", "lab-reports");
+const BASE_UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "..", "uploads");
+PARTNER_DOCS_DIR = path.join(BASE_UPLOADS_DIR, "lab-partner-docs");
+LAB_REPORTS_DIR = path.join(BASE_UPLOADS_DIR, "lab-reports");
 
 function ensureDir(dirType = "docs") {
   try {

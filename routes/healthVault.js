@@ -15,7 +15,8 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 },
 });
 
-let REPORTS_DIR = path.join(process.cwd(), "uploads", "health-vault");
+const BASE_UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "..", "uploads");
+let REPORTS_DIR = path.join(BASE_UPLOADS_DIR, "health-vault");
 let REPORTS_PUBLIC_PREFIX = "/uploads/health-vault";
 
 function ensureReportsDir() {

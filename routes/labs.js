@@ -21,7 +21,8 @@ const upload = multer({
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-let LAB_UPLOAD_DIR = path.join(process.cwd(), "uploads", "lab-bookings");
+const BASE_UPLOADS_DIR = process.env.UPLOADS_DIR || path.join(__dirname, "..", "uploads");
+let LAB_UPLOAD_DIR = path.join(BASE_UPLOADS_DIR, "lab-bookings");
 let catalogSeeded = false;
 
 function asText(v) {
