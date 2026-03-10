@@ -220,13 +220,12 @@ router.post("/login", async (req, res) => {
     if (!partner || !partner.passwordHash) return res.status(401).json({ error: "Invalid email or password" });
     const ok = await bcrypt.compare(password, partner.passwordHash);
     if (!ok) return res.status(401).json({ error: "Invalid email or password" });
-    if (partner.kycStatus === "pending" || !partner.active) {
+    if (partner.kycStatus !== "verified" || !partner.active) {
+      if (partner.kycStatus === "rejected" || partner.kycStatus === "suspended") {
+        return res.status(403).json({ error: "Account is not eligible for login. Contact support/admin." });
+      }
       return res.status(403).json({ error: "Verification pending. Your lab account is under compliance review." });
     }
-    if (partner.kycStatus === "rejected" || partner.kycStatus === "suspended") {
-      return res.status(403).json({ error: "Account is not eligible for login. Contact support/admin." });
-    }
-
     const token = jwt.sign(partnerTokenPayload(partner), process.env.JWT_SECRET, { expiresIn: "30d" });
     return res.json({ token, partner: mapPartner(partner) });
   } catch (err) {
