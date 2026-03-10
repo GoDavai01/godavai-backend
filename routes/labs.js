@@ -9,6 +9,8 @@ const auth = require("../middleware/auth");
 const LabTest = require("../models/LabTest");
 const LabPackage = require("../models/LabPackage");
 const LabBooking = require("../models/LabBooking");
+const HealthVault = require("../models/HealthVault");
+const User = require("../models/User");
 const { DEFAULT_TESTS, DEFAULT_PACKAGES, SLOT_WINDOWS } = require("../data/labCatalog");
 
 const router = express.Router();
@@ -177,6 +179,10 @@ function mapBooking(doc) {
     processedBy: doc.processedBy,
     attachedFileName: doc.attachedFileName || null,
     attachedFile: doc.attachedFile || null,
+    reportFileName: doc.reportFileName || null,
+    reportFile: doc.reportFile || null,
+    reportUploadedAt: doc.reportUploadedAt || null,
+    reportAvailable: !!doc.reportFile?.fileKey,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -197,6 +203,51 @@ function buildDateOptions(days = 4) {
     });
   }
   return options;
+}
+
+function nowId() {
+  return `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+}
+
+function normalizeMember(input = {}) {
+  return {
+    id: asText(input.id) || nowId(),
+    relation: asText(input.relation) || "Family",
+    profile: {
+      name: asText(input?.profile?.name),
+      dob: asText(input?.profile?.dob),
+      gender: asText(input?.profile?.gender),
+      bloodGroup: asText(input?.profile?.bloodGroup),
+      heightCm: asText(input?.profile?.heightCm),
+      weightKg: asText(input?.profile?.weightKg),
+    },
+    emergency: {
+      name: asText(input?.emergency?.name),
+      relation: asText(input?.emergency?.relation),
+      phone: asText(input?.emergency?.phone),
+    },
+    conditions: Array.isArray(input.conditions) ? input.conditions.map(asText).filter(Boolean) : [],
+    allergies: Array.isArray(input.allergies) ? input.allergies.map(asText).filter(Boolean) : [],
+    medications: Array.isArray(input.medications) ? input.medications : [],
+    reports: Array.isArray(input.reports) ? input.reports : [],
+    notes: asText(input.notes),
+  };
+}
+
+async function getOrCreateVault(userId) {
+  let vault = await HealthVault.findOne({ userId });
+  if (vault) return vault;
+  const user = await User.findById(userId).select("name dob gender").lean();
+  const self = normalizeMember({
+    relation: "Self",
+    profile: { name: user?.name || "", dob: user?.dob || "", gender: user?.gender || "" },
+  });
+  vault = await HealthVault.create({
+    userId,
+    members: [self],
+    activeMemberId: self.id,
+  });
+  return vault;
 }
 
 router.get("/catalog", async (req, res) => {
@@ -596,6 +647,55 @@ router.patch("/bookings/:id/cancel", auth, async (req, res) => {
   } catch (err) {
     console.error("PATCH /labs/bookings/:id/cancel error:", err?.message || err);
     return res.status(500).json({ error: "Failed to cancel booking" });
+  }
+});
+
+router.post("/bookings/:id/push-to-vault", auth, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!mongoose.Types.ObjectId.isValid(String(userId))) {
+      return res.status(401).json({ error: "Invalid user token" });
+    }
+
+    const id = asText(req.params.id);
+    const byMongoId = mongoose.Types.ObjectId.isValid(id) ? [{ _id: id }] : [];
+    const booking = await LabBooking.findOne({ userId, $or: [{ bookingId: id }, ...byMongoId] });
+    if (!booking) return res.status(404).json({ error: "Booking not found" });
+    if (!booking.reportFile?.fileKey) {
+      return res.status(409).json({ error: "Report is not uploaded yet for this booking" });
+    }
+
+    const vault = await getOrCreateVault(userId);
+    const requestedMemberId = asText(req.body?.memberId);
+    const memberId = requestedMemberId || asText(vault.activeMemberId) || asText(vault.members?.[0]?.id);
+    const idx = (vault.members || []).findIndex((m) => asText(m.id) === memberId);
+    if (idx < 0) return res.status(404).json({ error: "Health vault member not found" });
+
+    const report = {
+      id: nowId(),
+      title: `${booking.items?.[0]?.name || "Lab Report"} (${booking.bookingId})`,
+      type: "Lab Result",
+      date: booking.date || new Date().toISOString().slice(0, 10),
+      category: "Lab Report",
+      fileName: booking.reportFile.fileName || booking.reportFileName || "lab-report.pdf",
+      mimeType: booking.reportFile.mimeType || "application/octet-stream",
+      fileSize: Number(booking.reportFile.fileSize || 0),
+      fileUrl: booking.reportFile.fileUrl || "",
+      fileKey: booking.reportFile.fileKey || "",
+    };
+
+    if (!Array.isArray(vault.members[idx].reports)) vault.members[idx].reports = [];
+    const exists = vault.members[idx].reports.some((r) => asText(r.fileKey) === asText(report.fileKey));
+    if (!exists) {
+      vault.members[idx].reports.push(report);
+      vault.markModified("members");
+      await vault.save();
+    }
+
+    return res.status(201).json({ report, alreadyExists: exists });
+  } catch (err) {
+    console.error("POST /labs/bookings/:id/push-to-vault error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to push report to health vault" });
   }
 });
 
