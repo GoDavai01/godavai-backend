@@ -89,6 +89,15 @@ function isVaultReportAnalysisRequest(text) {
 function buildSystemPrompt(ctx) {
   const whoLabel = ctx.whoForLabel || (ctx.whoFor === "self" ? "self" : ctx.whoFor);
   const profileBits = [];
+  const forcedLanguage = String(ctx?.replyLanguage || ctx?.language || "auto").toLowerCase();
+  const forcedLanguageRule =
+    forcedLanguage === "hinglish"
+      ? "FORCED LANGUAGE: Reply strictly in Hinglish (Roman Hindi + simple English mix). Do not reply in full English."
+      : forcedLanguage === "hindi"
+        ? "FORCED LANGUAGE: Reply strictly in Hindi (Devanagari script)."
+        : forcedLanguage === "english"
+          ? "FORCED LANGUAGE: Reply strictly in English."
+          : "";
 
   if (ctx.userSummary && Object.keys(ctx.userSummary).length) {
     profileBits.push(`userSummary=${JSON.stringify(ctx.userSummary)}`);
@@ -107,6 +116,7 @@ function buildSystemPrompt(ctx) {
     "- If user writes in Hinglish (mixed Hindi-English in Roman script like 'mujhe bukhar hai') → reply in Hinglish.",
     "- NEVER default to Hinglish when the user wrote in English.",
     "- The language of the CURRENT message determines your reply language, not previous messages.",
+    forcedLanguageRule ? `- ${forcedLanguageRule}` : "",
     "",
     `Audience: ${ctx.whoFor} (${whoLabel}). Focus: ${ctx.focus}.`,
     profileBits.length ? `Context data: ${profileBits.join(" | ")}` : "Context data: limited.",

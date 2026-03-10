@@ -99,6 +99,22 @@ function inferModeFromFileName(fileName) {
   return "";
 }
 
+function detectMessageLanguage(text) {
+  const src = String(text || "").trim();
+  if (!src) return "auto";
+  if (/[\u0900-\u097F]/.test(src)) return "hindi";
+
+  const lower = src.toLowerCase();
+  const hasLatin = /[a-z]/.test(lower);
+  const hinglishHints = [
+    "hai", "kya", "kaise", "mujhe", "mera", "meri", "hum", "aap", "isko", "isse",
+    "kar", "karo", "kr", "samjha", "batao", "kyu", "nahi", "acha", "sahi",
+  ];
+  const hintCount = hinglishHints.reduce((n, w) => (lower.includes(w) ? n + 1 : n), 0);
+  if (hasLatin && hintCount >= 2) return "hinglish";
+  return "english";
+}
+
 function fileKind(file) {
   const mime = String(file?.mimetype || "").toLowerCase();
   const ext = path.extname(String(file?.originalname || "")).toLowerCase();
@@ -917,6 +933,8 @@ function buildModeInstructions(mode) {
 
 async function analyzeFileForAssistant({ file, message, history, context, userId }) {
   const persisted = await persistUploadedFile(file);
+  const userMessage = String(message || "").trim();
+  const replyLanguage = detectMessageLanguage(userMessage);
   let mode = normalizeFocus(message, context?.focus);
   const inferredFromName = inferModeFromFileName(file?.originalname);
   if (inferredFromName === "xray") mode = "xray";
@@ -946,8 +964,17 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
       ? "\n\nIMPORTANT: No readable text could be extracted from this file. The file may be a scanned image with low quality, or the OCR failed. Please tell the user to upload a clearer image or PDF of their report. Do NOT make up or guess any values."
       : "";
 
+  const languageLockInstruction =
+    replyLanguage === "hinglish"
+      ? "OUTPUT LANGUAGE LOCK: User wrote in Hinglish. Reply strictly in Hinglish (Roman Hindi + simple English mix), not full English."
+      : replyLanguage === "hindi"
+        ? "OUTPUT LANGUAGE LOCK: User wrote in Hindi. Reply strictly in Hindi (Devanagari)."
+        : "OUTPUT LANGUAGE LOCK: User wrote in English. Reply strictly in English.";
+
   const mergedMessage = [
-    String(message || "").trim() || "Please analyze this uploaded medical file.",
+    userMessage || "Please analyze this uploaded medical file.",
+    "",
+    languageLockInstruction,
     "",
     buildModeInstructions(mode),
     mode === "xray"
@@ -983,10 +1010,10 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
       },
     };
   }
-const ai = await generateAssistantReply({
+  const ai = await generateAssistantReply({
     message: mergedMessage,
     history,
-    context: { ...context, focus: mode },
+    context: { ...context, focus: mode, language: replyLanguage, replyLanguage },
     userId,
     attachment: {
       name: file?.originalname || "",
