@@ -4,6 +4,8 @@ const router = express.Router();
 const Medicine = require("../models/Medicine");
 const Pharmacy = require("../models/Pharmacy");
 const Doctor = require("../models/Doctor");
+const LabTest = require("../models/LabTest");
+const LabPackage = require("../models/LabPackage");
 
 // Helper to escape regex special chars
 function escapeRegex(str) {
@@ -42,6 +44,20 @@ async function autocompleteHandler(req, res) {
         ...(city ? { city: new RegExp(escapeRegex(city), "i") } : {}),
       });
       results.push(...docNames);
+    }
+
+    if (type === "lab" || type === "all") {
+      const [testNames, packageNames] = await Promise.all([
+        LabTest.distinct("name", {
+          name: { $regex: escapeRegex(q), $options: "i" },
+          active: true,
+        }),
+        LabPackage.distinct("name", {
+          name: { $regex: escapeRegex(q), $options: "i" },
+          active: true,
+        }),
+      ]);
+      results.push(...testNames, ...packageNames);
     }
 
     // Remove duplicates, just in case
