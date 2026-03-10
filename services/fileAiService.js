@@ -14,6 +14,8 @@ const execFileAsync = promisify(execFile);
 const TMP_DIR = path.join(process.cwd(), "uploads", "ai-temp");
 const FILES_DIR = path.join(process.cwd(), "uploads", "ai-files");
 const MAX_PDF_OCR_PAGES = Math.max(1, Math.min(Number(process.env.AI_PDF_OCR_MAX_PAGES || 30), 40));
+const PDF_OCR_PROCESS_PAGES = Math.max(1, Math.min(Number(process.env.AI_PDF_OCR_PROCESS_PAGES || 12), MAX_PDF_OCR_PAGES));
+const PDF_OCR_RUNTIME_BUDGET_MS = Math.max(15000, Math.min(Number(process.env.AI_PDF_OCR_RUNTIME_BUDGET_MS || 150000), 300000));
 
 let resolvedTmpDir = null;
 let resolvedFilesDir = null;
@@ -611,6 +613,7 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
 
   const createdFiles = [];
   let combined = "";
+  const startedAt = Date.now();
 
   async function cleanup() {
     await Promise.all(
@@ -631,11 +634,11 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
     try {
       await execFileAsync(
         "pdftoppm",
-        ["-f", "1", "-l", String(MAX_PDF_OCR_PAGES), "-png", pdfPath, outBase],
+        ["-f", "1", "-l", String(PDF_OCR_PROCESS_PAGES), "-png", pdfPath, outBase],
         { windowsHide: true, timeout: 20000 }
       );
 
-      for (let i = 1; i <= MAX_PDF_OCR_PAGES; i += 1) {
+      for (let i = 1; i <= PDF_OCR_PROCESS_PAGES; i += 1) {
         const imgPath = `${outBase}-${i}.png`;
         if (fs.existsSync(imgPath)) {
           imagePaths.push(imgPath);
@@ -655,7 +658,11 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
       }
 
       if (sharp) {
-        for (let page = 0; page < MAX_PDF_OCR_PAGES; page += 1) {
+        for (let page = 0; page < PDF_OCR_PROCESS_PAGES; page += 1) {
+          if (Date.now() - startedAt > PDF_OCR_RUNTIME_BUDGET_MS) {
+            debugErrors.push(`pdf_ocr_budget_exceeded_ms:${PDF_OCR_RUNTIME_BUDGET_MS}`);
+            break;
+          }
           try {
             const img = await sharp(buffer, { density: 240, page })
               .flatten({ background: "#ffffff" })
@@ -665,6 +672,7 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
             const text = await ocrImageWithOpenAI(img, "image/png");
             if (text && text.length > 20) {
               combined += `${combined ? "\n\n" : ""}${text}`;
+              if (combined.length >= 22000) break;
             }
           } catch (err) {
             debugErrors.push(`sharp_pdf_render_failed_page_${page + 1}:${err?.message || "unknown"}`);
@@ -676,11 +684,16 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
     }
 
     for (const imgPath of imagePaths) {
+      if (Date.now() - startedAt > PDF_OCR_RUNTIME_BUDGET_MS) {
+        debugErrors.push(`pdf_ocr_budget_exceeded_ms:${PDF_OCR_RUNTIME_BUDGET_MS}`);
+        break;
+      }
       try {
         const imgBuffer = await fs.promises.readFile(imgPath);
         const text = await ocrImageWithOpenAI(imgBuffer, "image/png");
         if (text && text.length > 20) {
           combined += `${combined ? "\n\n" : ""}${text}`;
+          if (combined.length >= 22000) break;
         }
       } catch (err) {
         debugErrors.push(`page_ocr_failed:${path.basename(imgPath)}:${err?.message || "unknown"}`);
