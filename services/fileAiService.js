@@ -13,7 +13,7 @@ const execFileAsync = promisify(execFile);
 
 const TMP_DIR = path.join(process.cwd(), "uploads", "ai-temp");
 const FILES_DIR = path.join(process.cwd(), "uploads", "ai-files");
-const MAX_PDF_OCR_PAGES = Math.max(1, Math.min(Number(process.env.AI_PDF_OCR_MAX_PAGES || 20), 40));
+const MAX_PDF_OCR_PAGES = Math.max(1, Math.min(Number(process.env.AI_PDF_OCR_MAX_PAGES || 30), 40));
 
 let resolvedTmpDir = null;
 let resolvedFilesDir = null;
@@ -493,83 +493,117 @@ async function extractPdfTextWithPdfParse(buffer) {
   }
 }
 
+function isVisionRefusalText(text) {
+  const src = String(text || "").toLowerCase().trim();
+  if (!src) return true;
+  return (
+    /unable to analyze images? directly/.test(src) ||
+    /can't analyze images? directly/.test(src) ||
+    /cannot analyze images? directly/.test(src) ||
+    /i do not have image processing capabilities/.test(src) ||
+    /as an ai language model/.test(src) ||
+    /if you describe.*i can help/.test(src) ||
+    /share (the )?(x-?ray|scan) findings/.test(src)
+  );
+}
+
+function getVisionModelCandidates() {
+  const candidates = [
+    process.env.AI_VISION_MODEL,
+    process.env.AI_OCR_MODEL,
+    "gpt-4o",
+    "gpt-4o-mini",
+  ]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+  return [...new Set(candidates)];
+}
+
 async function ocrImageWithOpenAI(buffer, mime) {
   const client = getOpenAIClient();
   if (!client) return "";
 
-  try {
-    const model = process.env.AI_OCR_MODEL || "gpt-4o-mini";
-    const b64 = buffer.toString("base64");
-    const dataUrl = `data:${mime || "image/png"};base64,${b64}`;
+  const b64 = buffer.toString("base64");
+  const dataUrl = `data:${mime || "image/png"};base64,${b64}`;
+  for (const model of getVisionModelCandidates()) {
+    try {
+      const out = await client.chat.completions.create({
+        model,
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content: [
+              "Extract all visible medical text as accurately as possible.",
+              "Preserve rows, values, units, dates, medicine names, dosages and reference ranges.",
+              "Keep line breaks.",
+              "Do not summarize.",
+              "Do not explain.",
+              "Return only plain extracted text."
+            ].join(" "),
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Read this medical image very carefully. Return only the extracted plain text. Include report values, ranges, medicine names, strength, timing, notes, headers, and page text if visible."
+              },
+              { type: "image_url", image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+        max_tokens: 2600,
+      });
 
-    const out = await client.chat.completions.create({
-      model,
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content: [
-            "Extract all visible medical text as accurately as possible.",
-            "Preserve rows, values, units, dates, medicine names, dosages and reference ranges.",
-            "Keep line breaks.",
-            "Do not summarize.",
-            "Do not explain.",
-            "Return only plain extracted text."
-          ].join(" "),
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Read this medical image very carefully. Return only the extracted plain text. Include report values, ranges, medicine names, strength, timing, notes, headers, and page text if visible."
-            },
-            { type: "image_url", image_url: { url: dataUrl } },
-          ],
-        },
-      ],
-      max_tokens: 2600,
-    });
-
-    return normalizeExtractedText(out?.choices?.[0]?.message?.content || "");
-  } catch (_) {
-    return "";
+      const extracted = normalizeExtractedText(out?.choices?.[0]?.message?.content || "");
+      if (extracted && !isVisionRefusalText(extracted)) {
+        return extracted;
+      }
+    } catch (_) {
+      // try next compatible model
+    }
   }
+  return "";
 }
 
 async function analyzeMedicalImageWithVision(buffer, mime, mode) {
   const client = getOpenAIClient();
   if (!client) return "";
-  try {
-    const model = process.env.AI_OCR_MODEL || "gpt-4o-mini";
-    const b64 = buffer.toString("base64");
-    const dataUrl = `data:${mime || "image/png"};base64,${b64}`;
-    const isXray = String(mode || "").toLowerCase() === "xray";
+  const b64 = buffer.toString("base64");
+  const dataUrl = `data:${mime || "image/png"};base64,${b64}`;
+  const isXray = String(mode || "").toLowerCase() === "xray";
+  const instruction = isXray
+    ? "Analyze this X-ray/scan image. Return only visible findings (fracture/dislocation/alignment/opacity/joint-space), confidence and limitations. No invented values."
+    : "Analyze this medical image and return only clearly visible findings/text cues. Do not invent values.";
 
-    const instruction = isXray
-      ? "Analyze this X-ray/scan image. Return only visible findings (fracture/dislocation/alignment/opacity/joint-space), confidence and limitations. No invented values."
-      : "Analyze this medical image and return only clearly visible findings/text cues. Do not invent values.";
+  for (const model of getVisionModelCandidates()) {
+    try {
+      const out = await client.chat.completions.create({
+        model,
+        temperature: 0.1,
+        max_tokens: 900,
+        messages: [
+          { role: "system", content: instruction },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Provide concise bullet findings from this image." },
+              { type: "image_url", image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+      });
 
-    const out = await client.chat.completions.create({
-      model,
-      temperature: 0.1,
-      max_tokens: 900,
-      messages: [
-        { role: "system", content: instruction },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Provide concise bullet findings from this image." },
-            { type: "image_url", image_url: { url: dataUrl } },
-          ],
-        },
-      ],
-    });
-
-    return normalizeExtractedText(out?.choices?.[0]?.message?.content || "");
-  } catch (_) {
-    return "";
+      const findings = normalizeExtractedText(out?.choices?.[0]?.message?.content || "");
+      if (findings && !isVisionRefusalText(findings)) {
+        return findings;
+      }
+    } catch (_) {
+      // try next compatible model
+    }
   }
+  return "";
 }
 
 async function extractPdfViaImageFallback(buffer, debugErrors = []) {
@@ -903,6 +937,9 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
     String(message || "").trim() || "Please analyze this uploaded medical file.",
     "",
     buildModeInstructions(mode),
+    mode === "xray"
+      ? "\n\nIMPORTANT: This image has already been vision-processed. Do not say you cannot analyze images. Use the visual findings provided below."
+      : "",
     parsedSummary ? `\n\n${parsedSummary}` : "",
     imageFindingsSummary,
     textPreview ? `\n\nFile Extracted Text:\n${textPreview}` : noTextMessage,
@@ -942,7 +979,7 @@ const ai = await generateAssistantReply({
       name: file?.originalname || "",
       url: persisted.relativePath,
       type: file?.mimetype || "",
-      extractedText: extractedText.slice(0, 12000),
+      extractedText: (extractedText || parsed.imageFindings || "").slice(0, 12000),
     },
   });
 
