@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 
 const TMP_DIR = path.join(process.cwd(), "uploads", "ai-temp");
 const FILES_DIR = path.join(process.cwd(), "uploads", "ai-files");
+const MAX_PDF_OCR_PAGES = Math.max(1, Math.min(Number(process.env.AI_PDF_OCR_MAX_PAGES || 20), 40));
 
 let resolvedTmpDir = null;
 let resolvedFilesDir = null;
@@ -521,6 +522,41 @@ async function ocrImageWithOpenAI(buffer, mime) {
   }
 }
 
+async function analyzeMedicalImageWithVision(buffer, mime, mode) {
+  const client = getOpenAIClient();
+  if (!client) return "";
+  try {
+    const model = process.env.AI_OCR_MODEL || "gpt-4o-mini";
+    const b64 = buffer.toString("base64");
+    const dataUrl = `data:${mime || "image/png"};base64,${b64}`;
+    const isXray = String(mode || "").toLowerCase() === "xray";
+
+    const instruction = isXray
+      ? "Analyze this X-ray/scan image. Return only visible findings (fracture/dislocation/alignment/opacity/joint-space), confidence and limitations. No invented values."
+      : "Analyze this medical image and return only clearly visible findings/text cues. Do not invent values.";
+
+    const out = await client.chat.completions.create({
+      model,
+      temperature: 0.1,
+      max_tokens: 900,
+      messages: [
+        { role: "system", content: instruction },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Provide concise bullet findings from this image." },
+            { type: "image_url", image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+    });
+
+    return normalizeExtractedText(out?.choices?.[0]?.message?.content || "");
+  } catch (_) {
+    return "";
+  }
+}
+
 async function extractPdfViaImageFallback(buffer, debugErrors = []) {
   ensureTmpDir();
 
@@ -546,11 +582,11 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
     try {
       await execFileAsync(
         "pdftoppm",
-        ["-f", "1", "-l", "10", "-png", pdfPath, outBase],
+        ["-f", "1", "-l", String(MAX_PDF_OCR_PAGES), "-png", pdfPath, outBase],
         { windowsHide: true, timeout: 20000 }
       );
 
-      for (let i = 1; i <= 10; i += 1) {
+      for (let i = 1; i <= MAX_PDF_OCR_PAGES; i += 1) {
         const imgPath = `${outBase}-${i}.png`;
         if (fs.existsSync(imgPath)) {
           imagePaths.push(imgPath);
@@ -570,7 +606,7 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
       }
 
       if (sharp) {
-        for (let page = 0; page < 10; page += 1) {
+        for (let page = 0; page < MAX_PDF_OCR_PAGES; page += 1) {
           try {
             const img = await sharp(buffer, { density: 240, page })
               .flatten({ background: "#ffffff" })
@@ -706,6 +742,17 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
+    // For X-ray/scan style image files, run direct vision finding extraction
+    // even if OCR text is weak or absent.
+    if (kind.image && mode === "xray") {
+      const visionFindings = await analyzeMedicalImageWithVision(file.buffer, kind.mime || "image/png", mode);
+      if (visionFindings) {
+        parsed.imageFindings = visionFindings.slice(0, 6000);
+      } else {
+        debugErrors.push("xray_vision_findings_empty");
+      }
+    }
+
     if (mode === "rx" || mode === "medicine") {
       try {
         const ocrItems = await withTempFile(file, async (p) => extractPrescriptionItems(p));
@@ -817,7 +864,7 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
 
   const textPreview = extractedText ? extractedText.slice(0, 15000) : "";
 
-  // ✅ FIX: Only build parsed summary if markers are valid
+  // Build structured hints for model
   const parsedSummary =
     mode === "lab" && parsed.labMarkers?.length
       ? buildLabSummary(parsed.labMarkers)
@@ -825,20 +872,25 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
         ? buildRxSummary(parsed.rxItems)
         : "";
 
-  // ✅ FIX: If no usable text was extracted, tell GPT clearly
-  const noTextMessage = !textPreview
-    ? "\n\nIMPORTANT: No readable text could be extracted from this file. The file may be a scanned image with low quality, or the OCR failed. Please tell the user to upload a clearer image or PDF of their report. Do NOT make up or guess any values."
-    : "";
+  const imageFindingsSummary =
+    mode === "xray" && parsed.imageFindings
+      ? `\n\nImage Visual Findings (vision extraction):\n${parsed.imageFindings}`
+      : "";
+
+  const noTextMessage =
+    !textPreview && !imageFindingsSummary
+      ? "\n\nIMPORTANT: No readable text could be extracted from this file. The file may be a scanned image with low quality, or the OCR failed. Please tell the user to upload a clearer image or PDF of their report. Do NOT make up or guess any values."
+      : "";
 
   const mergedMessage = [
     String(message || "").trim() || "Please analyze this uploaded medical file.",
     "",
     buildModeInstructions(mode),
     parsedSummary ? `\n\n${parsedSummary}` : "",
+    imageFindingsSummary,
     textPreview ? `\n\nFile Extracted Text:\n${textPreview}` : noTextMessage,
   ].join("");
-
-  const ai = await generateAssistantReply({
+const ai = await generateAssistantReply({
     message: mergedMessage,
     history,
     context: { ...context, focus: mode },
@@ -865,3 +917,5 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
 module.exports = {
   analyzeFileForAssistant,
 };
+
+
