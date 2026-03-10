@@ -68,6 +68,7 @@ function shouldReuseRecentAttachment({ message, attachment, context, recalledAtt
   const followup = looksLikeFollowupToPreviousFile(message);
 
   if (followup) return true;
+  if (isVaultReportAnalysisRequest(message)) return false;
 
   if (currentIntent === "symptom") return false;
   if (focus === "symptom") return false;
@@ -561,9 +562,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
 
   const redFlags = detectRedFlags([baseUserMessage, ...cleanHistory.map((m) => m.content)].join("\n"));
   const askedForVaultReport = isVaultReportAnalysisRequest(baseUserMessage);
-  const hasExtractedReportText = Boolean(
-    attachment?.extractedText || (reusePreviousAttachment && recalledAttachment?.text)
-  );
+  const hasExtractedReportText = Boolean(attachment?.extractedText);
 
   let reply = "";
   const client = getOpenAIClient();

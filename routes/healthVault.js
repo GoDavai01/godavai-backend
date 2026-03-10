@@ -112,6 +112,19 @@ function publicUrlForReport(fileName) {
   return path.join(REPORTS_DIR, fileName);
 }
 
+function vaultReportSearchPaths(fileKey) {
+  const safeKey = path.basename(safeText(fileKey));
+  if (!safeKey) return [];
+  return [
+    path.join(BASE_UPLOADS_DIR, "health-vault", safeKey),
+    path.join(BASE_UPLOADS_DIR, "lab-reports", safeKey),
+    path.join(process.cwd(), "uploads", "health-vault", safeKey),
+    path.join(process.cwd(), "uploads", "lab-reports", safeKey),
+    path.join(os.tmpdir(), "godavaii-health-vault", safeKey),
+    path.join(os.tmpdir(), "godavaii-lab-reports", safeKey),
+  ];
+}
+
 function findMember(vault, memberId) {
   const idx = vault.members.findIndex((m) => m.id === memberId);
   if (idx < 0) return null;
@@ -229,6 +242,43 @@ router.delete("/me/members/:memberId/reports/:reportId", auth, async (req, res) 
   } catch (err) {
     console.error("DELETE /health-vault report error:", err?.message || err);
     res.status(500).json({ error: "Failed to delete report" });
+  }
+});
+
+router.get("/me/members/:memberId/reports/:reportId/file", auth, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const memberId = safeText(req.params.memberId);
+    const reportId = safeText(req.params.reportId);
+
+    const vault = await getOrCreateVault(userId);
+    const found = findMember(vault, memberId);
+    if (!found) return res.status(404).json({ error: "Member not found" });
+
+    const reports = found.member.reports || [];
+    const report = reports.find((r) => safeText(r.id) === reportId);
+    if (!report) return res.status(404).json({ error: "Report not found" });
+
+    const key = safeText(report.fileKey);
+    if (!key) return res.status(404).json({ error: "Report file key missing" });
+    const candidates = vaultReportSearchPaths(key);
+    const abs = candidates.find((p) => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    });
+    if (!abs) return res.status(404).json({ error: "Report file missing on server" });
+
+    const mimeType = safeText(report.mimeType) || "application/octet-stream";
+    const fileName = safeText(report.fileName) || "health-vault-report";
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${fileName.replace(/"/g, "")}"`);
+    return res.sendFile(abs);
+  } catch (err) {
+    console.error("GET /health-vault report file error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load health vault report file" });
   }
 });
 

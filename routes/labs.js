@@ -113,6 +113,16 @@ function getUserId(req) {
   return req.user?.userId || req.user?._id || "";
 }
 
+function reportSearchPaths(fileKey) {
+  const safeKey = path.basename(asText(fileKey));
+  if (!safeKey) return [];
+  return [
+    path.join(BASE_UPLOADS_DIR, "lab-reports", safeKey),
+    path.join(process.cwd(), "uploads", "lab-reports", safeKey),
+    path.join(os.tmpdir(), "godavaii-lab-reports", safeKey),
+  ];
+}
+
 function mapTest(doc) {
   return {
     id: doc.testId,
@@ -619,6 +629,42 @@ router.get("/bookings/:id", auth, async (req, res) => {
   } catch (err) {
     console.error("GET /labs/bookings/:id error:", err?.message || err);
     return res.status(500).json({ error: "Failed to load booking" });
+  }
+});
+
+router.get("/bookings/:id/report", auth, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!mongoose.Types.ObjectId.isValid(String(userId))) {
+      return res.status(401).json({ error: "Invalid user token" });
+    }
+
+    const id = asText(req.params.id);
+    const byMongoId = mongoose.Types.ObjectId.isValid(id) ? [{ _id: id }] : [];
+    const booking = await LabBooking.findOne({ userId, $or: [{ bookingId: id }, ...byMongoId] }).lean();
+    if (!booking) return res.status(404).json({ error: "Booking not found" });
+
+    const key = asText(booking?.reportFile?.fileKey);
+    if (!key) return res.status(404).json({ error: "Report file not found for this booking" });
+
+    const candidates = reportSearchPaths(key);
+    const found = candidates.find((p) => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    });
+    if (!found) return res.status(404).json({ error: "Report file missing on server" });
+
+    const mimeType = asText(booking?.reportFile?.mimeType) || "application/octet-stream";
+    const fileName = asText(booking?.reportFile?.fileName) || "lab-report";
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${fileName.replace(/"/g, "")}"`);
+    return res.sendFile(found);
+  } catch (err) {
+    console.error("GET /labs/bookings/:id/report error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load report file" });
   }
 });
 
