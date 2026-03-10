@@ -10,6 +10,8 @@ const crypto = require("crypto");
 const auth = require("../middleware/auth");
 const LabPartner = require("../models/LabPartner");
 const LabBooking = require("../models/LabBooking");
+const HealthVault = require("../models/HealthVault");
+const User = require("../models/User");
 
 const router = express.Router();
 const upload = multer({
@@ -131,6 +133,64 @@ function mapBooking(row) {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function nowId() {
+  return `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+}
+
+async function getOrCreateVault(userId) {
+  let vault = await HealthVault.findOne({ userId });
+  if (vault) return vault;
+  const user = await User.findById(userId).select("name dob gender").lean();
+  const selfId = nowId();
+  vault = await HealthVault.create({
+    userId,
+    members: [
+      {
+        id: selfId,
+        relation: "Self",
+        profile: {
+          name: asText(user?.name),
+          dob: asText(user?.dob),
+          gender: asText(user?.gender),
+        },
+        reports: [],
+      },
+    ],
+    activeMemberId: selfId,
+  });
+  return vault;
+}
+
+async function pushBookingReportToVault(booking) {
+  const userId = booking?.userId;
+  const fileKey = asText(booking?.reportFile?.fileKey);
+  if (!userId || !fileKey) return;
+
+  const vault = await getOrCreateVault(userId);
+  const activeMemberId = asText(vault.activeMemberId) || asText(vault.members?.[0]?.id);
+  const memberIndex = (vault.members || []).findIndex((m) => asText(m.id) === activeMemberId);
+  if (memberIndex < 0) return;
+
+  if (!Array.isArray(vault.members[memberIndex].reports)) vault.members[memberIndex].reports = [];
+  const exists = vault.members[memberIndex].reports.some((r) => asText(r.fileKey) === fileKey);
+  if (exists) return;
+
+  vault.members[memberIndex].reports.push({
+    id: nowId(),
+    title: `${booking.items?.[0]?.name || "Lab Report"} (${booking.bookingId})`,
+    type: "Lab Result",
+    date: asText(booking.date) || new Date().toISOString().slice(0, 10),
+    category: "Lab Report",
+    fileName: asText(booking.reportFile?.fileName) || asText(booking.reportFileName) || "lab-report",
+    mimeType: asText(booking.reportFile?.mimeType) || "application/octet-stream",
+    fileSize: Number(booking.reportFile?.fileSize || 0),
+    fileUrl: asText(booking.reportFile?.fileUrl),
+    fileKey,
+  });
+  vault.markModified("members");
+  await vault.save();
 }
 
 router.post("/register", upload.array("documents", 8), async (req, res) => {
@@ -383,6 +443,7 @@ router.patch("/bookings/:id/status", partnerAuth, upload.single("reportFile"), a
       booking.status = "report_ready";
       booking.reportReadyAt = new Date();
       await booking.save();
+      await pushBookingReportToVault(booking);
       return res.json({ booking: mapBooking(booking) });
     }
 
@@ -414,6 +475,7 @@ router.patch("/bookings/:id/status", partnerAuth, upload.single("reportFile"), a
       booking.reportUploadedAt = new Date();
       if (booking.status === "sample_collected") booking.status = "processing";
       await booking.save();
+      await pushBookingReportToVault(booking);
       return res.json({ booking: mapBooking(booking) });
     }
 
