@@ -48,6 +48,39 @@ function asText(v) {
   return String(v == null ? "" : v).trim();
 }
 
+const PARTNER_STATUS = {
+  APPLIED: "applied",
+  UNDER_REVIEW: "under_review",
+  DOCS_PENDING: "docs_pending",
+  VERIFICATION_IN_REVIEW: "verification_in_review",
+  APPROVED: "approved",
+  LIVE: "live",
+  SUSPENDED: "suspended",
+  REJECTED: "rejected",
+};
+
+function statusDisplay(status) {
+  const s = asText(status).toLowerCase();
+  return {
+    [PARTNER_STATUS.APPLIED]: "Applied",
+    [PARTNER_STATUS.UNDER_REVIEW]: "Under Review",
+    [PARTNER_STATUS.DOCS_PENDING]: "Docs Pending",
+    [PARTNER_STATUS.VERIFICATION_IN_REVIEW]: "Verification In Review",
+    [PARTNER_STATUS.APPROVED]: "Approved",
+    [PARTNER_STATUS.LIVE]: "Live",
+    [PARTNER_STATUS.SUSPENDED]: "Suspended",
+    [PARTNER_STATUS.REJECTED]: "Rejected",
+  }[s] || "Under Review";
+}
+
+function syncKycStatusFromPartnerStatus(partnerStatus) {
+  const s = asText(partnerStatus).toLowerCase();
+  if (s === PARTNER_STATUS.LIVE || s === PARTNER_STATUS.APPROVED) return "verified";
+  if (s === PARTNER_STATUS.REJECTED) return "rejected";
+  if (s === PARTNER_STATUS.SUSPENDED) return "suspended";
+  return "pending";
+}
+
 function partnerTokenPayload(partner) {
   return {
     role: "lab_partner",
@@ -81,6 +114,7 @@ const isAdmin = (req, res, next) => {
 };
 
 function mapPartner(p) {
+  const partnerStatus = asText(p.partnerStatus || "").toLowerCase() || PARTNER_STATUS.UNDER_REVIEW;
   return {
     id: p._id.toString(),
     name: p.name,
@@ -88,19 +122,22 @@ function mapPartner(p) {
     phone: p.phone,
     organization: p.organization || "",
     city: p.city || "",
-    pincode: p.pincode || "",
     labAddress: p.labAddress || "",
+    serviceAreasText: p.serviceAreasText || "",
     areas: Array.isArray(p.areas) ? p.areas : [],
+    homeCollectionAvailable: !!p.homeCollectionAvailable,
     active: !!p.active,
-    kycStatus: p.kycStatus || "pending",
-    kycNotes: p.kycNotes || "",
+    partnerStatus,
+    partnerStatusLabel: statusDisplay(partnerStatus),
+    kycStatus: p.kycStatus || syncKycStatusFromPartnerStatus(partnerStatus),
+    statusNotes: p.statusNotes || p.kycNotes || "",
     licenseNumber: p.licenseNumber || "",
-    licenseAuthority: p.licenseAuthority || "",
-    licenseValidUpto: p.licenseValidUpto || "",
-    gstNumber: p.gstNumber || "",
-    panNumber: p.panNumber || "",
+    consentAccepted: !!p.consentAccepted,
+    preferredLanguage: p.preferredLanguage || "hinglish",
     documents: Array.isArray(p.documents) ? p.documents : [],
+    verification: p.verification || {},
     approvedAt: p.approvedAt || null,
+    liveAt: p.liveAt || null,
   };
 }
 
@@ -193,34 +230,35 @@ async function pushBookingReportToVault(booking) {
   await vault.save();
 }
 
-router.post("/register", upload.array("documents", 8), async (req, res) => {
+router.post("/register", upload.array("documents", 4), async (req, res) => {
   try {
     const name = asText(req.body?.name);
     const email = asText(req.body?.email).toLowerCase();
     const phone = asText(req.body?.phone);
-    const password = asText(req.body?.password);
     const city = asText(req.body?.city || "Noida");
-    const pincode = asText(req.body?.pincode);
     const labAddress = asText(req.body?.labAddress);
+    const serviceAreasText = asText(req.body?.serviceAreas || req.body?.areas);
+    const homeCollectionAvailable = ["yes", "true", "1"].includes(asText(req.body?.homeCollectionAvailable).toLowerCase());
     const licenseNumber = asText(req.body?.licenseNumber);
-    const licenseAuthority = asText(req.body?.licenseAuthority);
-    const licenseValidUpto = asText(req.body?.licenseValidUpto);
-    const gstNumber = asText(req.body?.gstNumber);
-    const panNumber = asText(req.body?.panNumber);
+    const preferredLanguage = asText(req.body?.preferredLanguage || "hinglish").toLowerCase();
+    const consentAccepted = ["yes", "true", "1"].includes(asText(req.body?.consentAccepted).toLowerCase());
     const areas = Array.isArray(req.body?.areas)
       ? req.body.areas.map(asText).filter(Boolean)
-      : asText(req.body?.areas)
+      : serviceAreasText
           .split(",")
           .map(asText)
           .filter(Boolean);
 
-    if (!name || !email || !phone || !password || !licenseNumber || !labAddress || !pincode) {
+    if (!name || !email || !phone || !licenseNumber || !labAddress || !city) {
       return res.status(400).json({
-        error: "name, email, phone, password, licenseNumber, labAddress, pincode are required",
+        error: "name, email, phone, lab/diagnostic centre name, city, labAddress and licenseNumber are required",
       });
     }
     if (!req.files || !req.files.length) {
-      return res.status(400).json({ error: "At least one verification document is required" });
+      return res.status(400).json({ error: "Please upload any one basic proof document" });
+    }
+    if (!consentAccepted) {
+      return res.status(400).json({ error: "Consent is required before submission" });
     }
     const exists = await LabPartner.findOne({ email });
     if (exists) return res.status(409).json({ error: "Lab partner already exists with this email" });
@@ -242,29 +280,29 @@ router.post("/register", upload.array("documents", 8), async (req, res) => {
       });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
     const partner = await LabPartner.create({
       name,
       email,
       phone,
       city,
-      pincode,
       labAddress,
+      serviceAreasText,
       areas,
-      organization: asText(req.body?.organization),
+      organization: asText(req.body?.organization || req.body?.labName),
+      homeCollectionAvailable,
       licenseNumber,
-      licenseAuthority,
-      licenseValidUpto,
-      gstNumber,
-      panNumber,
+      consentAccepted: true,
+      consentAcceptedAt: new Date(),
+      preferredLanguage,
       documents,
-      passwordHash,
+      partnerStatus: PARTNER_STATUS.UNDER_REVIEW,
       kycStatus: "pending",
+      statusNotes: "Applied via short public registration form",
       active: false,
     });
 
     return res.status(201).json({
-      message: "Registration submitted. Account will be activated after compliance verification.",
+      message: "Application submitted successfully. Status: Applied -> Under Review. This does not mean your lab is live.",
       partner: mapPartner(partner),
     });
   } catch (err) {
@@ -283,11 +321,14 @@ router.post("/login", async (req, res) => {
     if (!partner || !partner.passwordHash) return res.status(401).json({ error: "Invalid email or password" });
     const ok = await bcrypt.compare(password, partner.passwordHash);
     if (!ok) return res.status(401).json({ error: "Invalid email or password" });
-    if (partner.kycStatus !== "verified" || !partner.active) {
-      if (partner.kycStatus === "rejected" || partner.kycStatus === "suspended") {
+    const partnerStatus = asText(partner.partnerStatus || PARTNER_STATUS.UNDER_REVIEW).toLowerCase();
+    if (partnerStatus !== PARTNER_STATUS.LIVE || !partner.active) {
+      if ([PARTNER_STATUS.REJECTED, PARTNER_STATUS.SUSPENDED].includes(partnerStatus)) {
         return res.status(403).json({ error: "Account is not eligible for login. Contact support/admin." });
       }
-      return res.status(403).json({ error: "Verification pending. Your lab account is under compliance review." });
+      return res.status(403).json({
+        error: `Verification pending. Current status: ${statusDisplay(partnerStatus)}. Lab is not live yet.`,
+      });
     }
     const token = jwt.sign(partnerTokenPayload(partner), process.env.JWT_SECRET, { expiresIn: "30d" });
     return res.json({ token, partner: mapPartner(partner) });
@@ -330,6 +371,11 @@ router.get("/bookings", partnerAuth, async (req, res) => {
   try {
     const partner = await LabPartner.findById(req.partnerAuth.partnerId).lean();
     if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    if (asText(partner.partnerStatus).toLowerCase() !== PARTNER_STATUS.LIVE || !partner.active) {
+      return res.status(403).json({
+        error: `Bookings are disabled until verification is completed and status is Live. Current status: ${statusDisplay(partner.partnerStatus)}.`,
+      });
+    }
 
     const status = asText(req.query.status || "all").toLowerCase();
     const showUnassigned = asText(req.query.unassigned || "1") !== "0";
@@ -377,10 +423,74 @@ async function saveReportFile(file) {
   };
 }
 
+async function savePartnerDocs(files = []) {
+  const docsDir = ensureDir("docs");
+  const out = [];
+  for (const f of files) {
+    const safeName = path.basename(f.originalname || "doc.bin").replace(/[^\w.\-]/g, "_");
+    const key = `${Date.now()}-${crypto.randomBytes(5).toString("hex")}-${safeName}`;
+    const abs = path.join(docsDir, key);
+    await fs.promises.writeFile(abs, f.buffer);
+    out.push({
+      docType: asText(f.fieldname || "document"),
+      fileName: f.originalname || safeName,
+      mimeType: f.mimetype || "",
+      fileSize: Number(f.size || 0),
+      fileKey: key,
+      fileUrl: `/uploads/lab-partner-docs/${key}`,
+    });
+  }
+  return out;
+}
+
+function yesNoText(v) {
+  const s = asText(v).toLowerCase();
+  if (["yes", "no"].includes(s)) return s;
+  return "";
+}
+
+function hasDocs(arr) {
+  return Array.isArray(arr) && arr.length > 0;
+}
+
+function canGoLive(partner) {
+  const v = partner?.verification || {};
+  const c = v.compliance || {};
+  const b = v.banking || {};
+  const o = v.operations || {};
+  const t = v.techReportFlow || {};
+  const l = v.legalAgreement || {};
+  const k = v.verificationChecklist || {};
+
+  return (
+    hasDocs(c.stateRegistrationCertificate) &&
+    hasDocs(c.panCardCopy) &&
+    (hasDocs(c.gstCertificate) || yesNoText(c.gstNotApplicable) === "yes") &&
+    hasDocs(c.addressProof) &&
+    hasDocs(c.authorizedSignatoryIdProof) &&
+    hasDocs(b.bankProof) &&
+    asText(c.pathologistName) &&
+    asText(c.pathologistRegistrationNumber) &&
+    hasDocs(l.signedPartnerAgreement) &&
+    !!o.homeCollectionCapabilityConfirmed &&
+    yesNoText(t.canUploadSignedPdfReport) === "yes" &&
+    !!t.reportUploadTestPassed &&
+    !!k.docsCompleted &&
+    !!k.bankVerified &&
+    !!k.opsChecked &&
+    !!k.agreementSigned
+  );
+}
+
 router.patch("/bookings/:id/status", partnerAuth, upload.single("reportFile"), async (req, res) => {
   try {
     const partner = await LabPartner.findById(req.partnerAuth.partnerId).lean();
     if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    if (asText(partner.partnerStatus).toLowerCase() !== PARTNER_STATUS.LIVE || !partner.active) {
+      return res.status(403).json({
+        error: `Booking/report actions are disabled until status is Live. Current status: ${statusDisplay(partner.partnerStatus)}.`,
+      });
+    }
 
     const id = asText(req.params.id);
     const byMongoId = mongoose.Types.ObjectId.isValid(id) ? [{ _id: id }] : [];
@@ -486,9 +596,147 @@ router.patch("/bookings/:id/status", partnerAuth, upload.single("reportFile"), a
   }
 });
 
+router.put("/admin/:id/verification", isAdmin, upload.any(), async (req, res) => {
+  try {
+    const id = asText(req.params.id);
+    const partner = await LabPartner.findById(id);
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+
+    const docs = await savePartnerDocs(req.files || []);
+    const docsByField = docs.reduce((acc, d) => {
+      const k = asText(d.docType);
+      if (!k) return acc;
+      if (!acc[k]) acc[k] = [];
+      acc[k].push(d);
+      return acc;
+    }, {});
+
+    const v = partner.verification || {};
+    const patch = {
+      businessIdentity: {
+        ...v.businessIdentity,
+        legalEntityType: asText(req.body?.legalEntityType || v?.businessIdentity?.legalEntityType),
+        authorizedSignatoryName: asText(req.body?.authorizedSignatoryName || v?.businessIdentity?.authorizedSignatoryName),
+        authorizedSignatoryMobile: asText(req.body?.authorizedSignatoryMobile || v?.businessIdentity?.authorizedSignatoryMobile),
+        authorizedSignatoryEmail: asText(req.body?.authorizedSignatoryEmail || v?.businessIdentity?.authorizedSignatoryEmail),
+      },
+      compliance: {
+        ...v.compliance,
+        stateRegistrationCertificate: [...(v?.compliance?.stateRegistrationCertificate || []), ...(docsByField.stateRegistrationCertificate || [])],
+        panCardCopy: [...(v?.compliance?.panCardCopy || []), ...(docsByField.panCardCopy || [])],
+        gstCertificate: [...(v?.compliance?.gstCertificate || []), ...(docsByField.gstCertificate || [])],
+        addressProof: [...(v?.compliance?.addressProof || []), ...(docsByField.addressProof || [])],
+        authorizedSignatoryIdProof: [...(v?.compliance?.authorizedSignatoryIdProof || []), ...(docsByField.authorizedSignatoryIdProof || [])],
+        nablCertificate: [...(v?.compliance?.nablCertificate || []), ...(docsByField.nablCertificate || [])],
+        gstNotApplicable: yesNoText(req.body?.gstNotApplicable || v?.compliance?.gstNotApplicable),
+        pathologistName: asText(req.body?.pathologistName || v?.compliance?.pathologistName),
+        pathologistRegistrationNumber: asText(req.body?.pathologistRegistrationNumber || v?.compliance?.pathologistRegistrationNumber),
+      },
+      operations: {
+        ...v.operations,
+        homeCollectionCapabilityConfirmed: ["yes", "true", "1"].includes(asText(req.body?.homeCollectionCapabilityConfirmed || v?.operations?.homeCollectionCapabilityConfirmed).toLowerCase()),
+        ownPhlebotomistAvailable: yesNoText(req.body?.ownPhlebotomistAvailable || v?.operations?.ownPhlebotomistAvailable),
+        phlebotomistCount: Number(req.body?.phlebotomistCount ?? v?.operations?.phlebotomistCount ?? 0),
+        serviceRadiusKm: asText(req.body?.serviceRadiusKm || v?.operations?.serviceRadiusKm),
+        sameDayCollectionAvailable: yesNoText(req.body?.sameDayCollectionAvailable || v?.operations?.sameDayCollectionAvailable),
+        sundayAvailability: yesNoText(req.body?.sundayAvailability || v?.operations?.sundayAvailability),
+        reportTat: asText(req.body?.reportTat || v?.operations?.reportTat),
+        recollectionHandling: asText(req.body?.recollectionHandling || v?.operations?.recollectionHandling),
+      },
+      banking: {
+        ...v.banking,
+        accountHolderName: asText(req.body?.accountHolderName || v?.banking?.accountHolderName),
+        bankName: asText(req.body?.bankName || v?.banking?.bankName),
+        accountNumber: asText(req.body?.accountNumber || v?.banking?.accountNumber),
+        ifscCode: asText(req.body?.ifscCode || v?.banking?.ifscCode),
+        bankProof: [...(v?.banking?.bankProof || []), ...(docsByField.bankProof || [])],
+      },
+      techReportFlow: {
+        ...v.techReportFlow,
+        canUploadSignedPdfReport: yesNoText(req.body?.canUploadSignedPdfReport || v?.techReportFlow?.canUploadSignedPdfReport),
+        canUpdateBookingStatusDigitally: yesNoText(req.body?.canUpdateBookingStatusDigitally || v?.techReportFlow?.canUpdateBookingStatusDigitally),
+        canAcceptWhatsappBookings: yesNoText(req.body?.canAcceptWhatsappBookings || v?.techReportFlow?.canAcceptWhatsappBookings),
+        usesLisSoftware: yesNoText(req.body?.usesLisSoftware || v?.techReportFlow?.usesLisSoftware),
+        reportUploadTestPassed: ["yes", "true", "1"].includes(asText(req.body?.reportUploadTestPassed || v?.techReportFlow?.reportUploadTestPassed).toLowerCase()),
+      },
+      legalAgreement: {
+        ...v.legalAgreement,
+        signedPartnerAgreement: [...(v?.legalAgreement?.signedPartnerAgreement || []), ...(docsByField.signedPartnerAgreement || [])],
+        consentForDocumentVerification: ["yes", "true", "1"].includes(asText(req.body?.consentForDocumentVerification || v?.legalAgreement?.consentForDocumentVerification).toLowerCase()),
+        acceptanceOfCommercialTerms: ["yes", "true", "1"].includes(asText(req.body?.acceptanceOfCommercialTerms || v?.legalAgreement?.acceptanceOfCommercialTerms).toLowerCase()),
+      },
+      verificationChecklist: {
+        ...v.verificationChecklist,
+        docsCompleted: ["yes", "true", "1"].includes(asText(req.body?.docsCompleted || v?.verificationChecklist?.docsCompleted).toLowerCase()),
+        bankVerified: ["yes", "true", "1"].includes(asText(req.body?.bankVerified || v?.verificationChecklist?.bankVerified).toLowerCase()),
+        opsChecked: ["yes", "true", "1"].includes(asText(req.body?.opsChecked || v?.verificationChecklist?.opsChecked).toLowerCase()),
+        agreementSigned: ["yes", "true", "1"].includes(asText(req.body?.agreementSigned || v?.verificationChecklist?.agreementSigned).toLowerCase()),
+      },
+    };
+
+    partner.verification = patch;
+    partner.partnerStatus = PARTNER_STATUS.VERIFICATION_IN_REVIEW;
+    partner.kycStatus = "pending";
+    partner.statusNotes = asText(req.body?.notes || "Step-2 verification updated");
+    partner.active = false;
+    await partner.save();
+    return res.json({ partner: mapPartner(partner) });
+  } catch (err) {
+    console.error("PUT /lab-partners/admin/:id/verification error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to update verification details" });
+  }
+});
+
+router.post("/admin/:id/activate-live", isAdmin, async (req, res) => {
+  try {
+    const id = asText(req.params.id);
+    const partner = await LabPartner.findById(id);
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+
+    if (!canGoLive(partner)) {
+      partner.partnerStatus = PARTNER_STATUS.DOCS_PENDING;
+      partner.kycStatus = "pending";
+      partner.active = false;
+      partner.statusNotes = asText(req.body?.notes || "Mandatory verification fields pending. No full verification = no activation.");
+      await partner.save();
+      return res.status(409).json({
+        error: "Mandatory verification checks are incomplete. No full verification = no activation.",
+        partner: mapPartner(partner),
+      });
+    }
+
+    partner.partnerStatus = PARTNER_STATUS.LIVE;
+    partner.kycStatus = "verified";
+    partner.active = true;
+    partner.liveAt = new Date();
+    partner.approvedAt = partner.approvedAt || new Date();
+    partner.approvedByAdminId = req.user?.adminId || partner.approvedByAdminId;
+    partner.statusNotes = asText(req.body?.notes || "Activated: all verification, bank, ops, report upload test and agreement checks passed.");
+    await partner.save();
+    return res.json({ partner: mapPartner(partner) });
+  } catch (err) {
+    console.error("POST /lab-partners/admin/:id/activate-live error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to activate partner" });
+  }
+});
+
 router.get("/admin/pending", isAdmin, async (req, res) => {
   try {
-    const rows = await LabPartner.find({ kycStatus: "pending" })
+    const rows = await LabPartner.find({
+      $or: [
+        {
+          partnerStatus: {
+            $in: [
+              PARTNER_STATUS.APPLIED,
+              PARTNER_STATUS.UNDER_REVIEW,
+              PARTNER_STATUS.DOCS_PENDING,
+              PARTNER_STATUS.VERIFICATION_IN_REVIEW,
+            ],
+          },
+        },
+        { partnerStatus: { $exists: false }, kycStatus: "pending" },
+      ],
+    })
       .sort({ createdAt: 1 })
       .limit(500)
       .lean();
@@ -506,9 +754,10 @@ router.patch("/admin/:id/approve", isAdmin, async (req, res) => {
       id,
       {
         $set: {
+          partnerStatus: PARTNER_STATUS.APPROVED,
           kycStatus: "verified",
-          active: true,
-          kycNotes: asText(req.body?.notes || "Approved by admin"),
+          active: false,
+          statusNotes: asText(req.body?.notes || "Approved. Pending go-live checks."),
           approvedAt: new Date(),
           approvedByAdminId: req.user?.adminId || null,
         },
@@ -530,10 +779,12 @@ router.patch("/admin/:id/reject", isAdmin, async (req, res) => {
       id,
       {
         $set: {
+          partnerStatus: PARTNER_STATUS.REJECTED,
           kycStatus: "rejected",
           active: false,
-          kycNotes: asText(req.body?.notes || "Rejected by admin"),
+          statusNotes: asText(req.body?.notes || "Rejected by admin"),
           approvedAt: null,
+          liveAt: null,
           approvedByAdminId: null,
         },
       },
@@ -544,6 +795,35 @@ router.patch("/admin/:id/reject", isAdmin, async (req, res) => {
   } catch (err) {
     console.error("PATCH /lab-partners/admin/:id/reject error:", err?.message || err);
     return res.status(500).json({ error: "Failed to reject partner" });
+  }
+});
+
+router.patch("/admin/:id/status", isAdmin, async (req, res) => {
+  try {
+    const id = asText(req.params.id);
+    const status = asText(req.body?.status).toLowerCase();
+    const allowed = new Set(Object.values(PARTNER_STATUS));
+    if (!allowed.has(status)) {
+      return res.status(400).json({ error: "Invalid status. Use Applied/Under Review/Docs Pending/Verification In Review/Approved/Live/Suspended/Rejected." });
+    }
+    const patch = {
+      partnerStatus: status,
+      kycStatus: syncKycStatusFromPartnerStatus(status),
+      statusNotes: asText(req.body?.notes || ""),
+    };
+    if (status === PARTNER_STATUS.LIVE) {
+      patch.active = true;
+      patch.liveAt = new Date();
+    } else if ([PARTNER_STATUS.REJECTED, PARTNER_STATUS.SUSPENDED, PARTNER_STATUS.DOCS_PENDING, PARTNER_STATUS.UNDER_REVIEW, PARTNER_STATUS.VERIFICATION_IN_REVIEW, PARTNER_STATUS.APPROVED, PARTNER_STATUS.APPLIED].includes(status)) {
+      patch.active = false;
+      if (status !== PARTNER_STATUS.LIVE) patch.liveAt = null;
+    }
+    const partner = await LabPartner.findByIdAndUpdate(id, { $set: patch }, { new: true });
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    return res.json({ partner: mapPartner(partner) });
+  } catch (err) {
+    console.error("PATCH /lab-partners/admin/:id/status error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to update partner status" });
   }
 });
 
