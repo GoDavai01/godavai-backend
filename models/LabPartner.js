@@ -105,6 +105,77 @@ const labPartnerSchema = new mongoose.Schema(
         agreementSigned: { type: Boolean, default: false },
       },
     },
+    capabilities: {
+      type: [
+        {
+          id: { type: String, default: "", trim: true },
+          type: { type: String, default: "", trim: true }, // test/package
+          name: { type: String, default: "", trim: true },
+          category: { type: String, default: "", trim: true },
+          partnerPrice: { type: Number, default: 0 },
+          oldPrice: { type: Number, default: 0 },
+          reportTAT: { type: String, default: "", trim: true },
+          fastingRequired: { type: String, default: "", trim: true },
+          sampleType: { type: String, default: "", trim: true },
+          description: { type: String, default: "", trim: true },
+          includedParameters: { type: String, default: "", trim: true },
+          includedTests: { type: String, default: "", trim: true },
+          customIncludesText: { type: String, default: "", trim: true },
+          homeCollection: { type: String, default: "", trim: true },
+          sourcing: { type: String, default: "", trim: true }, // in_house/outsourced
+          available: { type: String, default: "yes", trim: true },
+          serviceAreas: { type: String, default: "", trim: true },
+          status: { type: String, default: "active", trim: true },
+        },
+      ],
+      default: [],
+    },
+    catalogProposals: {
+      type: [
+        {
+          id: { type: String, default: "", trim: true },
+          type: { type: String, default: "", trim: true }, // Test/Package
+          name: { type: String, default: "", trim: true },
+          category: { type: String, default: "", trim: true },
+          price: { type: Number, default: 0 },
+          oldPrice: { type: Number, default: 0 },
+          reportTime: { type: String, default: "", trim: true },
+          fastingRequired: { type: String, default: "", trim: true },
+          sampleType: { type: String, default: "", trim: true },
+          description: { type: String, default: "", trim: true },
+          includedParameters: { type: String, default: "", trim: true },
+          includedTests: { type: String, default: "", trim: true },
+          customIncludesText: { type: String, default: "", trim: true },
+          homeCollection: { type: String, default: "", trim: true },
+          sourcing: { type: String, default: "", trim: true },
+          available: { type: String, default: "yes", trim: true },
+          serviceAreas: { type: String, default: "", trim: true },
+          notesForAdmin: { type: String, default: "", trim: true },
+          status: {
+            type: String,
+            enum: ["draft", "submitted_for_review", "approved", "rejected", "needs_changes"],
+            default: "submitted_for_review",
+          },
+          adminComment: { type: String, default: "", trim: true },
+          reviewedAt: { type: Date, default: null },
+        },
+      ],
+      default: [],
+    },
+    adminAuditTrail: {
+      type: [
+        {
+          id: { type: String, default: "", trim: true },
+          action: { type: String, default: "", trim: true },
+          notes: { type: String, default: "", trim: true },
+          adminId: { type: String, default: "", trim: true },
+          adminType: { type: String, default: "admin", trim: true },
+          meta: { type: mongoose.Schema.Types.Mixed, default: {} },
+          at: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );

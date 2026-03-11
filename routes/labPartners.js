@@ -135,10 +135,63 @@ function mapPartner(p) {
     consentAccepted: !!p.consentAccepted,
     preferredLanguage: p.preferredLanguage || "hinglish",
     documents: Array.isArray(p.documents) ? p.documents : [],
+    capabilities: Array.isArray(p.capabilities) ? p.capabilities : [],
+    catalogProposals: Array.isArray(p.catalogProposals) ? p.catalogProposals : [],
+    adminAuditTrail: Array.isArray(p.adminAuditTrail) ? p.adminAuditTrail : [],
     verification: p.verification || {},
     approvedAt: p.approvedAt || null,
     liveAt: p.liveAt || null,
+    createdAt: p.createdAt || null,
+    updatedAt: p.updatedAt || null,
   };
+}
+
+function flattenVerificationDocs(v = {}) {
+  const out = [];
+  const pushDocs = (section, key, rows) => {
+    if (!Array.isArray(rows)) return;
+    rows.forEach((d) => {
+      if (!d) return;
+      out.push({
+        section,
+        key,
+        label: `${section} / ${key}`,
+        fileName: asText(d.fileName),
+        mimeType: asText(d.mimeType),
+        fileSize: Number(d.fileSize || 0),
+        fileUrl: asText(d.fileUrl),
+        fileKey: asText(d.fileKey),
+        docType: asText(d.docType),
+      });
+    });
+  };
+
+  const compliance = v.compliance || {};
+  const banking = v.banking || {};
+  const legalAgreement = v.legalAgreement || {};
+  pushDocs("compliance", "stateRegistrationCertificate", compliance.stateRegistrationCertificate);
+  pushDocs("compliance", "panCardCopy", compliance.panCardCopy);
+  pushDocs("compliance", "gstCertificate", compliance.gstCertificate);
+  pushDocs("compliance", "addressProof", compliance.addressProof);
+  pushDocs("compliance", "authorizedSignatoryIdProof", compliance.authorizedSignatoryIdProof);
+  pushDocs("compliance", "nablCertificate", compliance.nablCertificate);
+  pushDocs("banking", "bankProof", banking.bankProof);
+  pushDocs("legalAgreement", "signedPartnerAgreement", legalAgreement.signedPartnerAgreement);
+  return out;
+}
+
+function appendAudit(partner, req, action, notes = "", meta = {}) {
+  if (!partner) return;
+  if (!Array.isArray(partner.adminAuditTrail)) partner.adminAuditTrail = [];
+  partner.adminAuditTrail.unshift({
+    id: nowId(),
+    action: asText(action),
+    notes: asText(notes),
+    adminId: asText(req?.user?.adminId || req?.user?._id || "system"),
+    adminType: asText(req?.user?.type || "admin"),
+    meta: meta || {},
+    at: new Date(),
+  });
 }
 
 function mapBooking(row) {
@@ -596,6 +649,151 @@ router.patch("/bookings/:id/status", partnerAuth, upload.single("reportFile"), a
   }
 });
 
+router.get("/catalog/capabilities", partnerAuth, async (req, res) => {
+  try {
+    const partner = await LabPartner.findById(req.partnerAuth.partnerId).lean();
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    return res.json({ capabilities: Array.isArray(partner.capabilities) ? partner.capabilities : [] });
+  } catch (err) {
+    console.error("GET /lab-partners/catalog/capabilities error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load capabilities" });
+  }
+});
+
+router.get("/catalog/proposals", partnerAuth, async (req, res) => {
+  try {
+    const partner = await LabPartner.findById(req.partnerAuth.partnerId).lean();
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    return res.json({ proposals: Array.isArray(partner.catalogProposals) ? partner.catalogProposals : [] });
+  } catch (err) {
+    console.error("GET /lab-partners/catalog/proposals error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load proposals" });
+  }
+});
+
+router.post("/catalog/proposals", partnerAuth, async (req, res) => {
+  try {
+    const partner = await LabPartner.findById(req.partnerAuth.partnerId);
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+
+    const type = asText(req.body?.type);
+    const name = asText(req.body?.name);
+    const category = asText(req.body?.category);
+    const price = Number(req.body?.price || 0);
+    if (!type || !name || !category || !(price > 0)) {
+      return res.status(400).json({ error: "type, name, category and valid price are required" });
+    }
+
+    const proposal = {
+      id: nowId(),
+      type,
+      name,
+      category,
+      price,
+      oldPrice: Number(req.body?.oldPrice || 0),
+      reportTime: asText(req.body?.reportTime),
+      fastingRequired: asText(req.body?.fastingRequired),
+      sampleType: asText(req.body?.sampleType),
+      description: asText(req.body?.description),
+      includedParameters: asText(req.body?.includedParameters),
+      includedTests: asText(req.body?.includedTests),
+      customIncludesText: asText(req.body?.customIncludesText),
+      homeCollection: asText(req.body?.homeCollection),
+      sourcing: asText(req.body?.sourcing),
+      available: asText(req.body?.available),
+      serviceAreas: asText(req.body?.serviceAreas),
+      notesForAdmin: asText(req.body?.notesForAdmin),
+      status: "submitted_for_review",
+      adminComment: "Pending admin review",
+      reviewedAt: null,
+    };
+
+    if (!Array.isArray(partner.catalogProposals)) partner.catalogProposals = [];
+    partner.catalogProposals.unshift(proposal);
+    await partner.save();
+    return res.status(201).json({ proposal, proposals: partner.catalogProposals });
+  } catch (err) {
+    console.error("POST /lab-partners/catalog/proposals error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to submit proposal" });
+  }
+});
+
+router.get("/admin/:id/catalog/proposals", isAdmin, async (req, res) => {
+  try {
+    const partner = await LabPartner.findById(asText(req.params.id)).lean();
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    return res.json({ partner: mapPartner(partner), proposals: Array.isArray(partner.catalogProposals) ? partner.catalogProposals : [] });
+  } catch (err) {
+    console.error("GET /lab-partners/admin/:id/catalog/proposals error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load admin proposals" });
+  }
+});
+
+router.patch("/admin/:id/catalog/proposals/:proposalId", isAdmin, async (req, res) => {
+  try {
+    const partner = await LabPartner.findById(asText(req.params.id));
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    const proposalId = asText(req.params.proposalId);
+    const status = asText(req.body?.status).toLowerCase();
+    const allowed = new Set(["draft", "submitted_for_review", "approved", "rejected", "needs_changes"]);
+    if (!allowed.has(status)) {
+      return res.status(400).json({ error: "Invalid proposal status" });
+    }
+
+    const idx = (partner.catalogProposals || []).findIndex((p) => asText(p.id) === proposalId);
+    if (idx < 0) return res.status(404).json({ error: "Proposal not found" });
+    const row = partner.catalogProposals[idx];
+    row.status = status;
+    row.adminComment = asText(req.body?.adminComment || row.adminComment || "");
+    row.reviewedAt = new Date();
+
+    if (status === "approved" && ["yes", "true", "1"].includes(asText(req.body?.activateCapability).toLowerCase())) {
+      if (!Array.isArray(partner.capabilities)) partner.capabilities = [];
+      partner.capabilities.unshift({
+        id: nowId(),
+        type: asText(row.type).toLowerCase(),
+        name: row.name,
+        category: row.category,
+        partnerPrice: Number(row.price || 0),
+        oldPrice: Number(row.oldPrice || 0),
+        reportTAT: row.reportTime || "",
+        fastingRequired: row.fastingRequired || "",
+        sampleType: row.sampleType || "",
+        description: row.description || "",
+        includedParameters: row.includedParameters || "",
+        includedTests: row.includedTests || "",
+        customIncludesText: row.customIncludesText || "",
+        homeCollection: row.homeCollection || "",
+        sourcing: row.sourcing || "",
+        available: row.available || "yes",
+        serviceAreas: row.serviceAreas || "",
+        status: "active",
+      });
+    }
+
+    appendAudit(
+      partner,
+      req,
+      "catalog_proposal_review",
+      asText(req.body?.adminComment || row.adminComment || ""),
+      {
+        proposalId,
+        proposalName: row.name,
+        status,
+        activateCapability: ["yes", "true", "1"].includes(asText(req.body?.activateCapability).toLowerCase()),
+      }
+    );
+    partner.markModified("catalogProposals");
+    partner.markModified("capabilities");
+    partner.markModified("adminAuditTrail");
+    await partner.save();
+    return res.json({ proposal: row, partner: mapPartner(partner) });
+  } catch (err) {
+    console.error("PATCH /lab-partners/admin/:id/catalog/proposals/:proposalId error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to review proposal" });
+  }
+});
+
 router.put("/admin/:id/verification", isAdmin, upload.any(), async (req, res) => {
   try {
     const id = asText(req.params.id);
@@ -679,6 +877,17 @@ router.put("/admin/:id/verification", isAdmin, upload.any(), async (req, res) =>
     partner.kycStatus = "pending";
     partner.statusNotes = asText(req.body?.notes || "Step-2 verification updated");
     partner.active = false;
+    appendAudit(
+      partner,
+      req,
+      "verification_updated",
+      partner.statusNotes,
+      {
+        uploadedDocs: (req.files || []).length,
+        checklist: patch.verificationChecklist || {},
+      }
+    );
+    partner.markModified("adminAuditTrail");
     await partner.save();
     return res.json({ partner: mapPartner(partner) });
   } catch (err) {
@@ -698,6 +907,14 @@ router.post("/admin/:id/activate-live", isAdmin, async (req, res) => {
       partner.kycStatus = "pending";
       partner.active = false;
       partner.statusNotes = asText(req.body?.notes || "Mandatory verification fields pending. No full verification = no activation.");
+      appendAudit(
+        partner,
+        req,
+        "activate_live_blocked",
+        partner.statusNotes,
+        { status: PARTNER_STATUS.DOCS_PENDING }
+      );
+      partner.markModified("adminAuditTrail");
       await partner.save();
       return res.status(409).json({
         error: "Mandatory verification checks are incomplete. No full verification = no activation.",
@@ -712,6 +929,14 @@ router.post("/admin/:id/activate-live", isAdmin, async (req, res) => {
     partner.approvedAt = partner.approvedAt || new Date();
     partner.approvedByAdminId = req.user?.adminId || partner.approvedByAdminId;
     partner.statusNotes = asText(req.body?.notes || "Activated: all verification, bank, ops, report upload test and agreement checks passed.");
+    appendAudit(
+      partner,
+      req,
+      "partner_live_activated",
+      partner.statusNotes,
+      { status: PARTNER_STATUS.LIVE }
+    );
+    partner.markModified("adminAuditTrail");
     await partner.save();
     return res.json({ partner: mapPartner(partner) });
   } catch (err) {
@@ -747,24 +972,85 @@ router.get("/admin/pending", isAdmin, async (req, res) => {
   }
 });
 
+router.get("/admin/all", isAdmin, async (req, res) => {
+  try {
+    const status = asText(req.query?.status).toLowerCase();
+    const q = asText(req.query?.q).toLowerCase();
+    const filter = {};
+    if (status && status !== "all") filter.partnerStatus = status;
+    if (q) {
+      filter.$or = [
+        { name: { $regex: q, $options: "i" } },
+        { organization: { $regex: q, $options: "i" } },
+        { city: { $regex: q, $options: "i" } },
+        { email: { $regex: q, $options: "i" } },
+        { phone: { $regex: q, $options: "i" } },
+      ];
+    }
+    const rows = await LabPartner.find(filter).sort({ createdAt: -1 }).limit(1000).lean();
+    return res.json({ partners: rows.map(mapPartner) });
+  } catch (err) {
+    console.error("GET /lab-partners/admin/all error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load all partners" });
+  }
+});
+
+router.get("/admin/:id/documents", isAdmin, async (req, res) => {
+  try {
+    const partner = await LabPartner.findById(asText(req.params.id)).lean();
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    const basicDocs = Array.isArray(partner.documents)
+      ? partner.documents.map((d) => ({
+          section: "basic",
+          key: asText(d.docType || "document"),
+          label: `basic / ${asText(d.docType || "document")}`,
+          fileName: asText(d.fileName),
+          mimeType: asText(d.mimeType),
+          fileSize: Number(d.fileSize || 0),
+          fileUrl: asText(d.fileUrl),
+          fileKey: asText(d.fileKey),
+          docType: asText(d.docType),
+        }))
+      : [];
+    const verificationDocs = flattenVerificationDocs(partner.verification || {});
+    return res.json({
+      partner: mapPartner(partner),
+      documents: [...basicDocs, ...verificationDocs],
+    });
+  } catch (err) {
+    console.error("GET /lab-partners/admin/:id/documents error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load partner documents" });
+  }
+});
+
+router.get("/admin/:id/audit", isAdmin, async (req, res) => {
+  try {
+    const partner = await LabPartner.findById(asText(req.params.id)).lean();
+    if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    return res.json({
+      partner: mapPartner(partner),
+      audit: Array.isArray(partner.adminAuditTrail) ? partner.adminAuditTrail : [],
+    });
+  } catch (err) {
+    console.error("GET /lab-partners/admin/:id/audit error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load partner audit trail" });
+  }
+});
+
 router.patch("/admin/:id/approve", isAdmin, async (req, res) => {
   try {
     const id = asText(req.params.id);
-    const partner = await LabPartner.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          partnerStatus: PARTNER_STATUS.APPROVED,
-          kycStatus: "verified",
-          active: false,
-          statusNotes: asText(req.body?.notes || "Approved. Pending go-live checks."),
-          approvedAt: new Date(),
-          approvedByAdminId: req.user?.adminId || null,
-        },
-      },
-      { new: true }
-    );
+    const partner = await LabPartner.findById(id);
     if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    partner.partnerStatus = PARTNER_STATUS.APPROVED;
+    partner.kycStatus = "verified";
+    partner.active = false;
+    partner.statusNotes = asText(req.body?.notes || "Approved. Pending go-live checks.");
+    partner.approvedAt = new Date();
+    partner.approvedByAdminId = req.user?.adminId || null;
+    appendAudit(partner, req, "partner_approved", partner.statusNotes, { status: PARTNER_STATUS.APPROVED });
+    partner.markModified("adminAuditTrail");
+    await partner.save();
     return res.json({ partner: mapPartner(partner) });
   } catch (err) {
     console.error("PATCH /lab-partners/admin/:id/approve error:", err?.message || err);
@@ -775,22 +1061,18 @@ router.patch("/admin/:id/approve", isAdmin, async (req, res) => {
 router.patch("/admin/:id/reject", isAdmin, async (req, res) => {
   try {
     const id = asText(req.params.id);
-    const partner = await LabPartner.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          partnerStatus: PARTNER_STATUS.REJECTED,
-          kycStatus: "rejected",
-          active: false,
-          statusNotes: asText(req.body?.notes || "Rejected by admin"),
-          approvedAt: null,
-          liveAt: null,
-          approvedByAdminId: null,
-        },
-      },
-      { new: true }
-    );
+    const partner = await LabPartner.findById(id);
     if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    partner.partnerStatus = PARTNER_STATUS.REJECTED;
+    partner.kycStatus = "rejected";
+    partner.active = false;
+    partner.statusNotes = asText(req.body?.notes || "Rejected by admin");
+    partner.approvedAt = null;
+    partner.liveAt = null;
+    partner.approvedByAdminId = null;
+    appendAudit(partner, req, "partner_rejected", partner.statusNotes, { status: PARTNER_STATUS.REJECTED });
+    partner.markModified("adminAuditTrail");
+    await partner.save();
     return res.json({ partner: mapPartner(partner) });
   } catch (err) {
     console.error("PATCH /lab-partners/admin/:id/reject error:", err?.message || err);
@@ -806,20 +1088,21 @@ router.patch("/admin/:id/status", isAdmin, async (req, res) => {
     if (!allowed.has(status)) {
       return res.status(400).json({ error: "Invalid status. Use Applied/Under Review/Docs Pending/Verification In Review/Approved/Live/Suspended/Rejected." });
     }
-    const patch = {
-      partnerStatus: status,
-      kycStatus: syncKycStatusFromPartnerStatus(status),
-      statusNotes: asText(req.body?.notes || ""),
-    };
-    if (status === PARTNER_STATUS.LIVE) {
-      patch.active = true;
-      patch.liveAt = new Date();
-    } else if ([PARTNER_STATUS.REJECTED, PARTNER_STATUS.SUSPENDED, PARTNER_STATUS.DOCS_PENDING, PARTNER_STATUS.UNDER_REVIEW, PARTNER_STATUS.VERIFICATION_IN_REVIEW, PARTNER_STATUS.APPROVED, PARTNER_STATUS.APPLIED].includes(status)) {
-      patch.active = false;
-      if (status !== PARTNER_STATUS.LIVE) patch.liveAt = null;
-    }
-    const partner = await LabPartner.findByIdAndUpdate(id, { $set: patch }, { new: true });
+    const partner = await LabPartner.findById(id);
     if (!partner) return res.status(404).json({ error: "Lab partner not found" });
+    partner.partnerStatus = status;
+    partner.kycStatus = syncKycStatusFromPartnerStatus(status);
+    partner.statusNotes = asText(req.body?.notes || "");
+    if (status === PARTNER_STATUS.LIVE) {
+      partner.active = true;
+      partner.liveAt = new Date();
+    } else if ([PARTNER_STATUS.REJECTED, PARTNER_STATUS.SUSPENDED, PARTNER_STATUS.DOCS_PENDING, PARTNER_STATUS.UNDER_REVIEW, PARTNER_STATUS.VERIFICATION_IN_REVIEW, PARTNER_STATUS.APPROVED, PARTNER_STATUS.APPLIED].includes(status)) {
+      partner.active = false;
+      partner.liveAt = null;
+    }
+    appendAudit(partner, req, "partner_status_updated", partner.statusNotes, { status });
+    partner.markModified("adminAuditTrail");
+    await partner.save();
     return res.json({ partner: mapPartner(partner) });
   } catch (err) {
     console.error("PATCH /lab-partners/admin/:id/status error:", err?.message || err);
