@@ -424,26 +424,29 @@ router.get("/bookings", partnerAuth, async (req, res) => {
   try {
     const partner = await LabPartner.findById(req.partnerAuth.partnerId).lean();
     if (!partner) return res.status(404).json({ error: "Lab partner not found" });
-    if (asText(partner.partnerStatus).toLowerCase() !== PARTNER_STATUS.LIVE || !partner.active) {
+    const status = asText(req.query.status || "all").toLowerCase();
+    const showUnassigned = asText(req.query.unassigned || "1") !== "0";
+    const partnerIsLive = asText(partner.partnerStatus).toLowerCase() === PARTNER_STATUS.LIVE && !!partner.active;
+    const readOnlyHistoryAllowed = ["completed", "cancelled", "rejected"].includes(status);
+    if (!partnerIsLive && !readOnlyHistoryAllowed) {
       return res.status(403).json({
         error: `Bookings are disabled until verification is completed and status is Live. Current status: ${statusDisplay(partner.partnerStatus)}.`,
       });
     }
-
-    const status = asText(req.query.status || "all").toLowerCase();
-    const showUnassigned = asText(req.query.unassigned || "1") !== "0";
 
     const baseStatus = status === "all" ? { $in: ["sample_scheduled", "sample_collected", "processing", "report_ready"] } : status;
 
     const cityRe = asText(req.query.city || partner.city || "");
     const cityFilter = cityRe ? { cityArea: new RegExp(cityRe, "i") } : {};
 
-    const assignedFilter = {
-      $or: [
-        { assignedPartnerId: partner._id },
-        ...(showUnassigned ? [{ assignedPartnerId: null }] : []),
-      ],
-    };
+    const assignedFilter = !partnerIsLive
+      ? { assignedPartnerId: partner._id }
+      : {
+          $or: [
+            { assignedPartnerId: partner._id },
+            ...(showUnassigned ? [{ assignedPartnerId: null }] : []),
+          ],
+        };
 
     const rows = await LabBooking.find({
       status: baseStatus,
