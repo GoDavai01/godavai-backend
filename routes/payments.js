@@ -6,6 +6,7 @@ const Payment = require("../models/Payment");
 const Pharmacy = require("../models/Pharmacy");
 const DeliveryPartner = require("../models/DeliveryPartner");
 const DoctorAppointment = require("../models/DoctorAppointment");
+const DoctorNotification = require("../models/DoctorNotification");
 
 const razorpayEnabled = !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
 const razorpay = razorpayEnabled
@@ -138,7 +139,17 @@ router.post("/verify", async (req, res) => {
     consult.amountPaid = consult.fee || 0;
     consult.status = "confirmed";
     consult.holdExpiresAt = null;
+    consult.locationUnlockedForPatient = consult.mode === "inperson";
     await consult.save();
+
+    DoctorNotification.create({
+      doctorId: consult.doctorId,
+      type: "booking_confirmed",
+      title: `New ${consult.mode === "inperson" ? "In-person" : consult.mode === "video" ? "Video" : "Audio"} booking confirmed`,
+      message: `${consult.patientName || "Patient"} | ${consult.date} | ${consult.slot} | Booking ${consult._id.toString().slice(-6)}`,
+      bookingId: consult._id,
+      meta: { mode: consult.mode, date: consult.date, slot: consult.slot },
+    }).catch(() => {});
 
     res.json({
       ok: true,
