@@ -116,6 +116,7 @@ const ORIGINS = new Set([
   "https://godavaii.com",
   "http://localhost:3000",
 ]);
+allowedOrigins.filter(Boolean).forEach((o) => ORIGINS.add(o));
 
 const corsOptions = {
   origin(origin, cb) {
@@ -1989,14 +1990,13 @@ app.get("/routes", (req, res) => {
 // --- Global error handler that still returns CORS so the browser shows the real error ---
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
-  // echo back the origin if allowed; otherwise use first allowed origin or *
+  // Keep error responses CORS-consistent with the main corsOptions config.
   const reqOrigin = req.headers.origin;
   const allow =
-    ['https://godavaii.com','https://www.godavaii.com'].includes(reqOrigin) ||
-    /\.vercel\.app$/i.test(reqOrigin) ||
-    reqOrigin === 'http://localhost:3000';
+    !!reqOrigin &&
+    (ORIGINS.has(reqOrigin) || ORIGIN_REGEXES.some((rx) => rx.test(reqOrigin)));
 
-  res.setHeader('Access-Control-Allow-Origin', allow ? reqOrigin : 'https://www.godavaii.com');
+  if (allow) res.setHeader('Access-Control-Allow-Origin', reqOrigin);
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.status(500).json({ error: 'Server error' });
 });
