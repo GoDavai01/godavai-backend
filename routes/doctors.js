@@ -8,6 +8,7 @@ const Doctor = require("../models/Doctor");
 const DoctorAppointment = require("../models/DoctorAppointment");
 const DoctorNotification = require("../models/DoctorNotification");
 const upload = require("../utils/upload");
+const multer = require("multer");
 
 const router = express.Router();
 
@@ -380,6 +381,33 @@ function pushDoctorNotification(doctorId, title, message, type = "info", booking
   }).catch(() => {});
 }
 
+const onboardingUploadFields = [
+  { name: "registrationCertificate", maxCount: 1 },
+  { name: "mbbsDegree", maxCount: 1 },
+  { name: "specialistDegree", maxCount: 1 },
+  { name: "pan", maxCount: 1 },
+  { name: "bankProof", maxCount: 1 },
+  { name: "clinicProof", maxCount: 1 },
+];
+
+const onboardingUpload = (req, res, next) => {
+  const mw = upload.fields(onboardingUploadFields);
+  mw(req, res, (err) => {
+    if (!err) return next();
+    const raw = String(err?.message || "Upload failed");
+    const isMulter = err instanceof multer.MulterError;
+    const msg =
+      err?.code === "LIMIT_FILE_SIZE"
+        ? "File too large. Max 5MB per file."
+        : err?.code === "LIMIT_UNEXPECTED_FILE"
+        ? "Unexpected upload field. Please refresh and try again."
+        : raw.toLowerCase().includes("credential") || raw.toLowerCase().includes("bucket")
+        ? "Upload service unavailable. Please try again in a moment."
+        : raw;
+    return res.status(isMulter ? 400 : 503).json({ error: msg });
+  });
+};
+
 router.post("/onboarding/otp/send", async (req, res) => {
   try {
     const phone = normalizePhone(req.body?.phone);
@@ -415,14 +443,7 @@ router.post("/onboarding/otp/verify", async (req, res) => {
 
 router.post(
   "/onboarding/submit",
-  upload.fields([
-    { name: "registrationCertificate", maxCount: 1 },
-    { name: "mbbsDegree", maxCount: 1 },
-    { name: "specialistDegree", maxCount: 1 },
-    { name: "pan", maxCount: 1 },
-    { name: "bankProof", maxCount: 1 },
-    { name: "clinicProof", maxCount: 1 },
-  ]),
+  onboardingUpload,
   async (req, res) => {
     try {
       const b = req.body || {};
