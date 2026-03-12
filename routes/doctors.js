@@ -15,6 +15,16 @@ const VALID_MODES = new Set(["video", "inperson", "call"]);
 const VALID_ADMIN_STATES = new Set(["pending_verification", "approved", "rejected", "needs_more_info", "suspended"]);
 const OTP_STORE = global.__GODAVAI_DOCTOR_OTP__ || new Map();
 global.__GODAVAI_DOCTOR_OTP__ = OTP_STORE;
+const MASTER_SPECIALTIES = [
+  "General Physician", "Internal Medicine", "Family Medicine", "Pediatrics", "Neonatology",
+  "Cardiology", "Cardiothoracic Surgery", "Neurology", "Neurosurgery", "Dermatology",
+  "Psychiatry", "Clinical Psychology", "Orthopedics", "Rheumatology", "Gastroenterology",
+  "Hepatology", "Pulmonology", "Nephrology", "Endocrinology", "Oncology",
+  "Hematology", "Gynecology", "Obstetrics", "ENT", "Ophthalmology", "Urology",
+  "General Surgery", "Plastic Surgery", "Anesthesiology", "Pain Medicine",
+  "Radiology", "Pathology", "Immunology", "Infectious Disease", "Dentistry",
+  "Physiotherapy", "Sports Medicine", "Geriatrics", "Nutrition", "Diabetology",
+];
 
 const DEFAULT_DOCTORS = [
   { name: "Dr. Riya Sharma", specialty: "General Physician", rating: 4.8, exp: 11, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 499, feeInPerson: 700, feeCall: 449, clinic: "CarePoint Clinic, Karol Bagh", tags: ["Fever", "Infection", "BP"] },
@@ -23,12 +33,29 @@ const DEFAULT_DOCTORS = [
   { name: "Dr. Nikhil Bansal", specialty: "Pediatrics", rating: 4.8, exp: 12, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 549, feeInPerson: 780, feeCall: 469, clinic: "HappyKids Clinic, Pitampura", tags: ["Child Fever", "Vaccination"] },
   { name: "Dr. Sana Iqbal", specialty: "Gynecology", rating: 4.8, exp: 10, languages: ["Hindi", "English", "Urdu"], city: "Delhi", feeVideo: 699, feeInPerson: 1100, feeCall: 579, clinic: "WomenCare, Lajpat Nagar", tags: ["PCOS", "Pregnancy", "Hormones"] },
   { name: "Dr. Pranav Rao", specialty: "Orthopedics", rating: 4.6, exp: 13, languages: ["English", "Hindi"], city: "Delhi", feeVideo: 649, feeInPerson: 999, feeCall: 549, clinic: "Joint & Bone, Dwarka", tags: ["Back Pain", "Knee", "Sports"] },
+  { name: "Dr. Ishita Sen", specialty: "Neurology", rating: 4.7, exp: 12, languages: ["English", "Hindi"], city: "Delhi", feeVideo: 950, feeInPerson: 1400, feeCall: 799, clinic: "NeuroCare, Rohini", tags: ["Migraine", "Seizure"] },
+  { name: "Dr. Aman Kohli", specialty: "Pulmonology", rating: 4.8, exp: 10, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 799, feeInPerson: 1200, feeCall: 679, clinic: "Breath Plus, Saket", tags: ["Asthma", "COPD"] },
+  { name: "Dr. Kriti Malhotra", specialty: "Endocrinology", rating: 4.8, exp: 9, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 749, feeInPerson: 1199, feeCall: 649, clinic: "Hormone Clinic, GK", tags: ["Diabetes", "Thyroid"] },
+  { name: "Dr. Harsh Vardhan", specialty: "Gastroenterology", rating: 4.6, exp: 11, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 850, feeInPerson: 1350, feeCall: 699, clinic: "GI Liver Centre, Janakpuri", tags: ["Acidity", "IBS"] },
+  { name: "Dr. Meera Ahuja", specialty: "Nephrology", rating: 4.7, exp: 14, languages: ["English", "Hindi"], city: "Delhi", feeVideo: 899, feeInPerson: 1450, feeCall: 749, clinic: "Kidney Point, Noida", tags: ["CKD", "BP"] },
+  { name: "Dr. Rohan Dutta", specialty: "ENT", rating: 4.7, exp: 8, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 549, feeInPerson: 850, feeCall: 449, clinic: "Ear Nose Throat Hub, Patel Nagar", tags: ["Sinus", "Throat"] },
+  { name: "Dr. Tanvi Roy", specialty: "Ophthalmology", rating: 4.8, exp: 10, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 599, feeInPerson: 899, feeCall: 499, clinic: "Vision First, Dwarka", tags: ["Eye Checkup", "Dry Eye"] },
+  { name: "Dr. Sahil Jain", specialty: "Psychiatry", rating: 4.9, exp: 9, languages: ["English", "Hindi"], city: "Delhi", feeVideo: 899, feeInPerson: 1299, feeCall: 799, clinic: "MindWell, South Ex", tags: ["Anxiety", "Sleep"] },
+  { name: "Dr. Priya Bedi", specialty: "Dermatology", rating: 4.8, exp: 7, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 649, feeInPerson: 999, feeCall: 549, clinic: "Skin Craft, Vasant Kunj", tags: ["Acne", "Pigmentation"] },
+  { name: "Dr. Vivek Suri", specialty: "Urology", rating: 4.6, exp: 13, languages: ["Hindi", "English"], city: "Delhi", feeVideo: 899, feeInPerson: 1499, feeCall: 749, clinic: "UroCare, Gurgaon", tags: ["Kidney Stone", "UTI"] },
+  { name: "Dr. Naina Kapoor", specialty: "Oncology", rating: 4.8, exp: 15, languages: ["English", "Hindi"], city: "Delhi", feeVideo: 1200, feeInPerson: 1800, feeCall: 999, clinic: "Cancer Care Unit, Delhi", tags: ["Second Opinion", "Chemo Advice"] },
 ];
 
 let defaultDoctorsSeeded = false;
 
 function asText(v) {
   return String(v == null ? "" : v).trim();
+}
+
+function normalizePhone(v) {
+  const digits = String(v || "").replace(/\D/g, "");
+  if (digits.length >= 10) return digits.slice(-10);
+  return digits;
 }
 
 function normalizeMode(mode) {
@@ -267,8 +294,12 @@ function doctorAuth(req, res, next) {
 async function ensureDefaultDoctors() {
   if (defaultDoctorsSeeded) return;
   const count = await Doctor.countDocuments({});
-  if (count === 0) {
-    const seeded = DEFAULT_DOCTORS.map((d) => ({
+  if (count < 18) {
+    const existing = await Doctor.find({}).select("name specialty").lean();
+    const existingKey = new Set(existing.map((x) => `${asText(x.name).toLowerCase()}::${asText(x.specialty).toLowerCase()}`));
+    const seeded = DEFAULT_DOCTORS
+      .filter((d) => !existingKey.has(`${asText(d.name).toLowerCase()}::${asText(d.specialty).toLowerCase()}`))
+      .map((d) => ({
       ...d,
       active: true,
       verificationStatus: "approved",
@@ -280,8 +311,8 @@ async function ensureDefaultDoctors() {
         locality: asText(d.city || ""),
         inPersonEnabled: true,
       },
-    }));
-    await Doctor.insertMany(seeded);
+      }));
+    if (seeded.length) await Doctor.insertMany(seeded);
   }
   defaultDoctorsSeeded = true;
 }
@@ -321,11 +352,17 @@ function pushDoctorNotification(doctorId, title, message, type = "info", booking
 
 router.post("/onboarding/otp/send", async (req, res) => {
   try {
-    const phone = asText(req.body?.phone);
+    const phone = normalizePhone(req.body?.phone);
     if (!phone || phone.length < 10) return res.status(400).json({ error: "Valid mobile number is required" });
     const code = process.env.NODE_ENV === "production" ? String(Math.floor(100000 + Math.random() * 900000)) : "123456";
     OTP_STORE.set(phone, { code, expiresAt: Date.now() + 5 * 60 * 1000 });
-    return res.json({ ok: true, expiresInSec: 300, debugOtp: process.env.NODE_ENV === "production" ? undefined : code });
+    const otpProviderConfigured = !!process.env.DOCTOR_OTP_PROVIDER;
+    return res.json({
+      ok: true,
+      expiresInSec: 300,
+      smsStatus: otpProviderConfigured ? "sent" : "provider_not_configured",
+      debugOtp: otpProviderConfigured ? (process.env.NODE_ENV === "production" ? undefined : code) : code,
+    });
   } catch (err) {
     return res.status(500).json({ error: "Failed to send OTP" });
   }
@@ -333,7 +370,7 @@ router.post("/onboarding/otp/send", async (req, res) => {
 
 router.post("/onboarding/otp/verify", async (req, res) => {
   try {
-    const phone = asText(req.body?.phone);
+    const phone = normalizePhone(req.body?.phone);
     const otp = asText(req.body?.otp);
     const row = OTP_STORE.get(phone);
     if (!row || Date.now() > Number(row.expiresAt || 0)) return res.status(400).json({ error: "OTP expired. Please resend." });
@@ -359,7 +396,7 @@ router.post(
     try {
       const b = req.body || {};
       const fullName = asText(b.fullName || b.name);
-      const phone = asText(b.phone);
+      const phone = normalizePhone(b.phone);
       const otpVerified = ["yes", "true", "1"].includes(asText(b.otpVerified).toLowerCase());
       const email = asText(b.email).toLowerCase();
       const specialty = asText(b.specialty);
@@ -725,7 +762,8 @@ router.get("/specialties", async (_req, res) => {
   try {
     await ensureDefaultDoctors();
     const specialties = await Doctor.distinct("specialty", publicDoctorFilter());
-    res.json(["All", ...specialties.filter(Boolean).sort((a, b) => a.localeCompare(b))]);
+    const merged = Array.from(new Set([...MASTER_SPECIALTIES, ...specialties.filter(Boolean)]));
+    res.json(["All", ...merged.sort((a, b) => a.localeCompare(b))]);
   } catch (err) {
     console.error("GET /doctors/specialties error:", err?.message || err);
     res.status(500).json({ error: "Failed to load specialties" });
