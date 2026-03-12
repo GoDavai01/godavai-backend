@@ -2,6 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const axios = require("axios");
 const auth = require("../middleware/auth");
 const Doctor = require("../models/Doctor");
 const DoctorAppointment = require("../models/DoctorAppointment");
@@ -56,6 +57,26 @@ function normalizePhone(v) {
   const digits = String(v || "").replace(/\D/g, "");
   if (digits.length >= 10) return digits.slice(-10);
   return digits;
+}
+
+async function sendDoctorOtpSms(phone, code) {
+  const smsUrl = asText(process.env.DOCTOR_OTP_HTTP_URL);
+  const authToken = asText(process.env.DOCTOR_OTP_HTTP_TOKEN);
+  if (!smsUrl) return false;
+  await axios.post(
+    smsUrl,
+    {
+      phone,
+      otp: code,
+      template: "doctor_onboarding_otp",
+      source: "godavaii",
+    },
+    {
+      timeout: 10000,
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    }
+  );
+  return true;
 }
 
 function normalizeMode(mode) {
@@ -354,16 +375,17 @@ router.post("/onboarding/otp/send", async (req, res) => {
   try {
     const phone = normalizePhone(req.body?.phone);
     if (!phone || phone.length < 10) return res.status(400).json({ error: "Valid mobile number is required" });
-    const code = process.env.NODE_ENV === "production" ? String(Math.floor(100000 + Math.random() * 900000)) : "123456";
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const sent = await sendDoctorOtpSms(phone, code);
+    if (!sent) {
+      return res.status(503).json({
+        error: "OTP service not configured. Please set DOCTOR_OTP_HTTP_URL and DOCTOR_OTP_HTTP_TOKEN.",
+      });
+    }
     OTP_STORE.set(phone, { code, expiresAt: Date.now() + 5 * 60 * 1000 });
-    const otpProviderConfigured = !!process.env.DOCTOR_OTP_PROVIDER;
-    return res.json({
-      ok: true,
-      expiresInSec: 300,
-      smsStatus: otpProviderConfigured ? "sent" : "provider_not_configured",
-      debugOtp: otpProviderConfigured ? (process.env.NODE_ENV === "production" ? undefined : code) : code,
-    });
+    return res.json({ ok: true, expiresInSec: 300, smsStatus: "sent" });
   } catch (err) {
+    console.error("POST /doctors/onboarding/otp/send error:", err?.message || err);
     return res.status(500).json({ error: "Failed to send OTP" });
   }
 });
