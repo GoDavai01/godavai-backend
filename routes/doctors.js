@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 const auth = require("../middleware/auth");
 const Doctor = require("../models/Doctor");
 const DoctorAppointment = require("../models/DoctorAppointment");
@@ -390,8 +392,43 @@ const onboardingUploadFields = [
   { name: "clinicProof", maxCount: 1 },
 ];
 
+const doctorOnboardingUploadDir = path.join(process.cwd(), "uploads", "doctor-onboarding");
+try { fs.mkdirSync(doctorOnboardingUploadDir, { recursive: true }); } catch (_) {}
+
+const onboardingLocalUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, doctorOnboardingUploadDir),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${String(file.originalname || "file").replace(/\s+/g, "_")}`),
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const name = String(file.originalname || "").toLowerCase();
+    const type = String(file.mimetype || "").toLowerCase();
+    const extOk = [".jpg", ".jpeg", ".png", ".webp", ".pdf", ".heic", ".heif"].some((x) => name.endsWith(x));
+    const typeOk = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/heic",
+      "image/heif",
+      "application/pdf",
+      "application/octet-stream",
+    ].includes(type);
+    if (!extOk && !typeOk) return cb(new Error("Invalid file type (use jpg/jpeg/png/webp/pdf/heic)"));
+    cb(null, true);
+  },
+});
+
 const onboardingUpload = (req, res, next) => {
-  const mw = upload.fields(onboardingUploadFields);
+  const hasS3Creds =
+    !!process.env.AWS_BUCKET_NAME &&
+    !!process.env.AWS_ACCESS_KEY_ID &&
+    !!process.env.AWS_SECRET_ACCESS_KEY &&
+    !!process.env.AWS_REGION;
+  const s3Enabled = process.env.USE_S3 === "1" && hasS3Creds;
+  const mw = s3Enabled
+    ? upload.fields(onboardingUploadFields)
+    : onboardingLocalUpload.fields(onboardingUploadFields);
   mw(req, res, (err) => {
     if (!err) return next();
     const raw = String(err?.message || "Upload failed");
@@ -484,7 +521,17 @@ router.post(
       if (!registrationNumber) return res.status(400).json({ error: "Registration number is required" });
 
       const files = req.files || {};
-      const fileUrl = (k) => files?.[k]?.[0]?.location || files?.[k]?.[0]?.path || "";
+      const fileUrl = (k) => {
+        const f = files?.[k]?.[0];
+        if (!f) return "";
+        if (f.location) return f.location;
+        if (f.filename) return `/uploads/doctor-onboarding/${f.filename}`;
+        const p = asText(f.path);
+        const marker = `${path.sep}uploads${path.sep}`;
+        const idx = p.toLowerCase().indexOf(marker.toLowerCase());
+        if (idx >= 0) return `/${p.slice(idx).replace(/\\/g, "/")}`;
+        return "";
+      };
       const registrationCertificateUrl = fileUrl("registrationCertificate");
       const mbbsDegreeUrl = fileUrl("mbbsDegree");
       const specialistDegreeUrl = fileUrl("specialistDegree");
