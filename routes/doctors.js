@@ -298,7 +298,12 @@ function mapDoctorPublic(doc) {
 
 const isAdmin = (req, res, next) => {
   return auth(req, res, () => {
-    const ok = !!req.user?.adminId || req.user?.type === "admin";
+    const ok =
+      !!req.user?.adminId ||
+      req.user?.type === "admin" ||
+      req.user?.role === "admin" ||
+      req.user?.isAdmin === true ||
+      req.user?.scope === "admin";
     if (!ok) return res.status(403).json({ error: "Admin only" });
     next();
   });
@@ -639,14 +644,31 @@ router.get("/admin/all", isAdmin, async (req, res) => {
     const status = asText(req.query?.status).toLowerCase();
     const q = asText(req.query?.q);
     const filter = {};
-    if (status && status !== "all") filter.verificationStatus = status;
+    if (status && status !== "all") {
+      if (status === "pending_verification") {
+        filter.$or = [
+          { verificationStatus: "pending_verification" },
+          { verificationStatus: "under_review" },
+          { verificationStatus: { $exists: false } },
+          { verificationStatus: null },
+        ];
+      } else {
+        filter.verificationStatus = status;
+      }
+    }
     if (q) {
-      filter.$or = [
+      const qOr = [
         { name: { $regex: q, $options: "i" } },
         { email: { $regex: q, $options: "i" } },
         { phone: { $regex: q, $options: "i" } },
         { specialty: { $regex: q, $options: "i" } },
       ];
+      if (filter.$or?.length) {
+        filter.$and = [{ $or: filter.$or }, { $or: qOr }];
+        delete filter.$or;
+      } else {
+        filter.$or = qOr;
+      }
     }
     const rows = await Doctor.find(filter).sort({ createdAt: -1 }).limit(1000).lean();
     return res.json({ doctors: rows.map(mapDoctorPrivate) });
