@@ -62,21 +62,30 @@ function normalizePhone(v) {
 async function sendDoctorOtpSms(phone, code) {
   const smsUrl = asText(process.env.DOCTOR_OTP_HTTP_URL);
   const authToken = asText(process.env.DOCTOR_OTP_HTTP_TOKEN);
-  if (!smsUrl) return false;
-  await axios.post(
-    smsUrl,
-    {
-      phone,
-      otp: code,
-      template: "doctor_onboarding_otp",
-      source: "godavaii",
-    },
-    {
-      timeout: 10000,
-      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-    }
-  );
-  return true;
+  if (!smsUrl) return { ok: false, error: "DOCTOR_OTP_HTTP_URL missing" };
+  if (smsUrl.includes("<") || smsUrl.includes(">")) return { ok: false, error: "DOCTOR_OTP_HTTP_URL is placeholder, set real provider URL" };
+  if (authToken && (authToken.includes("<") || authToken.includes(">"))) return { ok: false, error: "DOCTOR_OTP_HTTP_TOKEN is placeholder, set real token" };
+  if (!/^https?:\/\//i.test(smsUrl)) return { ok: false, error: "DOCTOR_OTP_HTTP_URL must start with http/https" };
+
+  try {
+    await axios.post(
+      smsUrl,
+      {
+        phone,
+        otp: code,
+        template: "doctor_onboarding_otp",
+        source: "godavaii",
+      },
+      {
+        timeout: 10000,
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      }
+    );
+    return { ok: true };
+  } catch (err) {
+    const providerErr = err?.response?.data?.message || err?.response?.data?.error || err?.message || "Unknown SMS provider error";
+    return { ok: false, error: providerErr };
+  }
 }
 
 function normalizeMode(mode) {
@@ -377,16 +386,16 @@ router.post("/onboarding/otp/send", async (req, res) => {
     if (!phone || phone.length < 10) return res.status(400).json({ error: "Valid mobile number is required" });
     const code = String(Math.floor(100000 + Math.random() * 900000));
     const sent = await sendDoctorOtpSms(phone, code);
-    if (!sent) {
+    if (!sent?.ok) {
       return res.status(503).json({
-        error: "OTP service not configured. Please set DOCTOR_OTP_HTTP_URL and DOCTOR_OTP_HTTP_TOKEN.",
+        error: `OTP service error: ${sent?.error || "provider unavailable"}`,
       });
     }
     OTP_STORE.set(phone, { code, expiresAt: Date.now() + 5 * 60 * 1000 });
     return res.json({ ok: true, expiresInSec: 300, smsStatus: "sent" });
   } catch (err) {
     console.error("POST /doctors/onboarding/otp/send error:", err?.message || err);
-    return res.status(500).json({ error: "Failed to send OTP" });
+    return res.status(500).json({ error: err?.message || "Failed to send OTP" });
   }
 });
 
