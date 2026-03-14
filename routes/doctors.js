@@ -1645,36 +1645,17 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
 
     await doctor.save();
 
-    const [dashboardDoctor, incomingRows, upcomingRows, notificationRows, clinicChangeRequest] = await Promise.all([
-      Doctor.findById(doctor._id).lean(),
-      DoctorAppointment.find({
-        doctorId: doctor._id,
-        status: { $in: ["confirmed", "pending"] },
-        paymentStatus: "paid",
-      }).sort({ appointmentAt: 1, createdAt: -1 }).limit(50).lean(),
-      DoctorAppointment.find({
-        doctorId: doctor._id,
-        status: { $in: ["accepted", "upcoming", "live_now", "completed"] },
-      }).sort({ appointmentAt: 1, createdAt: -1 }).limit(100).lean(),
-      DoctorNotification.find({ doctorId: doctor._id }).sort({ createdAt: -1 }).limit(20).lean(),
-      ClinicChangeRequest.findOne({ doctorId: doctor._id }).sort({ createdAt: -1 }).lean(),
-    ]);
-
-    const [incomingRequests, upcomingConsults] = await Promise.all([
-      mapDoctorBookingsForDashboard(incomingRows),
-      mapDoctorBookingsForDashboard(upcomingRows),
-    ]);
-    const notifications = notificationRows.map(mapDoctorNotificationRow);
-
-    return res.json(
-      buildDoctorDashboardPayload({
+    const dashboardDoctor = await Doctor.findById(doctor._id).lean();
+    return res.json({
+      ok: true,
+      doctor: buildDoctorDashboardPayload({
         doctor: dashboardDoctor,
-        incomingRequests,
-        upcomingConsults,
-        notifications,
-        clinicChangeRequest,
-      })
-    );
+        incomingRequests: [],
+        upcomingConsults: [],
+        notifications: [],
+        clinicChangeRequest: null,
+      }).doctor,
+    });
   } catch (err) {
     console.error("PATCH /doctors/dashboard/settings error:", err?.message || err);
     return res.status(500).json({ error: "Failed to update dashboard settings" });
