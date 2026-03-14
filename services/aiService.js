@@ -55,19 +55,28 @@ function inferPromptIntent(text) {
 
 function hasMedicalIntent(text) {
   const src = String(text || "").toLowerCase();
-  return /(
-    symptom|bukhar|fever|cold|cough|khansi|pain|dard|headache|migraine|
-    vomit|ultee|diarrhea|loose motion|sugar|bp|oxygen|report|lab|xray|x-ray|
-    scan|prescription|rx|medicine|dawai|tablet|capsule|hba1c|cbc|cholesterol|
-    thyroid|creatinine|hemoglobin|infection|allergy|rash|pimple|acne|skin|
-    stomach|gas|acidity|back pain|joint|muscle|weakness|fatigue|thakan|nausea|
-    constipation|kabz|weight|mota|patla|hair fall|dandruff|anxiety|tension|
-    depression|sleep|neend|insomnia|diabetes|asthma|dama|period|masik dharm|
-    pregnancy|baby|bacha|blood pressure|heart|dil|lungs|phephde|kidney|gurda|
-    liver|jigar|eyes|aankh|ear|kaan|throat|gala|nose|naak|teeth|daant|bone|haddi|
-    बुखार|ताप|दर्द|सर दर्द|खांसी|सर्दी|जुकाम|उल्टी|दस्त|रिपोर्ट|दवाई|इलाज|पिंपल|मुहांसे|
-    त्वचा|गला|छाती|पेट|कमजोरी|थकान|एलर्जी|शुगर|बीपी|नींद|मासिक|गर्भ|बच्चा|खून|हड्डी
-  )/ix.test(src);
+
+  const terms = [
+    "symptom", "bukhar", "fever", "cold", "cough", "khansi", "pain", "dard",
+    "headache", "migraine", "vomit", "ultee", "diarrhea", "loose motion",
+    "sugar", "bp", "oxygen", "report", "lab", "xray", "x-ray", "scan",
+    "prescription", "rx", "medicine", "dawai", "tablet", "capsule", "hba1c",
+    "cbc", "cholesterol", "thyroid", "creatinine", "hemoglobin", "infection",
+    "allergy", "rash", "pimple", "acne", "skin", "stomach", "gas", "acidity",
+    "back pain", "joint", "muscle", "weakness", "fatigue", "thakan", "nausea",
+    "constipation", "kabz", "weight", "mota", "patla", "hair fall", "dandruff",
+    "anxiety", "tension", "depression", "sleep", "neend", "insomnia",
+    "diabetes", "asthma", "dama", "period", "masik dharm", "pregnancy",
+    "baby", "bacha", "blood pressure", "heart", "dil", "lungs", "phephde",
+    "kidney", "gurda", "liver", "jigar", "eyes", "aankh", "ear", "kaan",
+    "throat", "gala", "nose", "naak", "teeth", "daant", "bone", "haddi",
+    "बुखार", "ताप", "दर्द", "सर दर्द", "खांसी", "सर्दी", "जुकाम", "उल्टी",
+    "दस्त", "रिपोर्ट", "दवाई", "इलाज", "पिंपल", "मुहांसे", "त्वचा", "गला",
+    "छाती", "पेट", "कमजोरी", "थकान", "एलर्जी", "शुगर", "बीपी", "नींद",
+    "मासिक", "गर्भ", "बच्चा", "खून", "हड्डी"
+  ];
+
+  return new RegExp(terms.join("|"), "i").test(src);
 }
 
 function isCasualConversation(text) {
