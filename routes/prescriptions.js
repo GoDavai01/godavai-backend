@@ -473,11 +473,24 @@ router.get("/cart/by-prescription/:id", auth, async (req, res) => {
 router.patch("/cart/:cartId/items/:itemId/toggle-generic", auth, async (req, res) => {
   try {
     const userId = req.user?.userId || req.user?._id;
+    const doctorId = req.user?.role === "doctor" ? req.user?.doctorId : null;
     const cartId = asText(req.params.cartId);
     const itemId = asText(req.params.itemId);
     if (!isValidId(cartId)) return res.status(400).json({ error: "Invalid cart id" });
-    const cartDraft = await PatientCartDraft.findOne({ _id: cartId, patientId: userId });
-    if (!cartDraft) return res.status(404).json({ error: "Cart draft not found" });
+    let cartDraft = null;
+    if (doctorId) {
+      cartDraft = await PatientCartDraft.findById(cartId);
+      if (!cartDraft) return res.status(404).json({ error: "Cart draft not found" });
+      const prescription = await DoctorPrescription.findOne({
+        _id: cartDraft.prescriptionId,
+        doctorId,
+      }).select("_id");
+      if (!prescription) return res.status(403).json({ error: "Forbidden" });
+    } else {
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      cartDraft = await PatientCartDraft.findOne({ _id: cartId, patientId: userId });
+      if (!cartDraft) return res.status(404).json({ error: "Cart draft not found" });
+    }
     const item = cartDraft.items.id(itemId);
     if (!item) return res.status(404).json({ error: "Cart item not found" });
     if (!item.genericAvailable) return res.status(409).json({ error: "Generic option is not available for this medicine" });
