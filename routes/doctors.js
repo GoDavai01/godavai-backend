@@ -521,10 +521,6 @@ function toDateLabel(date) {
 function getDoctorSlotPool(doctor, date, mode) {
   const d = asText(date);
   const m = asText(mode);
-  const overrideForDate = doctor?.slotOverrides?.[d];
-  if (overrideForDate && Array.isArray(overrideForDate[m]) && overrideForDate[m].length) {
-    return overrideForDate[m].map(asText).filter(Boolean);
-  }
   const dayKey = dayKeyFromIsoDate(d);
   if (m === "inperson" && doctor?.clinicProfile?.consultationDays?.length) {
     const active = doctor.clinicProfile.consultationDays.map((x) => asText(x).toLowerCase().slice(0, 3));
@@ -539,6 +535,11 @@ function getDoctorSlotPool(doctor, date, mode) {
   if (av?.enabled && avStart && avEnd) {
     const slots = generateSlotsBetween(avStart, avEnd, step);
     return dailyCap > 0 ? slots.slice(0, dailyCap) : slots;
+  }
+
+  const overrideForDate = doctor?.slotOverrides?.[d];
+  if (overrideForDate && Array.isArray(overrideForDate[m]) && overrideForDate[m].length) {
+    return overrideForDate[m].map(asText).filter(Boolean);
   }
 
   if (m === "inperson") {
