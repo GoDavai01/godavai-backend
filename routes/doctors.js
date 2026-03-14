@@ -320,6 +320,7 @@ function buildDoctorDashboardPayload({ doctor, incomingRequests = [], upcomingCo
       fees,
       platformBand: formatFrontendPlatformBand(commercial.band),
       clinic: getDoctorClinicForOps(doctor),
+      availability: doctor.availability || {},
     },
     incomingRequests,
     upcomingConsults,
@@ -477,6 +478,23 @@ function buildAvailabilityFromDashboard({ consultationDays = [], startTime = "09
     };
   }
   return availability;
+}
+
+function normalizeCustomDaySlots(rawSlots = {}) {
+  const allDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  const normalized = {};
+  for (const day of allDays) {
+    const row = rawSlots?.[day] || rawSlots?.[day.toUpperCase()] || {};
+    const start = asText(row?.start);
+    const end = asText(row?.end);
+    const isEnabled = !!row?.enabled && !!start && !!end;
+    normalized[day] = {
+      enabled: isEnabled,
+      start: isEnabled ? start : "",
+      end: isEnabled ? end : "",
+    };
+  }
+  return normalized;
 }
 
 function parseTimingRangeFromText(text) {
@@ -1488,6 +1506,19 @@ router.get("/dashboard/next", doctorAuth, async (req, res) => {
   }
 });
 
+router.patch("/dashboard/online-status", doctorAuth, async (req, res) => {
+  try {
+    const doctor = await Doctor.findById(req.doctorAuth.doctorId);
+    if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    doctor.online = !!req.body?.online;
+    await doctor.save();
+    return res.json({ ok: true, online: !!doctor.online });
+  } catch (err) {
+    console.error("PATCH /doctors/dashboard/online-status error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to update online status" });
+  }
+});
+
 router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
   try {
     const doctor = await Doctor.findById(req.doctorAuth.doctorId);
@@ -1508,15 +1539,32 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
       inperson: modes.inperson ? Number(req.body?.fees?.inperson ?? doctor.feeInPerson ?? 0) : 0,
     };
     const availability = req.body?.availability || {};
-    const consultationDays = Array.isArray(availability.consultationDays)
+    let consultationDays = Array.isArray(availability.consultationDays)
       ? availability.consultationDays.map(asText).filter(Boolean)
       : getDoctorClinicForOps(doctor).consultationDays;
     const startTime = asText(availability.startTime || getDoctorClinicForOps(doctor).startTime || "09:00");
     const endTime = asText(availability.endTime || getDoctorClinicForOps(doctor).endTime || "13:00");
+    const scheduleMode = asText(availability.scheduleMode).toLowerCase() === "custom" ? "custom" : "uniform";
+    const customDaySlots = normalizeCustomDaySlots(availability.customDaySlots || {});
     const slotDuration = modes.inperson ? Number(availability.slotDuration || 15) : 0;
     const arrivalWindow = modes.inperson ? Number(availability.arrivalWindow || 15) : 0;
     const maxPatientsPerDay = modes.inperson ? Number(availability.maxPatientsPerDay || 24) : 0;
     const band = getPlatformFeeBandFromDoctorFees(fees, modes);
+    const resolvedAvailability =
+      scheduleMode === "custom" && modes.inperson
+        ? customDaySlots
+        : buildAvailabilityFromDashboard({
+            consultationDays,
+            startTime,
+            endTime,
+            enabled: modes.inperson,
+          });
+
+    if (scheduleMode === "custom" && modes.inperson) {
+      consultationDays = Object.entries(resolvedAvailability)
+        .filter(([, row]) => row?.enabled)
+        .map(([day]) => day);
+    }
 
     doctor.online = online;
     doctor.consultModes = { audio: modes.audio, video: modes.video, inPerson: modes.inperson };
@@ -1535,7 +1583,7 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
       ...(doctor.clinicProfile || {}),
       inPersonEnabled: modes.inperson,
       consultationDays,
-      timingsText: modes.inperson ? `${startTime} - ${endTime}` : "",
+      timingsText: modes.inperson ? (scheduleMode === "custom" ? "Custom timings" : `${startTime} - ${endTime}`) : "",
       slotDurationMins: slotDuration,
       patientArrivalWindowMins: arrivalWindow,
       maxPatientsPerDay,
@@ -1548,12 +1596,14 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
       doctor.clinicProfile.consultationDays = [];
       doctor.clinicProfile.timingsText = "";
     }
-    doctor.availability = buildAvailabilityFromDashboard({
-      consultationDays,
-      startTime,
-      endTime,
-      enabled: modes.inperson,
-    });
+    doctor.availability = modes.inperson
+      ? resolvedAvailability
+      : buildAvailabilityFromDashboard({
+          consultationDays: [],
+          startTime: "",
+          endTime: "",
+          enabled: false,
+        });
 
     await doctor.save();
 
