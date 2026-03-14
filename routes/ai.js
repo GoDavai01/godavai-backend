@@ -53,6 +53,8 @@ router.post("/assistant/analyze-file", withUpload(fileUpload.single("file")), ai
 router.post("/analyze-file", withUpload(fileUpload.single("file")), aiController.analyzeFile);
 
 router.post("/stt", withUpload(audioUpload.single("audio")), aiController.stt);
+router.post("/assistant/transcribe", withUpload(audioUpload.single("audio")), aiController.stt);
+
 router.post("/tts", aiController.tts);
 router.post("/assistant/tts", aiController.tts);
 
