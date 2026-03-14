@@ -7,6 +7,7 @@ const Pharmacy = require("../models/Pharmacy");
 const DeliveryPartner = require("../models/DeliveryPartner");
 const DoctorAppointment = require("../models/DoctorAppointment");
 const DoctorNotification = require("../models/DoctorNotification");
+const { createDoctorNotification, createPatientNotification } = require("../services/doctorNotifications");
 
 const razorpayEnabled = !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
 const razorpay = razorpayEnabled
@@ -140,16 +141,26 @@ router.post("/verify", async (req, res) => {
     consult.status = "confirmed";
     consult.holdExpiresAt = null;
     consult.locationUnlockedForPatient = consult.mode === "inperson";
+    consult.clinicRevealAllowed = consult.mode === "inperson";
+    consult.callState = consult.mode === "inperson" ? "not_started" : "ready";
     await consult.save();
 
-    DoctorNotification.create({
+    await createDoctorNotification({
       doctorId: consult.doctorId,
       type: "booking_confirmed",
       title: `New ${consult.mode === "inperson" ? "In-person" : consult.mode === "video" ? "Video" : "Audio"} booking confirmed`,
       message: `${consult.patientName || "Patient"} | ${consult.date} | ${consult.slot} | Booking ${consult._id.toString().slice(-6)}`,
       bookingId: consult._id,
       meta: { mode: consult.mode, date: consult.date, slot: consult.slot },
-    }).catch(() => {});
+    });
+    await createPatientNotification({
+      userId: consult.userId,
+      title: "Consultation booked",
+      message:
+        consult.mode === "inperson"
+          ? `Your in-person booking with ${consult.doctorName || "doctor"} is confirmed`
+          : `Your ${consult.mode === "video" ? "video" : "audio"} consultation is confirmed`,
+    });
 
     res.json({
       ok: true,

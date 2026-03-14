@@ -8,7 +8,14 @@ const auth = require('../middleware/auth');
 const mongoose = require('mongoose');
 const Order = require("../models/Order");
 const User = require("../models/User");
+const DoctorPrescription = require("../models/DoctorPrescription");
+const PatientCartDraft = require("../models/PatientCartDraft");
+const DoctorAppointment = require("../models/DoctorAppointment");
+const Doctor = require("../models/Doctor");
 const { findPharmaciesNearby } = require('../utils/pharmacyGeo');
+const jwt = require("jsonwebtoken");
+const { buildCartDraftFromPrescription } = require("../services/doctorCart");
+const { createPatientNotification } = require("../services/doctorNotifications");
 
 const path = require('path');
 
@@ -40,6 +47,57 @@ if (!cronRegistered) {
 // Utility to validate ObjectId
 function isValidId(id) {
   return mongoose.Types.ObjectId.isValid(id);
+}
+
+function asText(v) {
+  return String(v == null ? "" : v).trim();
+}
+
+function doctorAuth(req, res, next) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) return res.status(401).json({ error: "Authorization header missing" });
+  const token = authHeader.slice("Bearer ".length).trim();
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded?.role !== "doctor" || !decoded?.doctorId) return res.status(401).json({ error: "Doctor token required" });
+    req.doctorAuth = decoded;
+    next();
+  } catch (_) {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+}
+
+function mapDoctorPrescription(prescription, cartDraft = null) {
+  return {
+    _id: prescription._id,
+    bookingId: prescription.bookingId,
+    doctorId: prescription.doctorId,
+    patientId: prescription.patientId,
+    diagnosis: prescription.diagnosis || "",
+    complaint: prescription.complaint || "",
+    precautions: prescription.precautions || "",
+    testsAdvised: prescription.testsAdvised || [],
+    followUpDate: prescription.followUpDate || null,
+    medicines: prescription.medicines || [],
+    sentToPatient: !!prescription.sentToPatient,
+    createdAt: prescription.createdAt,
+    cartDraft,
+  };
+}
+
+function canAccessPrescription(req, prescription) {
+  if (!prescription) return false;
+  const isAdmin =
+    !!req.user?.adminId ||
+    req.user?.type === "admin" ||
+    req.user?.role === "admin" ||
+    req.user?.isAdmin === true ||
+    req.user?.scope === "admin";
+  if (isAdmin) return true;
+  if (req.user?.role === "doctor" && String(req.user?.doctorId || "") === String(prescription.doctorId || "")) return true;
+  const requesterUserId = String(req.user?.userId || req.user?._id || "");
+  if (requesterUserId && requesterUserId === String(prescription.patientId || "")) return true;
+  return false;
 }
 
 /* -------------------------- PUSH TOKEN REGISTRY -------------------------- */
@@ -280,6 +338,182 @@ router.post('/upload', upload.single('prescription'), async (req, res) => {
   } catch (err) {
     console.error("Upload error:", err);
     res.status(500).json({ error: 'Upload failed.', details: err.message });
+  }
+});
+
+router.post("/doctor", doctorAuth, async (req, res) => {
+  try {
+    const doctorId = req.doctorAuth.doctorId;
+    const bookingId = asText(req.body?.bookingId);
+    if (!isValidId(bookingId)) return res.status(400).json({ error: "Valid bookingId is required" });
+    const booking = await DoctorAppointment.findOne({ _id: bookingId, doctorId });
+    if (!booking) return res.status(404).json({ error: "Booking not found" });
+    if (!["accepted", "upcoming", "live_now", "completed", "confirmed"].includes(String(booking.status || "").toLowerCase())) {
+      return res.status(409).json({ error: "Prescription can be created only for active or completed consults" });
+    }
+
+    const medicines = Array.isArray(req.body?.medicines)
+      ? req.body.medicines
+          .map((row) => ({
+            prescribed: asText(row?.prescribed),
+            salt: asText(row?.salt),
+            dosage: asText(row?.dosage),
+            frequency: asText(row?.frequency),
+            duration: asText(row?.duration),
+            howToTake: asText(row?.howToTake),
+            notes: asText(row?.notes),
+          }))
+          .filter((row) => row.prescribed)
+      : [];
+    if (!medicines.length) return res.status(400).json({ error: "At least one medicine is required" });
+
+    const testsAdvised = Array.isArray(req.body?.testsAdvised)
+      ? req.body.testsAdvised.map(asText).filter(Boolean)
+      : asText(req.body?.testsAdvised)
+      ? asText(req.body.testsAdvised).split(",").map(asText).filter(Boolean)
+      : [];
+
+    let prescription = await DoctorPrescription.findOne({ bookingId, doctorId });
+    if (!prescription) {
+      prescription = new DoctorPrescription({
+        bookingId,
+        doctorId,
+        patientId: booking.userId,
+      });
+    }
+    prescription.diagnosis = asText(req.body?.diagnosis);
+    prescription.complaint = asText(req.body?.complaint || booking.reason);
+    prescription.precautions = asText(req.body?.precautions);
+    prescription.testsAdvised = testsAdvised;
+    prescription.followUpDate = req.body?.followUpDate ? new Date(req.body.followUpDate) : null;
+    prescription.medicines = medicines;
+    prescription.sentToPatient = true;
+    prescription.sentToPatientAt = new Date();
+    await prescription.save();
+
+    const cartDraft = await buildCartDraftFromPrescription({ prescription, booking });
+    prescription.cartDraftId = cartDraft._id;
+    await prescription.save();
+
+    booking.prescriptionId = prescription._id;
+    booking.status = booking.status === "confirmed" ? "completed" : booking.status;
+    await booking.save();
+
+    await createPatientNotification({
+      userId: booking.userId,
+      title: "Prescription ready",
+      message: `Your prescription from ${booking.doctorName || "doctor"} is ready and medicines were added to your draft cart`,
+    });
+
+    return res.status(201).json({
+      prescription: mapDoctorPrescription(prescription, cartDraft),
+      cartDraft,
+      savings: cartDraft?.totals?.potentialSavings || 0,
+    });
+  } catch (err) {
+    console.error("POST /prescriptions/doctor error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to create prescription" });
+  }
+});
+
+router.get("/doctor/recent", doctorAuth, async (req, res) => {
+  try {
+    const rows = await DoctorPrescription.find({ doctorId: req.doctorAuth.doctorId })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+    const bookingIds = rows.map((row) => row.bookingId).filter(Boolean);
+    const bookings = await DoctorAppointment.find({ _id: { $in: bookingIds } })
+      .select("_id patientName reason")
+      .lean();
+    const bookingMap = new Map(bookings.map((row) => [String(row._id), row]));
+    return res.json({
+      prescriptions: rows.map((row) => ({
+        _id: row._id,
+        patientName: asText(bookingMap.get(String(row.bookingId))?.patientName || "Patient"),
+        diagnosis: asText(row.diagnosis || bookingMap.get(String(row.bookingId))?.reason),
+        createdAt: row.createdAt,
+        meds: Array.isArray(row.medicines) ? row.medicines.length : 0,
+        sentToPatient: !!row.sentToPatient,
+      })),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load recent doctor prescriptions" });
+  }
+});
+
+router.get("/patient/mine", auth, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?._id;
+    const rows = await DoctorPrescription.find({ patientId: userId }).sort({ createdAt: -1 }).limit(100).lean();
+    return res.json({ prescriptions: rows.map((row) => mapDoctorPrescription(row)) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load patient prescriptions" });
+  }
+});
+
+router.get("/cart/by-prescription/:id", auth, async (req, res) => {
+  try {
+    const id = asText(req.params.id);
+    const userId = req.user?.userId || req.user?._id;
+    if (!isValidId(id)) return res.status(400).json({ error: "Invalid prescription id" });
+    const prescription = await DoctorPrescription.findOne({ _id: id, patientId: userId }).lean();
+    if (!prescription) return res.status(404).json({ error: "Prescription not found" });
+    const cartDraft = await PatientCartDraft.findOne({ prescriptionId: id, patientId: userId }).lean();
+    return res.json({
+      prescription: mapDoctorPrescription(prescription, cartDraft),
+      cartDraft,
+      savings: cartDraft?.totals?.potentialSavings || 0,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load prescription cart draft" });
+  }
+});
+
+router.patch("/cart/:cartId/items/:itemId/toggle-generic", auth, async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?._id;
+    const cartId = asText(req.params.cartId);
+    const itemId = asText(req.params.itemId);
+    if (!isValidId(cartId)) return res.status(400).json({ error: "Invalid cart id" });
+    const cartDraft = await PatientCartDraft.findOne({ _id: cartId, patientId: userId });
+    if (!cartDraft) return res.status(404).json({ error: "Cart draft not found" });
+    const item = cartDraft.items.id(itemId);
+    if (!item) return res.status(404).json({ error: "Cart item not found" });
+    if (!item.genericAvailable) return res.status(409).json({ error: "Generic option is not available for this medicine" });
+    item.switchedToGeneric = !item.switchedToGeneric;
+
+    const totals = cartDraft.items.reduce(
+      (acc, row) => {
+        acc.brandTotal += Number(row.matchedBrand?.price || 0);
+        acc.genericTotal += row.switchedToGeneric && row.genericAvailable ? Number(row.generic?.price || 0) : Number(row.matchedBrand?.price || 0);
+        acc.potentialSavings += Number(row.savings || 0);
+        return acc;
+      },
+      { brandTotal: 0, genericTotal: 0, potentialSavings: 0 }
+    );
+    cartDraft.totals = totals;
+    await cartDraft.save();
+    return res.json({ cartDraft, savings: totals.potentialSavings });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to toggle generic item" });
+  }
+});
+
+router.get("/detail/:id", auth, async (req, res) => {
+  try {
+    const id = asText(req.params.id);
+    if (!isValidId(id)) return res.status(400).json({ error: "Invalid prescription id" });
+    const prescription = await DoctorPrescription.findById(id).lean();
+    if (!prescription) return res.status(404).json({ error: "Prescription not found" });
+    if (!canAccessPrescription(req, prescription)) return res.status(403).json({ error: "Forbidden" });
+    const cartDraft = prescription.cartDraftId ? await PatientCartDraft.findById(prescription.cartDraftId).lean() : null;
+    if (cartDraft && String(cartDraft.prescriptionId || "") !== String(prescription._id)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    return res.json({ prescription: mapDoctorPrescription(prescription, cartDraft), cartDraft });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load prescription" });
   }
 });
 

@@ -9,8 +9,13 @@ const auth = require("../middleware/auth");
 const Doctor = require("../models/Doctor");
 const DoctorAppointment = require("../models/DoctorAppointment");
 const DoctorNotification = require("../models/DoctorNotification");
+const User = require("../models/User");
+const ClinicChangeRequest = require("../models/ClinicChangeRequest");
+const AdminAuditLog = require("../models/AdminAuditLog");
 const upload = require("../utils/upload");
 const multer = require("multer");
+const { getPlatformFeeBandFromDoctorFees, getPatientFacingBundledPricing, getDoctorCommercialSnapshot } = require("../services/doctorCommercials");
+const { createDoctorNotification, streamDoctorNotifications, bootstrapDoctorReminderScheduler } = require("../services/doctorNotifications");
 
 const router = express.Router();
 
@@ -51,6 +56,7 @@ const DEFAULT_DOCTORS = [
 ];
 
 let defaultDoctorsSeeded = false;
+bootstrapDoctorReminderScheduler();
 
 function asText(v) {
   return String(v == null ? "" : v).trim();
@@ -114,12 +120,292 @@ function bundledFee(baseFee) {
   return base + Number(band.serviceFee || 0);
 }
 
+function normalizeDoctorModes(doctor = {}) {
+  return {
+    audio: !!doctor?.consultModes?.audio,
+    video: !!doctor?.consultModes?.video,
+    inperson: !!(doctor?.consultModes?.inperson || doctor?.consultModes?.inPerson),
+  };
+}
+
+function formatBandLabel(bandKey = "") {
+  switch (String(bandKey || "")) {
+    case "0_500":
+      return "\u20B90\u2013\u20B9500";
+    case "501_1000":
+      return "\u20B9501\u2013\u20B91000";
+    case "1001_1500":
+      return "\u20B91001\u2013\u20B91500";
+    case "1501_2000":
+      return "\u20B91501\u2013\u20B92000";
+    case "2001_plus":
+      return "\u20B92001+";
+    default:
+      return String(bandKey || "");
+  }
+}
+
+function toDisplayDays(days = []) {
+  return (days || []).map((day) => {
+    const key = asText(day).toLowerCase().slice(0, 3);
+    switch (key) {
+      case "mon":
+        return "Mon";
+      case "tue":
+        return "Tue";
+      case "wed":
+        return "Wed";
+      case "thu":
+        return "Thu";
+      case "fri":
+        return "Fri";
+      case "sat":
+        return "Sat";
+      case "sun":
+        return "Sun";
+      default:
+        return asText(day);
+    }
+  });
+}
+
+function formatFrontendPlatformBand(band = {}) {
+  return {
+    code: band.code || band.bandKey || "",
+    label: formatBandLabel(band.bandKey || band.code || ""),
+    fee: band.requiresManualApproval ? null : Number(band.serviceFee || band.serviceFeeExGst || 0),
+    serviceFee: band.requiresManualApproval ? null : Number(band.serviceFee || band.serviceFeeExGst || 0),
+    gstApplicable: band.gstApplicable !== false,
+    requiresManualApproval: !!band.requiresManualApproval,
+  };
+}
+function humanizeProfileStatus(status = "") {
+  switch (mapVerificationStatus(status)) {
+    case "approved":
+      return "Approved";
+    case "rejected":
+      return "Rejected";
+    case "needs_more_info":
+      return "Needs More Info";
+    case "suspended":
+      return "Suspended";
+    case "pending_verification":
+    default:
+      return "Pending Verification";
+  }
+}
+
+function mapClinicChangeRequestForDashboard(request = null) {
+  if (!request) return null;
+  return {
+    _id: request._id,
+    doctorId: request.doctorId,
+    status: asText(request.status || "pending_verification"),
+    adminComment: asText(request.adminComment),
+    submittedAt: request.submittedAt || request.createdAt || null,
+    reviewedAt: request.reviewedAt || null,
+    requestedClinic: {
+      clinicName: asText(request?.requestedClinic?.name),
+      addressLine1: asText(request?.requestedClinic?.fullAddress),
+      locality: asText(request?.requestedClinic?.locality),
+      city: asText(request?.requestedClinic?.city),
+      pin: asText(request?.requestedClinic?.pincode),
+      mapLabel: asText(request?.requestedClinic?.mapLabel || request?.requestedClinic?.name),
+      coordinates: request?.requestedClinic?.coordinates || { lat: null, lng: null },
+      consultationDays: toDisplayDays(request?.requestedClinic?.consultationDays || []),
+      startTime: asText(request?.requestedClinic?.startTime),
+      endTime: asText(request?.requestedClinic?.endTime),
+      slotDuration: Number(request?.requestedClinic?.slotDuration || 0),
+      arrivalWindow: Number(request?.requestedClinic?.arrivalWindow || 0),
+      maxPatientsPerDay: Number(request?.requestedClinic?.maxPatientsPerDay || 0),
+    },
+  };
+}
+
+function buildDoctorFeeShape(doctor = {}) {
+  return {
+    audio: Number(doctor?.feeCall || 0),
+    video: Number(doctor?.feeVideo || 0),
+    inperson: Number(doctor?.feeInPerson || 0),
+  };
+}
+
+function getDoctorClinicForOps(doctor = {}) {
+  const verified = doctor?.verifiedClinicProfile?.name ? doctor.verifiedClinicProfile : null;
+  const active = verified || doctor?.clinicProfile || {};
+  const timingsText = asText(active?.timingsText || "");
+  const timingMatch = timingsText.match(/(\d{1,2}:\d{2})\s*[-to]+\s*(\d{1,2}:\d{2})/i);
+  return {
+    verified: !!active?.verified,
+    name: asText(active?.name),
+    addressLine1: asText(active?.fullAddress),
+    locality: asText(active?.locality),
+    city: asText(active?.city || doctor?.city),
+    pin: asText(active?.pincode),
+    mapLabel: asText(active?.mapLabel || active?.name),
+    coordinates: active?.coordinates || { lat: null, lng: null },
+    consultationDays: Array.isArray(active?.consultationDays) ? toDisplayDays(active.consultationDays) : [],
+    startTime: timingMatch?.[1] || "",
+    endTime: timingMatch?.[2] || "",
+    slotDuration: Number(active?.slotDurationMins || 15),
+    arrivalWindow: Number(active?.patientArrivalWindowMins || 15),
+    maxPatientsPerDay: Number(active?.maxPatientsPerDay || 24),
+  };
+}
+
+function maskPayoutAccount(doctor = {}) {
+  if (asText(doctor?.payoutAccountMasked)) return doctor.payoutAccountMasked;
+  const last4 = asText(doctor?.payoutDetails?.accountNumberLast4);
+  const bankName = asText(doctor?.payoutDetails?.bankName);
+  if (last4 || bankName) return `${bankName || "Bank"} •••• ${last4 || "0000"}`;
+  return "";
+}
+
+function mapVerificationStatus(status) {
+  const normalized = asText(status || "pending_verification").toLowerCase();
+  if (normalized === "under_review") return "pending_verification";
+  return normalized || "pending_verification";
+}
+
+function deriveDashboardBookingState(booking) {
+  const baseStatus = asText(booking?.status).toLowerCase();
+  if (["cancelled", "rejected"].includes(baseStatus)) return "cancelled";
+  if (baseStatus === "no_show") return "no_show";
+  if (baseStatus === "completed") return "completed";
+  if (baseStatus === "confirmed") return "pending";
+  const appointmentAt = booking?.appointmentAt ? new Date(booking.appointmentAt) : null;
+  if (baseStatus === "accepted") {
+    if (appointmentAt && appointmentAt.getTime() <= Date.now() + 60 * 1000) return "live_now";
+    return "upcoming";
+  }
+  if (baseStatus === "upcoming" || baseStatus === "live_now" || baseStatus === "pending") return baseStatus;
+  if (baseStatus === "pending_payment") return "pending";
+  return "pending";
+}
+
+function buildDoctorDashboardPayload({ doctor, incomingRequests = [], upcomingConsults = [], notifications = [], clinicChangeRequest = null }) {
+  const fees = buildDoctorFeeShape(doctor);
+  const modes = normalizeDoctorModes(doctor);
+  const commercial = getDoctorCommercialSnapshot({
+    feeVideo: fees.video,
+    feeInPerson: fees.inperson,
+    feeCall: fees.audio,
+    consultModes: { audio: modes.audio, video: modes.video, inPerson: modes.inperson },
+  });
+  return {
+    doctor: {
+      _id: doctor._id.toString(),
+      id: doctor._id.toString(),
+      fullName: asText(doctor.fullName || doctor.name),
+      specialty: asText(doctor.specialty),
+      qualification: asText(doctor.qualification),
+      avatar: asText(doctor.avatar),
+      phone: asText(doctor.phone),
+      email: asText(doctor.email),
+      city: asText(doctor.city),
+      area: asText(doctor.area || doctor.clinicProfile?.locality || doctor.verifiedClinicProfile?.locality),
+      yearsExperience: Number(doctor.yearsExperience || doctor.experience || doctor.exp || 0),
+      profileStatus: humanizeProfileStatus(doctor.verificationStatus),
+      online: !!doctor.online,
+      payoutAccountMasked: maskPayoutAccount(doctor),
+      modes,
+      fees,
+      platformBand: formatFrontendPlatformBand(commercial.band),
+      clinic: getDoctorClinicForOps(doctor),
+    },
+    incomingRequests,
+    upcomingConsults,
+    nextConsult:
+      upcomingConsults.find((row) => ["accepted", "upcoming", "live_now"].includes(asText(row.status).toLowerCase())) || null,
+    notifications,
+    clinicChangeRequest: mapClinicChangeRequestForDashboard(clinicChangeRequest),
+  };
+}
+
+function mapDoctorNotificationRow(row = {}) {
+  return {
+    _id: row._id,
+    type: row.type,
+    title: row.title,
+    body: row.message,
+    message: row.message,
+    bookingId: row.bookingId || null,
+    read: !!row.read,
+    createdAt: row.createdAt,
+    meta: row.meta || {},
+  };
+}
+
+function mapDoctorBookingForDashboard(booking = {}, patientMeta = null) {
+  const mode = booking.mode === "call" ? "audio" : booking.mode;
+  return {
+    _id: booking._id,
+    patientId: booking.userId,
+    patientName: asText(booking.patientName || "Patient"),
+    patientAge: patientMeta?.patientAge ?? null,
+    patientGender: patientMeta?.patientGender ?? null,
+    patientSummary: asText(booking.patientSummary),
+    mode,
+    status: deriveDashboardBookingState(booking),
+    bookedFor: booking.appointmentAt,
+    createdAt: booking.createdAt,
+    fee: Number(booking.fee || 0),
+    symptoms: asText(booking.symptoms || booking.reason),
+    reason: asText(booking.reason),
+    notes: asText(booking.doctorNotes),
+    locationLabel: asText(booking?.clinicLocationSnapshot?.locality),
+    paymentStatus: asText(booking.paymentStatus || "pending"),
+    consultRoomId: asText(booking.consultRoomId),
+    clinicRevealAllowed: !!(booking.clinicRevealAllowed || booking.locationUnlockedForPatient),
+    prescriptionId: booking.prescriptionId || null,
+    canJoin:
+      deriveDashboardBookingState(booking) === "live_now" ||
+      (booking.appointmentAt && new Date(booking.appointmentAt).getTime() <= Date.now() + 5 * 60 * 1000),
+  };
+}
+
+async function mapDoctorBookingsForDashboard(rows = []) {
+  const patientMetaMap = await buildPatientMetaMap(rows);
+  return rows.map((row) => mapDoctorBookingForDashboard(row, patientMetaMap.get(String(row?.userId || "")) || null));
+}
+
 function parseISODateOnly(v) {
   const s = asText(v);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const d = new Date(`${s}T00:00:00.000Z`);
   if (Number.isNaN(d.getTime())) return null;
   return d;
+}
+
+function calculateAgeFromDob(dob) {
+  const raw = asText(dob);
+  if (!raw) return null;
+  const birthDate = new Date(raw);
+  if (Number.isNaN(birthDate.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - birthDate.getFullYear();
+  const monthDelta = now.getMonth() - birthDate.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < birthDate.getDate())) age -= 1;
+  return age >= 0 ? age : null;
+}
+
+async function buildPatientMetaMap(bookings = []) {
+  const userIds = [...new Set(
+    (bookings || [])
+      .map((booking) => String(booking?.userId || ""))
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+  )];
+  if (!userIds.length) return new Map();
+  const rows = await User.find({ _id: { $in: userIds } }).select("_id dob gender sex").lean();
+  return new Map(
+    rows.map((row) => [
+      String(row._id),
+      {
+        patientAge: calculateAgeFromDob(row.dob),
+        patientGender: asText(row.gender || row.sex) || null,
+      },
+    ])
+  );
 }
 
 function parseSlotTo24h(slot) {
@@ -166,6 +452,23 @@ function generateSlotsBetween(startHHmm, endHHmm, stepMins) {
   const out = [];
   for (let t = start; t + step <= end; t += step) out.push(minsTo12h(t));
   return out;
+}
+
+function buildAvailabilityFromDashboard({ consultationDays = [], startTime = "09:00", endTime = "13:00", enabled = true }) {
+  const activeSet = new Set(
+    (consultationDays || []).map((day) => asText(day).toLowerCase().slice(0, 3)).filter(Boolean)
+  );
+  const allDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  const availability = {};
+  for (const day of allDays) {
+    const isActive = enabled && activeSet.has(day);
+    availability[day] = {
+      enabled: isActive,
+      start: isActive ? startTime : "",
+      end: isActive ? endTime : "",
+    };
+  }
+  return availability;
 }
 
 function parseTimingRangeFromText(text) {
@@ -229,39 +532,64 @@ function isPastSlot(date, slot) {
 
 function mapDoctorPrivate(doc) {
   const baseConsult = Number(doc.consultationFee || doc.feeVideo || 0);
-  const band = doc.platformFeeBand?.bandKey ? doc.platformFeeBand : computePlatformBand(baseConsult);
+  const band = doc.platformFeeBand?.bandKey
+    ? {
+        code: doc.platformFeeBand.bandKey,
+        bandKey: doc.platformFeeBand.bandKey,
+        label: doc.platformFeeBand.bandKey,
+        serviceFee: Number(doc.platformFeeBand.serviceFee || 0),
+        serviceFeeExGst: Number(doc.platformFeeBand.serviceFee || 0),
+        gstApplicable: true,
+        gstLabel: doc.platformFeeBand.gstLabel || "+ applicable GST",
+        requiresManualApproval: !!doc.platformFeeBand.manualApprovalRequired,
+      }
+    : getPlatformFeeBandFromDoctorFees(
+        { audio: doc.feeCall, video: doc.feeVideo, inperson: doc.feeInPerson },
+        { audio: doc?.consultModes?.audio, video: doc?.consultModes?.video, inperson: doc?.consultModes?.inPerson }
+      );
   const feeVideo = Number(doc.feeVideo || baseConsult || 0);
   const feeInPerson = Number(doc.feeInPerson || baseConsult || 0);
   const feeCall = Number(doc.feeCall || baseConsult || 0);
   return {
     id: doc._id.toString(),
     name: doc.name,
+    fullName: asText(doc.fullName || doc.name),
     email: doc.email || "",
     phone: doc.phone || "",
     specialty: doc.specialty,
+    qualification: asText(doc.qualification),
+    avatar: asText(doc.avatar),
     rating: doc.rating,
     exp: doc.exp,
     experience: doc.experience || doc.exp || 0,
+    yearsExperience: Number(doc.yearsExperience || doc.experience || doc.exp || 0),
     languages: doc.languages || [],
     city: doc.city,
+    area: asText(doc.area || doc.clinicProfile?.locality || doc.verifiedClinicProfile?.locality),
     feeVideo,
     feeInPerson,
     feeCall,
     consultationFee: baseConsult,
     platformFeeBand: band,
-    verificationStatus: doc.verificationStatus || "pending_verification",
+    verificationStatus: mapVerificationStatus(doc.verificationStatus),
     verificationNotes: doc.verificationNotes || "",
     verificationReviewedAt: doc.verificationReviewedAt || null,
     consultModes: doc.consultModes || { audio: true, video: true, inPerson: false },
-    clinicProfile: doc.clinicProfile || {},
+    clinicProfile: getDoctorClinicForOps(doc),
+    rawClinicProfile: doc.clinicProfile || {},
+    verifiedClinicProfile: doc.verifiedClinicProfile || {},
     documents: doc.documents || {},
     onboardingStep: Number(doc.onboardingStep || 1),
     clinic: doc.clinic || doc.clinicName || "",
     clinicName: doc.clinicName || doc.clinic || "",
     tags: doc.tags || [],
     active: !!doc.active,
+    online: !!doc.online,
+    payoutAccountMasked: maskPayoutAccount(doc),
     availability: doc.availability || {},
     isPortalDoctor: !!doc.isPortalDoctor,
+    clinicChangeRequestActive: !!doc.clinicChangeRequestActive,
+    latestClinicChangeRequestId: doc.latestClinicChangeRequestId || null,
   };
 }
 
@@ -277,15 +605,15 @@ function mapDoctorPublic(doc) {
     exp: doc.exp,
     languages: doc.languages || [],
     city: doc.city,
-    locality: asText(doc.clinicProfile?.locality || doc.city || ""),
-    feeVideo: bundledFee(feeVideoBase),
-    feeInPerson: bundledFee(feeInPersonBase),
-    feeCall: bundledFee(feeCallBase),
-    customerPriceLabelVideo: `Consultation Rs ${bundledFee(feeVideoBase)}`,
-    customerPriceLabelInPerson: `In-Person Visit Rs ${bundledFee(feeInPersonBase)}`,
-    customerPriceLabelCall: `Consultation Rs ${bundledFee(feeCallBase)}`,
-    clinic: asText(doc.clinicProfile?.locality || doc.clinicName || doc.clinic || doc.city || "Clinic Area"),
-    clinicName: asText(doc.clinicName || doc.clinicProfile?.name || "Clinic"),
+    locality: asText(doc.verifiedClinicProfile?.locality || doc.clinicProfile?.locality || doc.city || ""),
+    feeVideo: getPatientFacingBundledPricing(feeVideoBase),
+    feeInPerson: getPatientFacingBundledPricing(feeInPersonBase),
+    feeCall: getPatientFacingBundledPricing(feeCallBase),
+    customerPriceLabelVideo: `Consultation Rs ${getPatientFacingBundledPricing(feeVideoBase)}`,
+    customerPriceLabelInPerson: `In-Person Visit Rs ${getPatientFacingBundledPricing(feeInPersonBase)}`,
+    customerPriceLabelCall: `Consultation Rs ${getPatientFacingBundledPricing(feeCallBase)}`,
+    clinic: asText(doc.verifiedClinicProfile?.locality || doc.clinicProfile?.locality || doc.clinicName || doc.clinic || doc.city || "Clinic Area"),
+    clinicName: asText(doc.verifiedClinicProfile?.name || doc.clinicName || doc.clinicProfile?.name || "Clinic"),
     tags: doc.tags || [],
     active: !!doc.active,
     consultationModes: {
@@ -378,7 +706,7 @@ async function isSlotTaken({ doctorId, mode, date, slot, excludeAppointmentId = 
 
 function pushDoctorNotification(doctorId, title, message, type = "info", bookingId = null, meta = {}) {
   if (!doctorId) return;
-  DoctorNotification.create({
+  createDoctorNotification({
     doctorId,
     title,
     message,
@@ -560,10 +888,14 @@ router.post(
       const band = computePlatformBand(consultationFee);
       const payload = {
         name: fullName,
+        fullName,
         email,
         phone,
         specialty,
         city,
+        area,
+        qualification: specialistRequired ? "Specialist" : "General Physician",
+        yearsExperience: Number(b.yearsExperience || 0),
         clinicName: modeInPerson ? clinicName : "",
         clinic: modeInPerson ? clinicLocality : "",
         consultationFee,
@@ -601,10 +933,13 @@ router.post(
           specialistRequired,
         },
         clinicProfile: {
+          verified: false,
           name: modeInPerson ? clinicName : "",
           fullAddress: modeInPerson ? clinicAddress : "",
           locality: modeInPerson ? clinicLocality : area,
+          city,
           pincode: modeInPerson ? clinicPincode : "",
+          mapLabel: modeInPerson ? clinicName : "",
           coordinates: {
             lat: modeInPerson ? clinicLat : null,
             lng: modeInPerson ? clinicLng : null,
@@ -615,6 +950,22 @@ router.post(
           consultationDays: Array.isArray(b.consultationDays) ? b.consultationDays.map(asText).filter(Boolean) : ["mon", "tue", "wed", "thu", "fri"],
           timingsText: availableTimings,
           inPersonEnabled: modeInPerson,
+        },
+        verifiedClinicProfile: {
+          verified: false,
+          name: "",
+          fullAddress: "",
+          locality: "",
+          city: "",
+          pincode: "",
+          mapLabel: "",
+          coordinates: { lat: null, lng: null },
+          slotDurationMins: 15,
+          patientArrivalWindowMins: 15,
+          maxPatientsPerDay: 24,
+          consultationDays: [],
+          timingsText: "",
+          inPersonEnabled: false,
         },
       };
 
@@ -677,7 +1028,108 @@ router.get("/admin/all", isAdmin, async (req, res) => {
   }
 });
 
-router.patch("/admin/:id/verification-status", isAdmin, async (req, res) => {
+router.get("/admin/detail/:id", isAdmin, async (req, res) => {
+  try {
+    const id = asText(req.params.id);
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid doctor id" });
+    const [doctor, latestClinicChangeRequest, recentBookings, recentNotifications] = await Promise.all([
+      Doctor.findById(id).lean(),
+      ClinicChangeRequest.findOne({ doctorId: id }).sort({ createdAt: -1 }).lean(),
+      DoctorAppointment.find({ doctorId: id }).sort({ createdAt: -1 }).limit(20).lean(),
+      DoctorNotification.find({ doctorId: id }).sort({ createdAt: -1 }).limit(20).lean(),
+    ]);
+    if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    return res.json({
+      doctor: mapDoctorPrivate(doctor),
+      latestClinicChangeRequest,
+      recentBookings: await mapDoctorBookingsForDashboard(recentBookings),
+      recentNotifications: recentNotifications.map(mapDoctorNotificationRow),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load doctor detail" });
+  }
+});
+
+router.get("/admin/clinic-change-requests", isAdmin, async (req, res) => {
+  try {
+    const status = asText(req.query.status || "all").toLowerCase();
+    const filter = {};
+    if (status && status !== "all") filter.status = status;
+    const rows = await ClinicChangeRequest.find(filter).sort({ createdAt: -1 }).limit(500).lean();
+    return res.json({ requests: rows });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load clinic change requests" });
+  }
+});
+
+router.patch("/admin/clinic-change-requests/:id/status", isAdmin, async (req, res) => {
+  try {
+    const id = asText(req.params.id);
+    const status = asText(req.body?.status).toLowerCase();
+    const adminComment = asText(req.body?.adminComment || req.body?.note);
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid request id" });
+    if (!["pending_verification", "approved", "rejected", "needs_more_info"].includes(status)) {
+      return res.status(400).json({ error: "Invalid clinic change status" });
+    }
+    const request = await ClinicChangeRequest.findById(id);
+    if (!request) return res.status(404).json({ error: "Clinic change request not found" });
+    request.status = status;
+    request.adminComment = adminComment;
+    request.reviewedAt = new Date();
+    request.reviewedByAdminId = req.user?.adminId || null;
+    await request.save();
+
+    const doctor = await Doctor.findById(request.doctorId);
+    if (doctor) {
+      if (status === "approved") {
+        doctor.verifiedClinicProfile = {
+          verified: true,
+          name: request.requestedClinic?.name || "",
+          fullAddress: request.requestedClinic?.fullAddress || "",
+          locality: request.requestedClinic?.locality || "",
+          city: request.requestedClinic?.city || doctor.city,
+          pincode: request.requestedClinic?.pincode || "",
+          mapLabel: request.requestedClinic?.mapLabel || request.requestedClinic?.name || "",
+          coordinates: request.requestedClinic?.coordinates || {},
+          consultationDays: request.requestedClinic?.consultationDays || [],
+          slotDurationMins: Number(request.requestedClinic?.slotDuration || 15),
+          patientArrivalWindowMins: Number(request.requestedClinic?.arrivalWindow || 15),
+          maxPatientsPerDay: Number(request.requestedClinic?.maxPatientsPerDay || 24),
+          timingsText:
+            request.requestedClinic?.startTime && request.requestedClinic?.endTime
+              ? `${request.requestedClinic.startTime} - ${request.requestedClinic.endTime}`
+              : doctor?.clinicProfile?.timingsText || "",
+          inPersonEnabled: !!doctor?.consultModes?.inPerson,
+        };
+      }
+      doctor.clinicChangeRequestActive = status === "pending_verification" || status === "needs_more_info";
+      await doctor.save();
+      await AdminAuditLog.create({
+        adminId: req.user?.adminId || null,
+        entityType: "ClinicChangeRequest",
+        entityId: request._id,
+        action: `clinic_change_${status}`,
+        notes: adminComment,
+        meta: { doctorId: doctor._id },
+      });
+      await createDoctorNotification({
+        doctorId: doctor._id,
+        type: "clinic_change_review",
+        title: "Clinic change request updated",
+        message: `Clinic change request is now ${status.replace(/_/g, " ")}`,
+        entityType: "ClinicChangeRequest",
+        entityId: request._id,
+      });
+    }
+
+    return res.json({ request });
+  } catch (err) {
+    console.error("PATCH /doctors/admin/clinic-change-requests/:id/status error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to update clinic change request" });
+  }
+});
+
+async function handleAdminDoctorStatusUpdate(req, res) {
   try {
     const id = asText(req.params.id);
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid doctor id" });
@@ -691,7 +1143,23 @@ router.patch("/admin/:id/verification-status", isAdmin, async (req, res) => {
     doctor.verificationReviewedAt = new Date();
     doctor.verificationReviewedByAdminId = req.user?.adminId || null;
     doctor.active = status === "approved";
+    if (status === "approved" && doctor.clinicProfile?.name && !doctor.verifiedClinicProfile?.name) {
+      doctor.verifiedClinicProfile = {
+        ...(doctor.clinicProfile || {}),
+        verified: true,
+        city: asText(doctor?.clinicProfile?.city || doctor.city),
+        mapLabel: asText(doctor?.clinicProfile?.mapLabel || doctor?.clinicProfile?.name),
+      };
+    }
     await doctor.save();
+    await AdminAuditLog.create({
+      adminId: req.user?.adminId || null,
+      entityType: "Doctor",
+      entityId: doctor._id,
+      action: `doctor_verification_${status}`,
+      notes: note,
+      meta: { doctorId: doctor._id },
+    });
     pushDoctorNotification(
       doctor._id,
       "Verification status updated",
@@ -702,7 +1170,10 @@ router.patch("/admin/:id/verification-status", isAdmin, async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: "Failed to update doctor verification status" });
   }
-});
+}
+
+router.patch("/admin/:id/verification-status", isAdmin, handleAdminDoctorStatusUpdate);
+router.patch("/admin/:id/status", isAdmin, handleAdminDoctorStatusUpdate);
 
 router.post("/register", async (req, res) => {
   try {
@@ -722,15 +1193,19 @@ router.post("/register", async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const doctor = await Doctor.create({
       name,
+      fullName: name,
       email,
       phone,
       passwordHash,
       specialty: asText(body.specialty) || "General Physician",
+      qualification: asText(body.qualification),
       exp: Number(body.experience || body.exp || 0) || 0,
       experience: Number(body.experience || body.exp || 0) || 0,
+      yearsExperience: Number(body.experience || body.exp || 0) || 0,
       clinicName: asText(body.clinicName || body.clinic),
       clinic: asText(body.clinicName || body.clinic),
       city: asText(body.city) || "Delhi",
+      area: asText(body.area || ""),
       feeVideo: Number(body.feeVideo || 499),
       feeInPerson: Number(body.feeInPerson || 799),
       feeCall: Number(body.feeCall || body.feeVideo || 399),
@@ -771,7 +1246,16 @@ router.get("/me", doctorAuth, async (req, res) => {
   try {
     const doctor = await Doctor.findById(req.doctorAuth.doctorId).lean();
     if (!doctor) return res.status(404).json({ error: "Doctor not found" });
-    res.json({ doctor: mapDoctorPrivate(doctor) });
+    const [notificationRows, clinicChangeRequest] = await Promise.all([
+      DoctorNotification.find({ doctorId: doctor._id }).sort({ createdAt: -1 }).limit(20).lean(),
+      ClinicChangeRequest.findOne({ doctorId: doctor._id }).sort({ createdAt: -1 }).lean(),
+    ]);
+    res.json({
+      doctor: mapDoctorPrivate(doctor),
+      platformBand: getDoctorCommercialSnapshot(doctor).band,
+      notifications: notificationRows.map(mapDoctorNotificationRow),
+      clinicChangeRequest: mapClinicChangeRequestForDashboard(clinicChangeRequest),
+    });
   } catch (err) {
     console.error("GET /doctors/me error:", err?.message || err);
     res.status(500).json({ error: "Failed to load doctor profile" });
@@ -784,20 +1268,370 @@ router.get("/me/notifications", doctorAuth, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
-    return res.json({ notifications: rows });
+    return res.json({ notifications: rows.map(mapDoctorNotificationRow) });
   } catch (err) {
     return res.status(500).json({ error: "Failed to load doctor notifications" });
   }
+});
+
+router.get("/me/notifications/stream", doctorAuth, async (req, res) => {
+  streamDoctorNotifications(req, res, req.doctorAuth.doctorId);
 });
 
 router.patch("/me/notifications/:id/read", doctorAuth, async (req, res) => {
   try {
     const id = asText(req.params.id);
     if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid notification id" });
-    await DoctorNotification.updateOne({ _id: id, doctorId: req.doctorAuth.doctorId }, { $set: { read: true } });
+    await DoctorNotification.updateOne(
+      { _id: id, doctorId: req.doctorAuth.doctorId },
+      { $set: { read: true, readAt: new Date() } }
+    );
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: "Failed to update notification" });
+  }
+});
+
+router.patch("/me/notifications/read-all", doctorAuth, async (req, res) => {
+  try {
+    await DoctorNotification.updateMany(
+      { doctorId: req.doctorAuth.doctorId, read: false },
+      { $set: { read: true, readAt: new Date() } }
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to mark all notifications read" });
+  }
+});
+
+router.get("/dashboard/self", doctorAuth, async (req, res) => {
+  try {
+    const doctor = await Doctor.findById(req.doctorAuth.doctorId).lean();
+    if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    const [incomingRows, upcomingRows, notificationRows, clinicChangeRequest] = await Promise.all([
+      DoctorAppointment.find({
+        doctorId: doctor._id,
+        status: { $in: ["confirmed", "pending"] },
+        paymentStatus: "paid",
+      }).sort({ appointmentAt: 1, createdAt: -1 }).limit(50).lean(),
+      DoctorAppointment.find({
+        doctorId: doctor._id,
+        status: { $in: ["accepted", "upcoming", "live_now", "completed"] },
+      }).sort({ appointmentAt: 1, createdAt: -1 }).limit(100).lean(),
+      DoctorNotification.find({ doctorId: doctor._id }).sort({ createdAt: -1 }).limit(20).lean(),
+      ClinicChangeRequest.findOne({ doctorId: doctor._id }).sort({ createdAt: -1 }).lean(),
+    ]);
+
+    const [incomingRequests, upcomingConsults] = await Promise.all([
+      mapDoctorBookingsForDashboard(incomingRows),
+      mapDoctorBookingsForDashboard(upcomingRows),
+    ]);
+    const notifications = notificationRows.map(mapDoctorNotificationRow);
+    return res.json(
+      buildDoctorDashboardPayload({
+        doctor,
+        incomingRequests,
+        upcomingConsults,
+        notifications,
+        clinicChangeRequest: mapClinicChangeRequestForDashboard(clinicChangeRequest),
+      })
+    );
+  } catch (err) {
+    console.error("GET /doctors/dashboard/self error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load doctor dashboard" });
+  }
+});
+
+router.get("/dashboard/me", doctorAuth, async (req, res) => {
+  try {
+    const doctor = await Doctor.findById(req.doctorAuth.doctorId).lean();
+    if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    const [incomingRows, upcomingRows, notificationRows, clinicChangeRequest] = await Promise.all([
+      DoctorAppointment.find({
+        doctorId: doctor._id,
+        status: { $in: ["confirmed", "pending"] },
+        paymentStatus: "paid",
+      }).sort({ appointmentAt: 1, createdAt: -1 }).limit(50).lean(),
+      DoctorAppointment.find({
+        doctorId: doctor._id,
+        status: { $in: ["accepted", "upcoming", "live_now", "completed"] },
+      }).sort({ appointmentAt: 1, createdAt: -1 }).limit(100).lean(),
+      DoctorNotification.find({ doctorId: doctor._id }).sort({ createdAt: -1 }).limit(20).lean(),
+      ClinicChangeRequest.findOne({ doctorId: doctor._id }).sort({ createdAt: -1 }).lean(),
+    ]);
+
+    const [incomingRequests, upcomingConsults] = await Promise.all([
+      mapDoctorBookingsForDashboard(incomingRows),
+      mapDoctorBookingsForDashboard(upcomingRows),
+    ]);
+    const notifications = notificationRows.map(mapDoctorNotificationRow);
+    return res.json(
+      buildDoctorDashboardPayload({
+        doctor,
+        incomingRequests,
+        upcomingConsults,
+        notifications,
+        clinicChangeRequest: mapClinicChangeRequestForDashboard(clinicChangeRequest),
+      })
+    );
+  } catch (err) {
+    console.error("GET /doctors/dashboard/me error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to load doctor dashboard" });
+  }
+});
+
+router.get("/platform-band", doctorAuth, async (req, res) => {
+  try {
+    const doctor = await Doctor.findById(req.doctorAuth.doctorId).lean();
+    if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    return res.json({ platformBand: formatFrontendPlatformBand(getDoctorCommercialSnapshot(doctor).band) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load platform fee band" });
+  }
+});
+
+router.get("/dashboard/requests", doctorAuth, async (req, res) => {
+  try {
+    const rows = await DoctorAppointment.find({
+      doctorId: req.doctorAuth.doctorId,
+      status: { $in: ["confirmed", "pending"] },
+      paymentStatus: "paid",
+    }).sort({ appointmentAt: 1, createdAt: -1 }).limit(100).lean();
+    return res.json({ requests: await mapDoctorBookingsForDashboard(rows) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load incoming requests" });
+  }
+});
+
+router.get("/dashboard/incoming-requests", doctorAuth, async (req, res) => {
+  try {
+    const rows = await DoctorAppointment.find({
+      doctorId: req.doctorAuth.doctorId,
+      status: { $in: ["confirmed", "pending"] },
+      paymentStatus: "paid",
+    }).sort({ appointmentAt: 1, createdAt: -1 }).limit(100).lean();
+    return res.json({ requests: await mapDoctorBookingsForDashboard(rows) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load incoming requests" });
+  }
+});
+
+router.get("/dashboard/upcoming", doctorAuth, async (req, res) => {
+  try {
+    const rows = await DoctorAppointment.find({
+      doctorId: req.doctorAuth.doctorId,
+      status: { $in: ["accepted", "upcoming", "live_now", "completed"] },
+    }).sort({ appointmentAt: 1, createdAt: -1 }).limit(100).lean();
+    return res.json({ consults: await mapDoctorBookingsForDashboard(rows) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load upcoming consults" });
+  }
+});
+
+router.get("/dashboard/upcoming-consults", doctorAuth, async (req, res) => {
+  try {
+    const rows = await DoctorAppointment.find({
+      doctorId: req.doctorAuth.doctorId,
+      status: { $in: ["accepted", "upcoming", "live_now", "completed"] },
+    }).sort({ appointmentAt: 1, createdAt: -1 }).limit(100).lean();
+    return res.json({ consults: await mapDoctorBookingsForDashboard(rows) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load upcoming consults" });
+  }
+});
+
+router.get("/dashboard/next", doctorAuth, async (req, res) => {
+  try {
+    const row = await DoctorAppointment.findOne({
+      doctorId: req.doctorAuth.doctorId,
+      status: { $in: ["accepted", "upcoming", "live_now"] },
+    }).sort({ appointmentAt: 1, createdAt: -1 }).lean();
+    if (!row) return res.json({ consult: null });
+    const patientMetaMap = await buildPatientMetaMap([row]);
+    return res.json({ consult: mapDoctorBookingForDashboard(row, patientMetaMap.get(String(row.userId || "")) || null) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load next consult" });
+  }
+});
+
+router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
+  try {
+    const doctor = await Doctor.findById(req.doctorAuth.doctorId);
+    if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+
+    const online = req.body?.online === undefined ? doctor.online : !!req.body.online;
+    const modes = {
+      audio: req.body?.modes?.audio === undefined ? !!doctor?.consultModes?.audio : !!req.body.modes.audio,
+      video: req.body?.modes?.video === undefined ? !!doctor?.consultModes?.video : !!req.body.modes.video,
+      inperson:
+        req.body?.modes?.inperson === undefined
+          ? !!doctor?.consultModes?.inPerson
+          : !!req.body.modes.inperson,
+    };
+    const fees = {
+      audio: modes.audio ? Number(req.body?.fees?.audio ?? doctor.feeCall ?? 0) : 0,
+      video: modes.video ? Number(req.body?.fees?.video ?? doctor.feeVideo ?? 0) : 0,
+      inperson: modes.inperson ? Number(req.body?.fees?.inperson ?? doctor.feeInPerson ?? 0) : 0,
+    };
+    const availability = req.body?.availability || {};
+    const consultationDays = Array.isArray(availability.consultationDays)
+      ? availability.consultationDays.map(asText).filter(Boolean)
+      : getDoctorClinicForOps(doctor).consultationDays;
+    const startTime = asText(availability.startTime || getDoctorClinicForOps(doctor).startTime || "09:00");
+    const endTime = asText(availability.endTime || getDoctorClinicForOps(doctor).endTime || "13:00");
+    const slotDuration = modes.inperson ? Number(availability.slotDuration || 15) : 0;
+    const arrivalWindow = modes.inperson ? Number(availability.arrivalWindow || 15) : 0;
+    const maxPatientsPerDay = modes.inperson ? Number(availability.maxPatientsPerDay || 24) : 0;
+    const band = getPlatformFeeBandFromDoctorFees(fees, modes);
+
+    doctor.online = online;
+    doctor.consultModes = { audio: modes.audio, video: modes.video, inPerson: modes.inperson };
+    doctor.feeCall = fees.audio;
+    doctor.feeVideo = fees.video;
+    doctor.feeInPerson = fees.inperson;
+    doctor.consultationFee = Math.max(fees.audio || 0, fees.video || 0, fees.inperson || 0);
+    doctor.platformFeeBand = {
+      bandKey: band.bandKey,
+      serviceFee: band.serviceFee,
+      gstLabel: band.gstLabel,
+      manualApprovalRequired: band.requiresManualApproval,
+      updatedAt: new Date(),
+    };
+    doctor.clinicProfile = {
+      ...(doctor.clinicProfile || {}),
+      inPersonEnabled: modes.inperson,
+      consultationDays,
+      timingsText: modes.inperson ? `${startTime} - ${endTime}` : "",
+      slotDurationMins: slotDuration,
+      patientArrivalWindowMins: arrivalWindow,
+      maxPatientsPerDay,
+    };
+
+    if (!modes.inperson) {
+      doctor.clinicProfile.slotDurationMins = 0;
+      doctor.clinicProfile.patientArrivalWindowMins = 0;
+      doctor.clinicProfile.maxPatientsPerDay = 0;
+      doctor.clinicProfile.consultationDays = [];
+      doctor.clinicProfile.timingsText = "";
+    }
+    doctor.availability = buildAvailabilityFromDashboard({
+      consultationDays,
+      startTime,
+      endTime,
+      enabled: modes.inperson,
+    });
+
+    await doctor.save();
+
+    const [dashboardDoctor, incomingRows, upcomingRows, notificationRows, clinicChangeRequest] = await Promise.all([
+      Doctor.findById(doctor._id).lean(),
+      DoctorAppointment.find({
+        doctorId: doctor._id,
+        status: { $in: ["confirmed", "pending"] },
+        paymentStatus: "paid",
+      }).sort({ appointmentAt: 1, createdAt: -1 }).limit(50).lean(),
+      DoctorAppointment.find({
+        doctorId: doctor._id,
+        status: { $in: ["accepted", "upcoming", "live_now", "completed"] },
+      }).sort({ appointmentAt: 1, createdAt: -1 }).limit(100).lean(),
+      DoctorNotification.find({ doctorId: doctor._id }).sort({ createdAt: -1 }).limit(20).lean(),
+      ClinicChangeRequest.findOne({ doctorId: doctor._id }).sort({ createdAt: -1 }).lean(),
+    ]);
+
+    const [incomingRequests, upcomingConsults] = await Promise.all([
+      mapDoctorBookingsForDashboard(incomingRows),
+      mapDoctorBookingsForDashboard(upcomingRows),
+    ]);
+    const notifications = notificationRows.map(mapDoctorNotificationRow);
+
+    return res.json(
+      buildDoctorDashboardPayload({
+        doctor: dashboardDoctor,
+        incomingRequests,
+        upcomingConsults,
+        notifications,
+        clinicChangeRequest: mapClinicChangeRequestForDashboard(clinicChangeRequest),
+      })
+    );
+  } catch (err) {
+    console.error("PATCH /doctors/dashboard/settings error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to update dashboard settings" });
+  }
+});
+
+router.post("/clinic-change-requests", doctorAuth, async (req, res) => {
+  try {
+    const doctor = await Doctor.findById(req.doctorAuth.doctorId);
+    if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    const requestedClinic = {
+      verified: false,
+      name: asText(req.body?.clinicName || req.body?.name),
+      fullAddress: asText(req.body?.addressLine1 || req.body?.fullAddress),
+      locality: asText(req.body?.locality),
+      city: asText(req.body?.city || doctor.city),
+      pincode: asText(req.body?.pin || req.body?.pincode),
+      mapLabel: asText(req.body?.mapLabel || req.body?.clinicName || req.body?.name),
+      coordinates: {
+        lat: Number(req.body?.lat ?? req.body?.coordinates?.lat ?? null),
+        lng: Number(req.body?.lng ?? req.body?.coordinates?.lng ?? null),
+      },
+      consultationDays: Array.isArray(req.body?.consultationDays) ? req.body.consultationDays.map(asText).filter(Boolean) : [],
+      startTime: asText(req.body?.startTime),
+      endTime: asText(req.body?.endTime),
+      slotDuration: Number(req.body?.slotDuration || 15),
+      arrivalWindow: Number(req.body?.arrivalWindow || 15),
+      maxPatientsPerDay: Number(req.body?.maxPatientsPerDay || 24),
+    };
+    if (!requestedClinic.name || !requestedClinic.fullAddress || !requestedClinic.locality) {
+      return res.status(400).json({ error: "Clinic name, address, and locality are required" });
+    }
+
+    const previousClinicSource = doctor.verifiedClinicProfile?.name ? doctor.verifiedClinicProfile : doctor.clinicProfile;
+    const request = await ClinicChangeRequest.create({
+      doctorId: doctor._id,
+      previousClinic: {
+        verified: !!previousClinicSource?.verified,
+        name: asText(previousClinicSource?.name),
+        fullAddress: asText(previousClinicSource?.fullAddress),
+        locality: asText(previousClinicSource?.locality),
+        city: asText(previousClinicSource?.city || doctor.city),
+        pincode: asText(previousClinicSource?.pincode),
+        mapLabel: asText(previousClinicSource?.mapLabel || previousClinicSource?.name),
+        coordinates: previousClinicSource?.coordinates || {},
+        consultationDays: previousClinicSource?.consultationDays || [],
+        startTime: "",
+        endTime: "",
+        slotDuration: Number(previousClinicSource?.slotDurationMins || 15),
+        arrivalWindow: Number(previousClinicSource?.patientArrivalWindowMins || 15),
+        maxPatientsPerDay: Number(previousClinicSource?.maxPatientsPerDay || 24),
+      },
+      requestedClinic,
+    });
+
+    doctor.clinicChangeRequestActive = true;
+    doctor.latestClinicChangeRequestId = request._id;
+    await doctor.save();
+    await createDoctorNotification({
+      doctorId: doctor._id,
+      type: "needs_action",
+      title: "Clinic change submitted",
+      message: "Clinic change request submitted for re-verification",
+      entityType: "ClinicChangeRequest",
+      entityId: request._id,
+    });
+    return res.status(201).json({ request: mapClinicChangeRequestForDashboard(request) });
+  } catch (err) {
+    console.error("POST /doctors/clinic-change-requests error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to submit clinic change request" });
+  }
+});
+
+router.get("/clinic-change-requests/latest", doctorAuth, async (req, res) => {
+  try {
+    const request = await ClinicChangeRequest.findOne({ doctorId: req.doctorAuth.doctorId }).sort({ createdAt: -1 }).lean();
+    return res.json({ request: mapClinicChangeRequestForDashboard(request) });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to load clinic change request" });
   }
 });
 
@@ -807,12 +1641,21 @@ router.put("/me/availability", doctorAuth, async (req, res) => {
     if (!availability || typeof availability !== "object") {
       return res.status(400).json({ error: "availability object is required" });
     }
-    const doctor = await Doctor.findByIdAndUpdate(
-      req.doctorAuth.doctorId,
-      { $set: { availability } },
-      { new: true }
-    );
+    const doctor = await Doctor.findById(req.doctorAuth.doctorId);
     if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    doctor.availability = availability;
+    if (!doctor?.consultModes?.inPerson) {
+      doctor.clinicProfile = {
+        ...(doctor.clinicProfile || {}),
+        slotDurationMins: 0,
+        patientArrivalWindowMins: 0,
+        maxPatientsPerDay: 0,
+        consultationDays: [],
+        timingsText: "",
+        inPersonEnabled: false,
+      };
+    }
+    await doctor.save();
     res.json({ doctor: mapDoctorPrivate(doctor) });
   } catch (err) {
     console.error("PUT /doctors/me/availability error:", err?.message || err);
@@ -832,9 +1675,26 @@ router.put("/me/fees", doctorAuth, async (req, res) => {
     if (Number.isFinite(feeCall) && feeCall >= 0) patch.feeCall = feeCall;
     if (!Object.keys(patch).length) return res.status(400).json({ error: "At least one valid fee is required" });
 
-    const doctor = await Doctor.findByIdAndUpdate(req.doctorAuth.doctorId, { $set: patch }, { new: true });
+    const doctor = await Doctor.findById(req.doctorAuth.doctorId);
     if (!doctor) return res.status(404).json({ error: "Doctor not found" });
-    res.json({ doctor: mapDoctorPrivate(doctor) });
+    Object.assign(doctor, patch);
+    if (!doctor?.consultModes?.audio) doctor.feeCall = 0;
+    if (!doctor?.consultModes?.video) doctor.feeVideo = 0;
+    if (!doctor?.consultModes?.inPerson) doctor.feeInPerson = 0;
+    const band = getPlatformFeeBandFromDoctorFees(
+      { audio: doctor.feeCall, video: doctor.feeVideo, inperson: doctor.feeInPerson },
+      { audio: doctor?.consultModes?.audio, video: doctor?.consultModes?.video, inperson: doctor?.consultModes?.inPerson }
+    );
+    doctor.platformFeeBand = {
+      bandKey: band.bandKey,
+      serviceFee: band.serviceFee,
+      gstLabel: band.gstLabel,
+      manualApprovalRequired: band.requiresManualApproval,
+      updatedAt: new Date(),
+    };
+    doctor.consultationFee = Math.max(Number(doctor.feeCall || 0), Number(doctor.feeVideo || 0), Number(doctor.feeInPerson || 0));
+    await doctor.save();
+    res.json({ doctor: mapDoctorPrivate(doctor), platformBand: band });
   } catch (err) {
     console.error("PUT /doctors/me/fees error:", err?.message || err);
     res.status(500).json({ error: "Failed to update fees" });
@@ -866,14 +1726,109 @@ router.put("/me/modes-clinic", doctorAuth, async (req, res) => {
     const doctor = await Doctor.findById(req.doctorAuth.doctorId);
     if (!doctor) return res.status(404).json({ error: "Doctor not found" });
     doctor.consultModes = { audio: !!modeAudio, video: !!modeVideo, inPerson: !!modeInPerson };
+    if (!modeAudio) doctor.feeCall = 0;
+    if (!modeVideo) doctor.feeVideo = 0;
+    if (!modeInPerson) doctor.feeInPerson = 0;
+    const currentVerified = doctor.verifiedClinicProfile?.name ? doctor.verifiedClinicProfile : doctor.clinicProfile;
+    const clinicChanged =
+      asText(currentVerified?.name) !== asText(clinicProfile.name) ||
+      asText(currentVerified?.fullAddress) !== asText(clinicProfile.fullAddress) ||
+      asText(currentVerified?.locality) !== asText(clinicProfile.locality) ||
+      asText(currentVerified?.pincode) !== asText(clinicProfile.pincode) ||
+      Number(currentVerified?.coordinates?.lat || 0) !== Number(clinicProfile.coordinates?.lat || 0) ||
+      Number(currentVerified?.coordinates?.lng || 0) !== Number(clinicProfile.coordinates?.lng || 0);
+
+    if (clinicChanged && doctor.verifiedClinicProfile?.name) {
+      const request = await ClinicChangeRequest.create({
+        doctorId: doctor._id,
+        previousClinic: {
+          verified: !!currentVerified?.verified,
+          name: asText(currentVerified?.name),
+          fullAddress: asText(currentVerified?.fullAddress),
+          locality: asText(currentVerified?.locality),
+          city: asText(currentVerified?.city || doctor.city),
+          pincode: asText(currentVerified?.pincode),
+          mapLabel: asText(currentVerified?.mapLabel || currentVerified?.name),
+          coordinates: currentVerified?.coordinates || {},
+          consultationDays: currentVerified?.consultationDays || [],
+          startTime: "",
+          endTime: "",
+          slotDuration: Number(currentVerified?.slotDurationMins || 15),
+          arrivalWindow: Number(currentVerified?.patientArrivalWindowMins || 15),
+          maxPatientsPerDay: Number(currentVerified?.maxPatientsPerDay || 24),
+        },
+        requestedClinic: {
+          verified: false,
+          name: clinicProfile.name,
+          fullAddress: clinicProfile.fullAddress,
+          locality: clinicProfile.locality,
+          city: asText(req.body?.clinicCity || doctor.city),
+          pincode: clinicProfile.pincode,
+          mapLabel: asText(req.body?.mapLabel || clinicProfile.name),
+          coordinates: clinicProfile.coordinates,
+          consultationDays: clinicProfile.consultationDays,
+          startTime: "",
+          endTime: "",
+          slotDuration: clinicProfile.slotDurationMins,
+          arrivalWindow: clinicProfile.patientArrivalWindowMins,
+          maxPatientsPerDay: clinicProfile.maxPatientsPerDay,
+        },
+      });
+      doctor.clinicChangeRequestActive = true;
+      doctor.latestClinicChangeRequestId = request._id;
+    } else {
+      doctor.clinicProfile = {
+        ...(doctor.clinicProfile || {}),
+        ...clinicProfile,
+        verified: !!doctor.clinicProfile?.verified,
+      };
+      if (!doctor.verifiedClinicProfile?.name) {
+        doctor.verifiedClinicProfile = {
+          ...(doctor.verifiedClinicProfile || {}),
+          ...doctor.clinicProfile,
+          verified: doctor.verificationStatus === "approved",
+          city: asText(req.body?.clinicCity || doctor.city),
+          mapLabel: asText(req.body?.mapLabel || clinicProfile.name),
+        };
+      }
+    }
     doctor.clinicProfile = {
       ...(doctor.clinicProfile || {}),
       ...clinicProfile,
+      city: asText(req.body?.clinicCity || doctor.city),
+      mapLabel: asText(req.body?.mapLabel || clinicProfile.name),
     };
+    if (!modeInPerson) {
+      doctor.clinicProfile.slotDurationMins = 0;
+      doctor.clinicProfile.patientArrivalWindowMins = 0;
+      doctor.clinicProfile.maxPatientsPerDay = 0;
+      doctor.clinicProfile.consultationDays = [];
+      doctor.clinicProfile.timingsText = "";
+      doctor.availability = buildAvailabilityFromDashboard({ consultationDays: [], startTime: "", endTime: "", enabled: false });
+    } else if (Array.isArray(clinicProfile.consultationDays) && clinicProfile.consultationDays.length) {
+      const range = parseTimingRangeFromText(clinicProfile.timingsText) || { start: "09:00", end: "13:00" };
+      doctor.availability = buildAvailabilityFromDashboard({
+        consultationDays: clinicProfile.consultationDays,
+        startTime: range.start,
+        endTime: range.end,
+        enabled: true,
+      });
+    }
     doctor.clinicName = clinicProfile.name || doctor.clinicName;
     doctor.clinic = clinicProfile.locality || doctor.clinic;
+    const band = getPlatformFeeBandFromDoctorFees(
+      { audio: doctor.feeCall, video: doctor.feeVideo, inperson: modeInPerson ? doctor.feeInPerson : 0 },
+      { audio: modeAudio, video: modeVideo, inperson: modeInPerson }
+    );
+    doctor.platformFeeBand = {
+      bandKey: band.bandKey,
+      serviceFee: band.serviceFee,
+      gstLabel: band.gstLabel,
+      manualApprovalRequired: band.requiresManualApproval,
+      updatedAt: new Date(),
+    };
     await doctor.save();
-    return res.json({ doctor: mapDoctorPrivate(doctor) });
+    return res.json({ doctor: mapDoctorPrivate(doctor), clinicChangeRequestActive: doctor.clinicChangeRequestActive });
   } catch (err) {
     return res.status(500).json({ error: "Failed to update mode/clinic settings" });
   }
@@ -1099,19 +2054,11 @@ router.post("/appointments", auth, async (req, res) => {
         locality: asText(doctor?.clinicProfile?.locality || doctor?.city || ""),
         fullAddress: asText(doctor?.clinicProfile?.fullAddress || ""),
         pincode: asText(doctor?.clinicProfile?.pincode || ""),
+        mapLabel: asText(doctor?.clinicProfile?.mapLabel || doctor?.clinicProfile?.name || doctor?.clinicName || doctor?.clinic || ""),
         coordinates: doctor?.clinicProfile?.coordinates || {},
       },
       locationUnlockedForPatient: false,
     });
-
-    pushDoctorNotification(
-      doctorId,
-      `New ${mode === "inperson" ? "In-person" : mode === "video" ? "Video" : "Audio"} booking`,
-      `${patientName} booked ${date} at ${slot}. Booking ID ${appointment._id.toString().slice(-6)}`,
-      "booking_created",
-      appointment._id,
-      { mode, date, slot }
-    );
 
     res.status(201).json({
       appointment,
@@ -1129,3 +2076,5 @@ router.post("/appointments", auth, async (req, res) => {
 });
 
 module.exports = router;
+
+
