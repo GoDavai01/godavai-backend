@@ -102,15 +102,33 @@ function inferModeFromFileName(fileName) {
 function detectMessageLanguage(text) {
   const src = String(text || "").trim();
   if (!src) return "auto";
-  if (/[\u0900-\u097F]/.test(src)) return "hindi";
+
+  if (/[\u0900-\u097F]/.test(src)) {
+    if (/\b(आहे|नाही|काय|कसे|माझे|तुमचे)\b/.test(src)) return "marathi";
+    return "hindi";
+  }
+
+  if (/[\u0980-\u09FF]/.test(src)) return "bengali";
+  if (/[\u0B80-\u0BFF]/.test(src)) return "tamil";
+  if (/[\u0C00-\u0C7F]/.test(src)) return "telugu";
+  if (/[\u0C80-\u0CFF]/.test(src)) return "kannada";
+  if (/[\u0D00-\u0D7F]/.test(src)) return "malayalam";
+  if (/[\u0A80-\u0AFF]/.test(src)) return "gujarati";
+  if (/[\u0A00-\u0A7F]/.test(src)) return "punjabi";
+  if (/[\u0B00-\u0B7F]/.test(src)) return "odia";
 
   const lower = src.toLowerCase();
   const hasLatin = /[a-z]/.test(lower);
   const hinglishHints = [
     "hai", "kya", "kaise", "mujhe", "mera", "meri", "hum", "aap", "isko", "isse",
     "kar", "karo", "kr", "samjha", "batao", "kyu", "nahi", "acha", "sahi",
+    "dard", "bukhar", "dawai", "ilaaj",
   ];
-  const hintCount = hinglishHints.reduce((n, w) => (lower.includes(w) ? n + 1 : n), 0);
+
+  const hintCount = hinglishHints.reduce((n, w) => {
+    return new RegExp(`\\b${w}\\b`, "i").test(lower) ? n + 1 : n;
+  }, 0);
+
   if (hasLatin && hintCount >= 2) return "hinglish";
   return "english";
 }
@@ -1011,11 +1029,21 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
     };
   }
   const ai = await generateAssistantReply({
-    message: mergedMessage,
-    history,
-    context: { ...context, focus: mode, language: replyLanguage, replyLanguage },
-    userId,
-    attachment: {
+  message: mergedMessage,
+  history,
+  context: {
+    ...context,
+    focus: mode,
+    language: replyLanguage,
+    replyLanguage,
+    replyLanguagePreference:
+      context?.replyLanguagePreference ||
+      context?.languagePreference ||
+      context?.language ||
+      replyLanguage,
+  },
+  userId,
+  attachment: {
       name: file?.originalname || "",
       url: persisted.relativePath,
       type: file?.mimetype || "",

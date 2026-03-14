@@ -1,9 +1,9 @@
 // services/aiService.js — GoDavaii 2035 Health OS AI Service
-// ✅ World-class health AI system prompt with WHO + Indian Govt guidelines
-// ✅ Intelligent Desi Ilaaj — contextual, varied, evidence-based (never repetitive)
-// ✅ Multi-language: auto-detect user language (Hindi, English, Hinglish, Tamil, Telugu, Bengali, etc.)
-// ✅ Doctor-replacement-grade responses — thorough, caring, structured
-// ✅ Faster response pipeline with optimized history handling
+// ✅ FIX: Reply language preference respected
+// ✅ FIX: Hindi script medical intent expanded
+// ✅ FIX: Hindi script casual greetings expanded
+// ✅ FIX: Marathi detection order fixed
+// ✅ FIX: No other architecture changes
 
 const AiSession = require("../models/AiSession");
 const { buildHealthContext } = require("./healthContextService");
@@ -55,21 +55,33 @@ function inferPromptIntent(text) {
 
 function hasMedicalIntent(text) {
   const src = String(text || "").toLowerCase();
-  return /(symptom|bukhar|fever|cold|cough|khansi|pain|dard|headache|migraine|vomit|ultee|diarrhea|loose motion|sugar|bp|oxygen|report|lab|xray|x-ray|scan|prescription|rx|medicine|dawai|tablet|capsule|hba1c|cbc|cholesterol|thyroid|creatinine|hemoglobin|infection|allergy|rash|pimple|acne|skin|stomach|gas|acidity|back pain|joint|muscle|weakness|fatigue|thakan|nausea|constipation|kabz|weight|mota|patla|hair fall|dandruff|anxiety|tension|depression|sleep|neend|insomnia|diabetes|asthma|dama|period|masik dharm|pregnancy|baby|bacha|blood pressure|heart|dil|lungs|phephde|kidney|gurda|liver|jigar|eyes|aankh|ear|kaan|throat|gala|nose|naak|teeth|daant|bone|haddi)/.test(src);
+  return /(
+    symptom|bukhar|fever|cold|cough|khansi|pain|dard|headache|migraine|
+    vomit|ultee|diarrhea|loose motion|sugar|bp|oxygen|report|lab|xray|x-ray|
+    scan|prescription|rx|medicine|dawai|tablet|capsule|hba1c|cbc|cholesterol|
+    thyroid|creatinine|hemoglobin|infection|allergy|rash|pimple|acne|skin|
+    stomach|gas|acidity|back pain|joint|muscle|weakness|fatigue|thakan|nausea|
+    constipation|kabz|weight|mota|patla|hair fall|dandruff|anxiety|tension|
+    depression|sleep|neend|insomnia|diabetes|asthma|dama|period|masik dharm|
+    pregnancy|baby|bacha|blood pressure|heart|dil|lungs|phephde|kidney|gurda|
+    liver|jigar|eyes|aankh|ear|kaan|throat|gala|nose|naak|teeth|daant|bone|haddi|
+    बुखार|ताप|दर्द|सर दर्द|खांसी|सर्दी|जुकाम|उल्टी|दस्त|रिपोर्ट|दवाई|इलाज|पिंपल|मुहांसे|
+    त्वचा|गला|छाती|पेट|कमजोरी|थकान|एलर्जी|शुगर|बीपी|नींद|मासिक|गर्भ|बच्चा|खून|हड्डी
+  )/ix.test(src);
 }
 
 function isCasualConversation(text) {
   const src = String(text || "").toLowerCase().trim();
   if (!src) return true;
   if (hasMedicalIntent(src)) return false;
-  return /^(hi|hii|hello|hey|yo|namaste|namaskar|kaise ho|kya haal|kya hal|kya scene|how are you|good morning|good evening|good night|thanks|thank you|thx|ok|okay|acha|accha|hmm|hmmm|bro|bhai|sup|what's up|wassup|hola|bye|goodbye|see you|take care)\b/.test(src);
+  return /^(hi|hii|hello|hey|yo|namaste|namaskar|kaise ho|kya haal|kya hal|kya scene|how are you|good morning|good evening|good night|thanks|thank you|thx|ok|okay|acha|accha|hmm|hmmm|bro|bhai|sup|what's up|wassup|hola|bye|goodbye|see you|take care|हेलो|नमस्ते|नमस्कार|कैसे हो|क्या हाल|धन्यवाद)\b/i.test(src);
 }
 
 /* ── Intelligent Desi Ilaaj — contextual, varied, never repetitive ── */
 function shouldIncludeDesiIlaaj({ message, ctx }) {
   const src = String(message || "").toLowerCase();
   if (!src) return false;
-  if (/(desi|gharelu|home remedy|nuskh|kadha|ilaaj|ayurved|natural|herbal)/.test(src)) return true;
+  if (/(desi|gharelu|home remedy|nuskh|kadha|ilaaj|ayurved|natural|herbal|इलाज|घरेलू)/.test(src)) return true;
   if (isCasualConversation(src)) return false;
   if (hasMedicalIntent(src)) return true;
 
@@ -118,28 +130,20 @@ function detectUserLanguage(text) {
   const src = String(text || "").trim();
   if (!src) return "auto";
 
-  // Devanagari (Hindi)
-  if (/[\u0900-\u097F]/.test(src)) return "hindi";
-  // Bengali
-  if (/[\u0980-\u09FF]/.test(src)) return "bengali";
-  // Tamil
-  if (/[\u0B80-\u0BFF]/.test(src)) return "tamil";
-  // Telugu
-  if (/[\u0C00-\u0C7F]/.test(src)) return "telugu";
-  // Kannada
-  if (/[\u0C80-\u0CFF]/.test(src)) return "kannada";
-  // Malayalam
-  if (/[\u0D00-\u0D7F]/.test(src)) return "malayalam";
-  // Gujarati
-  if (/[\u0A80-\u0AFF]/.test(src)) return "gujarati";
-  // Punjabi (Gurmukhi)
-  if (/[\u0A00-\u0A7F]/.test(src)) return "punjabi";
-  // Odia
-  if (/[\u0B00-\u0B7F]/.test(src)) return "odia";
-  // Marathi uses Devanagari — detect via common Marathi words
-  if (/[\u0900-\u097F]/.test(src) && /\b(आहे|नाही|काय|कसे|माझे|तुमचे)\b/.test(src)) return "marathi";
+  if (/[\u0900-\u097F]/.test(src)) {
+    if (/\b(आहे|नाही|काय|कसे|माझे|तुमचे)\b/.test(src)) return "marathi";
+    return "hindi";
+  }
 
-  // Roman script — check for Hinglish vs pure English
+  if (/[\u0980-\u09FF]/.test(src)) return "bengali";
+  if (/[\u0B80-\u0BFF]/.test(src)) return "tamil";
+  if (/[\u0C00-\u0C7F]/.test(src)) return "telugu";
+  if (/[\u0C80-\u0CFF]/.test(src)) return "kannada";
+  if (/[\u0D00-\u0D7F]/.test(src)) return "malayalam";
+  if (/[\u0A80-\u0AFF]/.test(src)) return "gujarati";
+  if (/[\u0A00-\u0A7F]/.test(src)) return "punjabi";
+  if (/[\u0B00-\u0B7F]/.test(src)) return "odia";
+
   const lower = src.toLowerCase();
   const hasLatin = /[a-z]/.test(lower);
   const hinglishHints = [
@@ -148,12 +152,26 @@ function detectUserLanguage(text) {
     "dekho", "suno", "pata", "lagta", "hota", "karun", "chahiye", "abhi", "zaroor",
     "dard", "bukhar", "dawai", "ilaaj", "sehat", "bimari", "theek", "tabiyet",
   ];
+
   const hintCount = hinglishHints.reduce((n, w) => {
     const re = new RegExp(`\\b${w}\\b`, "i");
     return re.test(lower) ? n + 1 : n;
   }, 0);
+
   if (hasLatin && hintCount >= 2) return "hinglish";
   return "english";
+}
+
+function resolveReplyLanguage(message, context = {}) {
+  const pref = String(
+    context?.replyLanguagePreference ||
+    context?.languagePreference ||
+    context?.language ||
+    "auto"
+  ).toLowerCase();
+
+  if (pref && pref !== "auto") return pref;
+  return detectUserLanguage(message);
 }
 
 /* ── World-class System Prompt with WHO + Indian Govt Guidelines ── */
@@ -162,7 +180,6 @@ function buildSystemPrompt(ctx) {
   const profileBits = [];
   const detectedLang = String(ctx?.detectedLanguage || ctx?.replyLanguage || ctx?.language || "auto").toLowerCase();
 
-  // Dynamic language instruction based on detection
   let languageRule = "";
   switch (detectedLang) {
     case "hindi":
@@ -429,20 +446,14 @@ function extractSection(text, heading) {
 
 function ensureUsefulBullets(block, fallbackLines = []) {
   const raw = normalizeSectionBody(block);
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
 
   if (!lines.length) {
     return fallbackLines.map((x) => `- ${x}`).join("\n");
   }
 
   return lines
-    .map((line) => {
-      if (/^- /.test(line)) return line;
-      return `- ${line}`;
-    })
+    .map((line) => (/^- /.test(line) ? line : `- ${line}`))
     .join("\n");
 }
 
@@ -450,7 +461,6 @@ function ensureUsefulBullets(block, fallbackLines = []) {
 function getContextualDesiIlaaj(message, focus) {
   const src = String(message || "").toLowerCase();
 
-  // Large pool of remedies organized by condition
   const remedyPools = {
     fever: [
       "Giloy (Guduchi) kadha: 4-5 inch giloy stem ko paani me 10 min ubaalein, thoda shahad milayein — immunity booster aur fever reducer. Din me 2 baar.",
@@ -535,21 +545,19 @@ function getContextualDesiIlaaj(message, focus) {
     ],
   };
 
-  // Select pool based on message content
   let pool = "general";
-  if (/(fever|bukhar|temperature|tapman)/.test(src)) pool = "fever";
-  else if (/(cough|khansi|khasi|balgam|phlegm)/.test(src)) pool = "cough";
-  else if (/(cold|nazla|zukham|sardi|runny nose|blocked nose|congestion|sinus)/.test(src)) pool = "cold";
-  else if (/(stomach|pet|gas|bloating|indigestion|badhasmi|constipation|kabz|diarrhea|loose motion|dast|ulcer)/.test(src)) pool = "stomach";
-  else if (/(acidity|acid reflux|heartburn|seene me jalan|gerd|khatta)/.test(src)) pool = "acidity";
-  else if (/(headache|sir dard|migraine|head pain)/.test(src)) pool = "headache";
-  else if (/(joint|jod|knee|ghutna|back pain|kamar|muscle|shoulder|neck|cervical|arthritis|gathiya)/.test(src)) pool = "joints";
-  else if (/(skin|pimple|acne|rash|fungal|eczema|ring worm|daad|khujli|itching|hair|baal|dandruff)/.test(src)) pool = "skin";
+  if (/(fever|bukhar|temperature|tapman|बुखार|ताप)/.test(src)) pool = "fever";
+  else if (/(cough|khansi|khasi|balgam|phlegm|खांसी)/.test(src)) pool = "cough";
+  else if (/(cold|nazla|zukham|sardi|runny nose|blocked nose|congestion|sinus|सर्दी|जुकाम)/.test(src)) pool = "cold";
+  else if (/(stomach|pet|gas|bloating|indigestion|badhasmi|constipation|kabz|diarrhea|loose motion|dast|ulcer|पेट|गैस|कब्ज|दस्त)/.test(src)) pool = "stomach";
+  else if (/(acidity|acid reflux|heartburn|seene me jalan|gerd|khatta|एसिडिटी)/.test(src)) pool = "acidity";
+  else if (/(headache|sir dard|migraine|head pain|सर दर्द)/.test(src)) pool = "headache";
+  else if (/(joint|jod|knee|ghutna|back pain|kamar|muscle|shoulder|neck|cervical|arthritis|gathiya|जोड़|घुटना|कमर)/.test(src)) pool = "joints";
+  else if (/(skin|pimple|acne|rash|fungal|eczema|ring worm|daad|khujli|itching|hair|baal|dandruff|त्वचा|पिंपल|मुहांसे|खुजली)/.test(src)) pool = "skin";
   else if (focus === "lab") pool = "general";
-  else if (focus === "rx" || focus === "medicine") pool = "stomach"; // medicine side effects often stomach-related
+  else if (focus === "rx" || focus === "medicine") pool = "stomach";
 
   const remedies = remedyPools[pool] || remedyPools.general;
-  // Random selection of 3-4 remedies to ensure variety
   const shuffled = [...remedies].sort(() => Math.random() - 0.5);
   const selected = shuffled.slice(0, Math.min(4, shuffled.length));
 
@@ -560,9 +568,7 @@ function getContextualDesiIlaaj(message, focus) {
 function postProcessReply(reply, ctx, redFlags, sourceMessage = "") {
   const raw = sanitizeReplyFormatting(reply);
 
-  // Check if this is a casual chat (no sections needed)
   if (isCasualConversation(sourceMessage)) {
-    // If GPT already replied without sections, just return clean text
     const hasStructuredSections = /(^|\n)\s*Assessment\s*:/i.test(raw);
     if (!hasStructuredSections) {
       return raw;
@@ -576,7 +582,6 @@ function postProcessReply(reply, ctx, redFlags, sourceMessage = "") {
 
   let warningSignsBody = extractSection(raw, "Warning signs");
 
-  // Merge old format if GPT used it
   if (!warningSignsBody) {
     const redFlagsBody = extractSection(raw, "Red flags");
     const whenDoctor = extractSection(raw, "When to see doctor");
@@ -587,7 +592,6 @@ function postProcessReply(reply, ctx, redFlags, sourceMessage = "") {
   const includeDesiIlaaj = shouldIncludeDesiIlaaj({ message: sourceMessage, ctx });
   const focus = String(ctx?.focus || "").toLowerCase();
 
-  // If GPT didn't provide good desi ilaaj or gave generic ones, use our varied pool
   if (includeDesiIlaaj && (!desiIlaajBody || desiIlaajBody.length < 100)) {
     desiIlaajBody = getContextualDesiIlaaj(sourceMessage, focus);
   }
@@ -825,9 +829,11 @@ async function generateAssistantReply({ message, history, context, userId, attac
   const cleanHistory = compactHistory(history, 16);
   const resolvedContext = await buildHealthContext({ userId, context });
 
-  // Detect language from the current message
-  const detectedLanguage = detectUserLanguage(baseUserMessage);
+  const detectedLanguage = resolveReplyLanguage(baseUserMessage, context);
   resolvedContext.detectedLanguage = detectedLanguage;
+  resolvedContext.replyLanguagePreference = String(
+    context?.replyLanguagePreference || "auto"
+  ).toLowerCase();
 
   const recalledAttachment = attachment
     ? null
