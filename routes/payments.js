@@ -149,9 +149,14 @@ router.post("/verify", async (req, res) => {
       doctorId: consult.doctorId,
       type: "booking_confirmed",
       title: `New ${consult.mode === "inperson" ? "In-person" : consult.mode === "video" ? "Video" : "Audio"} booking confirmed`,
-      message: `${consult.patientName || "Patient"} | ${consult.date} | ${consult.slot} | Booking ${consult._id.toString().slice(-6)}`,
+      message: `${consult.patientName || "Patient"} | ${consult.date} | ${consult.slot}${Array.isArray(consult.patientAttachments) && consult.patientAttachments.length ? ` | ${consult.patientAttachments.length} record${consult.patientAttachments.length > 1 ? "s" : ""} shared` : ""} | Booking ${consult._id.toString().slice(-6)}`,
       bookingId: consult._id,
-      meta: { mode: consult.mode, date: consult.date, slot: consult.slot },
+      meta: {
+        mode: consult.mode,
+        date: consult.date,
+        slot: consult.slot,
+        attachmentCount: Array.isArray(consult.patientAttachments) ? consult.patientAttachments.length : 0,
+      },
     });
     await createPatientNotification({
       userId: consult.userId,

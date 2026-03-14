@@ -66,6 +66,68 @@ function buildAppointmentAt(date, slot) {
   return new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), t.hour, t.minute, 0, 0));
 }
 
+function dayKeyFromIsoDate(date) {
+  const d = parseISODateOnly(date);
+  if (!d) return "";
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "Asia/Kolkata" }).format(d).toLowerCase().slice(0, 3);
+}
+
+function toMinutes(hhmm) {
+  const m = asText(hhmm).match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(mm) || h < 0 || h > 23 || mm < 0 || mm > 59) return null;
+  return h * 60 + mm;
+}
+
+function minsTo12h(mins) {
+  const h24 = Math.floor(mins / 60);
+  const mm = mins % 60;
+  const ampm = h24 >= 12 ? "PM" : "AM";
+  const h12 = h24 % 12 || 12;
+  return `${String(h12).padStart(2, "0")}:${String(mm).padStart(2, "0")} ${ampm}`;
+}
+
+function generateSlotsBetween(startHHmm, endHHmm, stepMins) {
+  const start = toMinutes(startHHmm);
+  const end = toMinutes(endHHmm);
+  const step = Number(stepMins || 15);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(step) || step < 5 || end <= start) return [];
+  const out = [];
+  for (let t = start; t + step <= end; t += step) out.push(minsTo12h(t));
+  return out;
+}
+
+function parseTimingRangeFromText(text) {
+  const m = asText(text).match(/(\d{1,2}:\d{2})\s*[-to]+\s*(\d{1,2}:\d{2})/i);
+  if (!m) return null;
+  return { start: m[1], end: m[2] };
+}
+
+function getDoctorSlotPool(doctor, date, mode) {
+  const dayKey = dayKeyFromIsoDate(date);
+  const av = doctor?.availability?.[dayKey] || {};
+  const avStart = asText(av?.start);
+  const avEnd = asText(av?.end);
+  const step = Number(doctor?.clinicProfile?.slotDurationMins || 15);
+  const dailyCap = Number(doctor?.clinicProfile?.maxPatientsPerDay || 0);
+  if (av?.enabled && avStart && avEnd) {
+    const slots = generateSlotsBetween(avStart, avEnd, step);
+    return dailyCap > 0 ? slots.slice(0, dailyCap) : slots;
+  }
+  if (mode === "inperson" && doctor?.clinicProfile?.consultationDays?.length) {
+    const active = doctor.clinicProfile.consultationDays.map((x) => asText(x).toLowerCase().slice(0, 3));
+    if (!active.includes(dayKey)) return [];
+    const range = parseTimingRangeFromText(doctor?.clinicProfile?.timingsText);
+    if (range) {
+      const slots = generateSlotsBetween(range.start, range.end, step);
+      return dailyCap > 0 ? slots.slice(0, dailyCap) : slots;
+    }
+  }
+  return [];
+}
+
 function isPastSlot(date, slot) {
   const appointmentAt = buildAppointmentAt(date, slot);
   if (!appointmentAt) return true;
@@ -88,6 +150,26 @@ function calculateAgeFromDob(dob) {
   const monthDelta = now.getMonth() - birthDate.getMonth();
   if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < birthDate.getDate())) age -= 1;
   return age >= 0 ? age : null;
+}
+
+function getUploadedFileMeta(file = null) {
+  if (!file) return { url: "", fileName: "", mimeType: "", size: 0 };
+  return {
+    url: asText(file.location || file.path || file.url),
+    fileName: asText(file.originalname || file.key || file.filename),
+    mimeType: asText(file.mimetype),
+    size: Number(file.size || 0),
+  };
+}
+
+function getUploadedFilesMeta(files = []) {
+  return (Array.isArray(files) ? files : [])
+    .map((file) => ({
+      ...getUploadedFileMeta(file),
+      category: "medical_record",
+      uploadedAt: new Date(),
+    }))
+    .filter((file) => file.url);
 }
 
 async function buildPatientMetaMap(bookings = []) {
@@ -168,6 +250,7 @@ function mapConsultDoctor(c) {
     doctorNotes: c.doctorNotes || "",
     patientSummary: c.patientSummary || "",
     symptoms: c.symptoms || "",
+    patientAttachments: Array.isArray(c.patientAttachments) ? c.patientAttachments : [],
     prescriptionId: c.prescriptionId || null,
     holdExpiresAt: c.holdExpiresAt || null,
     createdAt: c.createdAt,
@@ -199,6 +282,7 @@ function mapConsultUser(c) {
     paymentRef: c.paymentRef || "",
     holdExpiresAt: c.holdExpiresAt || null,
     prescription: c.prescription || {},
+    patientAttachments: Array.isArray(c.patientAttachments) ? c.patientAttachments : [],
     clinicLocation: {
       clinicName: asText(loc.clinicName),
       locality: asText(loc.locality),
@@ -236,6 +320,7 @@ function mapDoctorDashboardConsult(c, patientMeta = null) {
     bookedFor: c.appointmentAt,
     status: mapDashboardStatus(c.status, c.appointmentAt),
     mode: c.mode === "call" ? "audio" : c.mode,
+    patientAttachments: Array.isArray(c.patientAttachments) ? c.patientAttachments : [],
     canJoin:
       ["accepted", "upcoming", "live_now"].includes(mapDashboardStatus(c.status, c.appointmentAt)) &&
       !!c.appointmentAt &&
@@ -249,7 +334,20 @@ async function mapDoctorDashboardConsults(rows = []) {
   return rows.map((row) => mapDoctorDashboardConsult(row, patientMetaMap.get(String(row?.userId || "")) || null));
 }
 
-router.post("/create", auth, async (req, res) => {
+const consultRecordUpload = (req, res, next) => {
+  upload.array("medicalRecords", 5)(req, res, (err) => {
+    if (!err) return next();
+    const raw = asText(err?.message || "Upload failed");
+    return res.status(400).json({
+      error:
+        err?.code === "LIMIT_FILE_SIZE"
+          ? "Medical record file too large. Max 5MB allowed."
+          : raw || "Medical record upload failed",
+    });
+  });
+};
+
+router.post("/create", auth, consultRecordUpload, async (req, res) => {
   try {
     const userId = req.user?.userId || req.user?._id;
     const doctorId = asText(req.body?.doctorId);
@@ -280,6 +378,9 @@ router.post("/create", auth, async (req, res) => {
     if (mode === "call" && !doctor?.consultModes?.audio) {
       return res.status(409).json({ error: "Audio consultation is not enabled for this doctor" });
     }
+    if (!getDoctorSlotPool(doctor, date, mode).includes(slot)) {
+      return res.status(400).json({ error: "Invalid slot for selected doctor/date/mode" });
+    }
     if (await slotIsTaken({ doctorId, date, slot, mode })) {
       return res.status(409).json({ error: "Slot already booked" });
     }
@@ -290,6 +391,7 @@ router.post("/create", auth, async (req, res) => {
     const platformBand = doctor.platformFeeBand?.bandKey ? doctor.platformFeeBand : computePlatformBand(baseFee);
     const fee = bundledFee(baseFee);
     const paymentRef = `CONSULT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const patientAttachments = getUploadedFilesMeta(req.files);
 
     const consult = await DoctorAppointment.create({
       userId,
@@ -306,6 +408,7 @@ router.post("/create", auth, async (req, res) => {
       patientSummary: asText(req.body?.patientSummary || ""),
       symptoms: asText(req.body?.symptoms || req.body?.reason || ""),
       reason: asText(req.body?.reason) || "General consultation",
+      patientAttachments,
       fee,
       bundledPriceLabel: mode === "inperson" ? `In-Person Visit Rs ${fee}` : `Consultation Rs ${fee}`,
       platformFeeBandApplied: platformBand,

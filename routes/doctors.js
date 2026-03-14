@@ -240,24 +240,25 @@ function buildDoctorFeeShape(doctor = {}) {
 
 function getDoctorClinicForOps(doctor = {}) {
   const verified = doctor?.verifiedClinicProfile?.name ? doctor.verifiedClinicProfile : null;
-  const active = verified || doctor?.clinicProfile || {};
-  const timingsText = asText(active?.timingsText || "");
+  const locationSource = verified || doctor?.clinicProfile || {};
+  const scheduleSource = doctor?.clinicProfile?.consultationDays?.length ? doctor.clinicProfile : locationSource;
+  const timingsText = asText(scheduleSource?.timingsText || locationSource?.timingsText || "");
   const timingMatch = timingsText.match(/(\d{1,2}:\d{2})\s*[-to]+\s*(\d{1,2}:\d{2})/i);
   return {
-    verified: !!active?.verified,
-    name: asText(active?.name),
-    addressLine1: asText(active?.fullAddress),
-    locality: asText(active?.locality),
-    city: asText(active?.city || doctor?.city),
-    pin: asText(active?.pincode),
-    mapLabel: asText(active?.mapLabel || active?.name),
-    coordinates: active?.coordinates || { lat: null, lng: null },
-    consultationDays: Array.isArray(active?.consultationDays) ? toDisplayDays(active.consultationDays) : [],
+    verified: !!locationSource?.verified,
+    name: asText(locationSource?.name),
+    addressLine1: asText(locationSource?.fullAddress),
+    locality: asText(locationSource?.locality),
+    city: asText(locationSource?.city || doctor?.city),
+    pin: asText(locationSource?.pincode),
+    mapLabel: asText(locationSource?.mapLabel || locationSource?.name),
+    coordinates: locationSource?.coordinates || { lat: null, lng: null },
+    consultationDays: Array.isArray(scheduleSource?.consultationDays) ? toDisplayDays(scheduleSource.consultationDays) : [],
     startTime: timingMatch?.[1] || "",
     endTime: timingMatch?.[2] || "",
-    slotDuration: Number(active?.slotDurationMins || 15),
-    arrivalWindow: Number(active?.patientArrivalWindowMins || 15),
-    maxPatientsPerDay: Number(active?.maxPatientsPerDay || 24),
+    slotDuration: Number(scheduleSource?.slotDurationMins || 15),
+    arrivalWindow: Number(scheduleSource?.patientArrivalWindowMins || 15),
+    maxPatientsPerDay: Number(scheduleSource?.maxPatientsPerDay || 24),
   };
 }
 
@@ -367,6 +368,7 @@ function mapDoctorBookingForDashboard(booking = {}, patientMeta = null) {
     consultRoomId: asText(booking.consultRoomId),
     clinicRevealAllowed: !!(booking.clinicRevealAllowed || booking.locationUnlockedForPatient),
     prescriptionId: booking.prescriptionId || null,
+    patientAttachments: Array.isArray(booking.patientAttachments) ? booking.patientAttachments : [],
     canJoin:
       deriveDashboardBookingState(booking) === "live_now" ||
       (booking.appointmentAt && new Date(booking.appointmentAt).getTime() <= Date.now() + 5 * 60 * 1000),
@@ -547,7 +549,7 @@ function getDoctorSlotPool(doctor, date, mode) {
     }
   }
 
-  return dailyCap > 0 ? DEFAULT_SLOT_POOL.slice(0, dailyCap) : DEFAULT_SLOT_POOL;
+  return [];
 }
 
 function isPastSlot(date, slot) {
@@ -728,6 +730,16 @@ function getUploadedFileMeta(file = null) {
   };
 }
 
+function getUploadedFilesMeta(files = []) {
+  return (Array.isArray(files) ? files : [])
+    .map((file) => ({
+      ...getUploadedFileMeta(file),
+      category: "medical_record",
+      uploadedAt: new Date(),
+    }))
+    .filter((file) => file.url);
+}
+
 const clinicChangeUpload = (req, res, next) => {
   upload.single("clinicProof")(req, res, (err) => {
     if (!err) return next();
@@ -738,6 +750,20 @@ const clinicChangeUpload = (req, res, next) => {
         : err instanceof multer.MulterError
         ? raw
         : raw || "Clinic proof upload failed";
+    return res.status(400).json({ error: msg });
+  });
+};
+
+const consultRecordUpload = (req, res, next) => {
+  upload.array("medicalRecords", 5)(req, res, (err) => {
+    if (!err) return next();
+    const raw = asText(err?.message || "Upload failed");
+    const msg =
+      err?.code === "LIMIT_FILE_SIZE"
+        ? "Medical record file too large. Max 5MB allowed."
+        : err instanceof multer.MulterError
+        ? raw
+        : raw || "Medical record upload failed";
     return res.status(400).json({ error: msg });
   });
 };
@@ -1589,6 +1615,18 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
       maxPatientsPerDay,
     };
 
+    if (doctor?.verifiedClinicProfile?.name) {
+      doctor.verifiedClinicProfile = {
+        ...(doctor.verifiedClinicProfile || {}),
+        consultationDays,
+        timingsText: doctor.clinicProfile.timingsText,
+        slotDurationMins: slotDuration,
+        patientArrivalWindowMins: arrivalWindow,
+        maxPatientsPerDay,
+        inPersonEnabled: modes.inperson,
+      };
+    }
+
     if (!modes.inperson) {
       doctor.clinicProfile.slotDurationMins = 0;
       doctor.clinicProfile.patientArrivalWindowMins = 0;
@@ -1634,7 +1672,7 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
         incomingRequests,
         upcomingConsults,
         notifications,
-        clinicChangeRequest: mapClinicChangeRequestForDashboard(clinicChangeRequest),
+        clinicChangeRequest,
       })
     );
   } catch (err) {
@@ -2088,7 +2126,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-router.post("/appointments", auth, async (req, res) => {
+router.post("/appointments", auth, consultRecordUpload, async (req, res) => {
   try {
     const userId = req.user?.userId || req.user?._id;
     const doctorId = asText(req.body?.doctorId);
@@ -2099,6 +2137,9 @@ router.post("/appointments", auth, async (req, res) => {
     const patientName = asText(req.body?.patientName) || (patientType === "self" ? "Self" : "Family Member");
     const reason = asText(req.body?.reason) || "General consultation";
     const paymentMethod = asText(req.body?.paymentMethod || "");
+    const patientSummary = asText(req.body?.patientSummary || "");
+    const symptoms = asText(req.body?.symptoms || req.body?.reason || "");
+    const patientAttachments = getUploadedFilesMeta(req.files);
 
     if (!mongoose.Types.ObjectId.isValid(String(userId))) return res.status(401).json({ error: "Invalid user token" });
     if (!mongoose.Types.ObjectId.isValid(doctorId)) return res.status(400).json({ error: "Invalid doctorId" });
@@ -2149,7 +2190,10 @@ router.post("/appointments", auth, async (req, res) => {
       appointmentAt,
       patientType,
       patientName,
+      patientSummary,
+      symptoms,
       reason,
+      patientAttachments,
       fee,
       bundledPriceLabel: mode === "inperson" ? `In-Person Visit Rs ${fee}` : `Consultation Rs ${fee}`,
       platformFeeBandApplied: band,

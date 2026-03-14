@@ -16,6 +16,19 @@ const doctorAppointmentSchema = new mongoose.Schema(
     patientSummary: { type: String, default: "" },
     symptoms: { type: String, default: "" },
     reason: { type: String, default: "" },
+    patientAttachments: {
+      type: [
+        {
+          url: { type: String, default: "", trim: true },
+          fileName: { type: String, default: "", trim: true },
+          mimeType: { type: String, default: "", trim: true },
+          size: { type: Number, default: 0 },
+          category: { type: String, default: "medical_record", trim: true },
+          uploadedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
     fee: { type: Number, default: 0 },
     paymentMethod: { type: String, enum: ["upi", "card", "netbanking", "cash", ""], default: "" },
     paymentStatus: { type: String, enum: ["pending", "paid", "failed", "refunded"], default: "pending", index: true },
