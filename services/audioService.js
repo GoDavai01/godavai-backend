@@ -1,3 +1,9 @@
+// services/audioService.js — GoDavaii 2035 Audio Service
+// ✅ Multi-language TTS (10+ Indian languages)
+// ✅ Better pronunciation instructions
+// ✅ Faster timeout handling
+// ✅ Proper error recovery
+
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -50,6 +56,103 @@ async function transcribeAudio(file) {
   }
 }
 
+function getTtsInstructions(language) {
+  const lang = String(language || "auto").toLowerCase();
+
+  const baseRules = [
+    "Tone: warm, caring, like a friendly experienced doctor explaining to a patient.",
+    "Natural conversational pace — not too fast, not too slow.",
+    "Pause briefly between sections for clarity.",
+    "Pronounce medical terms (hemoglobin, creatinine, paracetamol, vitamin) in standard English pronunciation.",
+    "Numbers can be in English."
+  ];
+
+  switch (lang) {
+    case "hindi":
+      return [
+        "Speak in Hindi with proper Devanagari pronunciation.",
+        "Use शुद्ध Hindi pronunciation for all Hindi words.",
+        ...baseRules,
+      ].join(" ");
+
+    case "hinglish":
+      return [
+        "You are speaking in Hinglish — a natural mix of Hindi and English as spoken in urban India.",
+        "CRITICAL PRONUNCIATION RULES:",
+        "- Hindi words MUST have proper Hindi/Devanagari pronunciation (dawai = दवाई, doodh = दूध, haldi = हल्दी, bukhar = बुखार).",
+        "- English words MUST have standard English pronunciation (basically, actually, so, report, normal).",
+        "- DO NOT pronounce Hindi words with an English accent.",
+        "- DO NOT pronounce English words with a heavy Hindi accent.",
+        "- Code-switch naturally between Hindi and English, like educated urban Indians do.",
+        ...baseRules,
+      ].join(" ");
+
+    case "bengali":
+      return [
+        "Speak in Bengali (বাংলা) with proper pronunciation.",
+        "Use Bengali script pronunciation. Keep medical terms in English.",
+        ...baseRules,
+      ].join(" ");
+
+    case "tamil":
+      return [
+        "Speak in Tamil (தமிழ்) with proper pronunciation.",
+        "Use Tamil pronunciation. Keep medical terms in English.",
+        ...baseRules,
+      ].join(" ");
+
+    case "telugu":
+      return [
+        "Speak in Telugu (తెలుగు) with proper pronunciation.",
+        "Use Telugu pronunciation. Keep medical terms in English.",
+        ...baseRules,
+      ].join(" ");
+
+    case "kannada":
+      return [
+        "Speak in Kannada (ಕನ್ನಡ) with proper pronunciation.",
+        "Use Kannada pronunciation. Keep medical terms in English.",
+        ...baseRules,
+      ].join(" ");
+
+    case "malayalam":
+      return [
+        "Speak in Malayalam (മലയാളം) with proper pronunciation.",
+        "Use Malayalam pronunciation. Keep medical terms in English.",
+        ...baseRules,
+      ].join(" ");
+
+    case "gujarati":
+      return [
+        "Speak in Gujarati (ગુજરાતી) with proper pronunciation.",
+        "Use Gujarati pronunciation. Keep medical terms in English.",
+        ...baseRules,
+      ].join(" ");
+
+    case "punjabi":
+      return [
+        "Speak in Punjabi with proper pronunciation.",
+        "Use Punjabi pronunciation. Keep medical terms in English.",
+        ...baseRules,
+      ].join(" ");
+
+    case "marathi":
+      return [
+        "Speak in Marathi (मराठी) with proper pronunciation.",
+        "Use Marathi pronunciation. Keep medical terms in English.",
+        ...baseRules,
+      ].join(" ");
+
+    case "english":
+    default:
+      return [
+        "Speak clearly in English with a warm, professional tone.",
+        "Use Indian English accent — natural, not forced.",
+        ...baseRules,
+      ].join(" ");
+  }
+}
+
 async function synthesizeSpeech({ text, language }) {
   const clean = String(text || "").trim();
   if (!clean) return { audioBase64: "" };
@@ -58,40 +161,7 @@ async function synthesizeSpeech({ text, language }) {
   if (!client) return { audioBase64: "" };
 
   const voice = String(process.env.AI_TTS_VOICE || "ash");
-
-  // ✅ FIX: Much better Hinglish TTS instructions
-  // Previous issue: voice was pronouncing Hindi words in English accent
-  // and English words in Hindi accent randomly
-  const hindiInstructions = [
-    "Speak clearly in Hindi (Devanagari pronunciation).",
-    "Use a warm, caring, professional doctor-like tone.",
-    "Pronounce medical terms (like hemoglobin, creatinine, paracetamol) in their standard English pronunciation.",
-    "Speak at a natural conversational pace, not too fast.",
-  ].join(" ");
-
-  const hinglishInstructions = [
-    "You are speaking in Hinglish — a natural mix of Hindi and English as spoken in urban India.",
-    "CRITICAL PRONUNCIATION RULES:",
-    "- Hindi words must be pronounced with proper Hindi/Devanagari pronunciation (e.g., 'dawai' = दवाई, 'doodh' = दूध, 'haldi' = हल्दी).",
-    "- English medical terms must be pronounced in standard English (e.g., 'hemoglobin', 'vitamin D', 'creatinine', 'paracetamol').",
-    "- Common Hinglish fillers like 'basically', 'actually', 'so' should be in English pronunciation.",
-    "- Numbers can be in English.",
-    "- DO NOT pronounce Hindi words with an English accent.",
-    "- DO NOT pronounce English words with a Hindi accent.",
-    "Tone: warm, caring, like a friendly Indian doctor explaining to a patient. Natural conversational pace.",
-  ].join(" ");
-
-  const englishInstructions = [
-    "Speak clearly in English with a warm, professional medical tone.",
-    "Pronounce all medical terms clearly and correctly.",
-    "Use a caring, doctor-like conversational pace.",
-  ].join(" ");
-
-  const instructions = language === "hi"
-    ? hindiInstructions
-    : language === "hinglish"
-      ? hinglishInstructions
-      : englishInstructions;
+  const instructions = getTtsInstructions(language);
 
   try {
     const out = await client.audio.speech.create({
