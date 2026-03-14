@@ -28,6 +28,18 @@ const clinicChangeRequestSchema = new mongoose.Schema(
     doctorId: { type: mongoose.Schema.Types.ObjectId, ref: "Doctor", required: true, index: true },
     previousClinic: { type: clinicSnapshotSchema, default: () => ({}) },
     requestedClinic: { type: clinicSnapshotSchema, default: () => ({}) },
+    proofDocument: {
+      url: { type: String, default: "", trim: true },
+      fileName: { type: String, default: "", trim: true },
+      mimeType: { type: String, default: "", trim: true },
+      size: { type: Number, default: 0 },
+    },
+    locationCaptureSource: {
+      type: String,
+      enum: ["manual_pin", "current_location", ""],
+      default: "",
+    },
+    locationCapturedAt: { type: Date, default: null },
     status: {
       type: String,
       enum: ["pending_verification", "approved", "rejected", "needs_more_info"],

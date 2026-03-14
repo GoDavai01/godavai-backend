@@ -268,6 +268,9 @@ router.post("/create", auth, async (req, res) => {
     if (doctor.verificationStatus && doctor.verificationStatus !== "approved") {
       return res.status(409).json({ error: "Doctor profile is not approved for booking yet" });
     }
+    if ((mode === "video" || mode === "call") && !doctor.online) {
+      return res.status(409).json({ error: "Doctor is currently offline for online consultations" });
+    }
     if (mode === "inperson" && !doctor?.consultModes?.inPerson) {
       return res.status(409).json({ error: "In-person consultation is not enabled for this doctor" });
     }

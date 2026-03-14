@@ -219,6 +219,14 @@ function mapClinicChangeRequestForDashboard(request = null) {
       arrivalWindow: Number(request?.requestedClinic?.arrivalWindow || 0),
       maxPatientsPerDay: Number(request?.requestedClinic?.maxPatientsPerDay || 0),
     },
+    proofDocument: {
+      url: asText(request?.proofDocument?.url),
+      fileName: asText(request?.proofDocument?.fileName),
+      mimeType: asText(request?.proofDocument?.mimeType),
+      size: Number(request?.proofDocument?.size || 0),
+    },
+    locationCaptureSource: asText(request?.locationCaptureSource),
+    locationCapturedAt: request?.locationCapturedAt || null,
   };
 }
 
@@ -616,6 +624,7 @@ function mapDoctorPublic(doc) {
     clinicName: asText(doc.verifiedClinicProfile?.name || doc.clinicName || doc.clinicProfile?.name || "Clinic"),
     tags: doc.tags || [],
     active: !!doc.active,
+    online: !!doc.online,
     consultationModes: {
       audio: !!doc.consultModes?.audio,
       video: !!doc.consultModes?.video,
@@ -689,6 +698,31 @@ function publicDoctorFilter() {
     $or: [{ verificationStatus: "approved" }, { verificationStatus: { $exists: false } }],
   };
 }
+
+function getUploadedFileMeta(file = null) {
+  if (!file) return { url: "", fileName: "", mimeType: "", size: 0 };
+  const url = asText(file.location || file.path || file.url);
+  return {
+    url,
+    fileName: asText(file.originalname || file.key || file.filename),
+    mimeType: asText(file.mimetype),
+    size: Number(file.size || 0),
+  };
+}
+
+const clinicChangeUpload = (req, res, next) => {
+  upload.single("clinicProof")(req, res, (err) => {
+    if (!err) return next();
+    const raw = asText(err?.message || "Upload failed");
+    const msg =
+      err?.code === "LIMIT_FILE_SIZE"
+        ? "Clinic proof file too large. Max 5MB allowed."
+        : err instanceof multer.MulterError
+        ? raw
+        : raw || "Clinic proof upload failed";
+    return res.status(400).json({ error: msg });
+  });
+};
 
 async function isSlotTaken({ doctorId, mode, date, slot, excludeAppointmentId = null }) {
   const rows = await DoctorAppointment.find({
@@ -1559,10 +1593,13 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
   }
 });
 
-router.post("/clinic-change-requests", doctorAuth, async (req, res) => {
+router.post("/clinic-change-requests", doctorAuth, clinicChangeUpload, async (req, res) => {
   try {
     const doctor = await Doctor.findById(req.doctorAuth.doctorId);
     if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    const lat = Number(req.body?.lat ?? req.body?.coordinates?.lat ?? null);
+    const lng = Number(req.body?.lng ?? req.body?.coordinates?.lng ?? null);
+    const proofDocument = getUploadedFileMeta(req.file);
     const requestedClinic = {
       verified: false,
       name: asText(req.body?.clinicName || req.body?.name),
@@ -1572,8 +1609,8 @@ router.post("/clinic-change-requests", doctorAuth, async (req, res) => {
       pincode: asText(req.body?.pin || req.body?.pincode),
       mapLabel: asText(req.body?.mapLabel || req.body?.clinicName || req.body?.name),
       coordinates: {
-        lat: Number(req.body?.lat ?? req.body?.coordinates?.lat ?? null),
-        lng: Number(req.body?.lng ?? req.body?.coordinates?.lng ?? null),
+        lat: Number.isFinite(lat) ? lat : null,
+        lng: Number.isFinite(lng) ? lng : null,
       },
       consultationDays: Array.isArray(req.body?.consultationDays) ? req.body.consultationDays.map(asText).filter(Boolean) : [],
       startTime: asText(req.body?.startTime),
@@ -1584,6 +1621,12 @@ router.post("/clinic-change-requests", doctorAuth, async (req, res) => {
     };
     if (!requestedClinic.name || !requestedClinic.fullAddress || !requestedClinic.locality) {
       return res.status(400).json({ error: "Clinic name, address, and locality are required" });
+    }
+    if (!proofDocument.url) {
+      return res.status(400).json({ error: "New clinic proof document is required" });
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ error: "New clinic map pin / location is required" });
     }
 
     const previousClinicSource = doctor.verifiedClinicProfile?.name ? doctor.verifiedClinicProfile : doctor.clinicProfile;
@@ -1606,6 +1649,9 @@ router.post("/clinic-change-requests", doctorAuth, async (req, res) => {
         maxPatientsPerDay: Number(previousClinicSource?.maxPatientsPerDay || 24),
       },
       requestedClinic,
+      proofDocument,
+      locationCaptureSource: asText(req.body?.locationCaptureSource || "manual_pin") || "manual_pin",
+      locationCapturedAt: new Date(),
     });
 
     doctor.clinicChangeRequestActive = true;
@@ -1863,9 +1909,17 @@ async function listDoctors(req, res) {
     if (mode === "inperson") {
       filter.$and = [...(filter.$and || []), { $or: [{ "consultModes.inPerson": true }, { consultModes: { $exists: false } }] }];
     } else if (mode === "call") {
-      filter.$and = [...(filter.$and || []), { $or: [{ "consultModes.audio": true }, { consultModes: { $exists: false } }] }];
+      filter.$and = [
+        ...(filter.$and || []),
+        { $or: [{ "consultModes.audio": true }, { consultModes: { $exists: false } }] },
+        { online: true },
+      ];
     } else {
-      filter.$and = [...(filter.$and || []), { $or: [{ "consultModes.video": true }, { consultModes: { $exists: false } }] }];
+      filter.$and = [
+        ...(filter.$and || []),
+        { $or: [{ "consultModes.video": true }, { consultModes: { $exists: false } }] },
+        { online: true },
+      ];
     }
     if (q) {
       const re = new RegExp(q, "i");
@@ -1913,6 +1967,9 @@ async function doctorSlots(req, res) {
 
     const doctor = await Doctor.findOne({ _id: doctorId, active: true }).lean();
     if (!doctor) return res.status(404).json({ error: "Doctor not found" });
+    if ((mode === "video" || mode === "call") && !doctor.online) {
+      return res.status(409).json({ error: "Doctor is currently offline for online consultations" });
+    }
 
     const dates = [];
     for (let i = 0; i < days; i += 1) {
@@ -2003,6 +2060,9 @@ router.post("/appointments", auth, async (req, res) => {
     if (!doctor || !doctor.active) return res.status(404).json({ error: "Doctor not found" });
     if (doctor.verificationStatus && doctor.verificationStatus !== "approved") {
       return res.status(409).json({ error: "Doctor profile is not approved for booking yet" });
+    }
+    if ((mode === "video" || mode === "call") && !doctor.online) {
+      return res.status(409).json({ error: "Doctor is currently offline for online consultations" });
     }
     if (mode === "inperson" && !doctor?.consultModes?.inPerson) {
       return res.status(409).json({ error: "In-person consultation is not enabled for this doctor" });
