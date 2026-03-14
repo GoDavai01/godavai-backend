@@ -1593,47 +1593,41 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
     }
 
     doctor.online = online;
-    doctor.consultModes = { audio: modes.audio, video: modes.video, inPerson: modes.inperson };
+    doctor.set("consultModes.audio", modes.audio);
+    doctor.set("consultModes.video", modes.video);
+    doctor.set("consultModes.inPerson", modes.inperson);
     doctor.feeCall = fees.audio;
     doctor.feeVideo = fees.video;
     doctor.feeInPerson = fees.inperson;
     doctor.consultationFee = Math.max(fees.audio || 0, fees.video || 0, fees.inperson || 0);
-    doctor.platformFeeBand = {
-      bandKey: band.bandKey,
-      serviceFee: band.serviceFee,
-      gstLabel: band.gstLabel,
-      manualApprovalRequired: band.requiresManualApproval,
-      updatedAt: new Date(),
-    };
-    doctor.clinicProfile = {
-      ...(doctor.clinicProfile || {}),
-      inPersonEnabled: modes.inperson,
-      consultationDays,
-      timingsText: modes.inperson ? (scheduleMode === "custom" ? "Custom timings" : `${startTime} - ${endTime}`) : "",
-      slotDurationMins: slotDuration,
-      patientArrivalWindowMins: arrivalWindow,
-      maxPatientsPerDay,
-    };
+    doctor.set("platformFeeBand.bandKey", band.bandKey);
+    doctor.set("platformFeeBand.serviceFee", Number(band.serviceFee || 0));
+    doctor.set("platformFeeBand.gstLabel", band.gstLabel || "+ applicable GST");
+    doctor.set("platformFeeBand.manualApprovalRequired", !!band.requiresManualApproval);
+    doctor.set("platformFeeBand.updatedAt", new Date());
+
+    doctor.set("clinicProfile.inPersonEnabled", modes.inperson);
+    doctor.set("clinicProfile.consultationDays", modes.inperson ? consultationDays : []);
+    doctor.set(
+      "clinicProfile.timingsText",
+      modes.inperson ? (scheduleMode === "custom" ? "Custom timings" : `${startTime} - ${endTime}`) : ""
+    );
+    doctor.set("clinicProfile.slotDurationMins", modes.inperson ? slotDuration : 0);
+    doctor.set("clinicProfile.patientArrivalWindowMins", modes.inperson ? arrivalWindow : 0);
+    doctor.set("clinicProfile.maxPatientsPerDay", modes.inperson ? maxPatientsPerDay : 0);
 
     if (doctor?.verifiedClinicProfile?.name) {
-      doctor.verifiedClinicProfile = {
-        ...(doctor.verifiedClinicProfile || {}),
-        consultationDays,
-        timingsText: doctor.clinicProfile.timingsText,
-        slotDurationMins: slotDuration,
-        patientArrivalWindowMins: arrivalWindow,
-        maxPatientsPerDay,
-        inPersonEnabled: modes.inperson,
-      };
+      doctor.set("verifiedClinicProfile.consultationDays", modes.inperson ? consultationDays : []);
+      doctor.set(
+        "verifiedClinicProfile.timingsText",
+        modes.inperson ? (scheduleMode === "custom" ? "Custom timings" : `${startTime} - ${endTime}`) : ""
+      );
+      doctor.set("verifiedClinicProfile.slotDurationMins", modes.inperson ? slotDuration : 0);
+      doctor.set("verifiedClinicProfile.patientArrivalWindowMins", modes.inperson ? arrivalWindow : 0);
+      doctor.set("verifiedClinicProfile.maxPatientsPerDay", modes.inperson ? maxPatientsPerDay : 0);
+      doctor.set("verifiedClinicProfile.inPersonEnabled", modes.inperson);
     }
 
-    if (!modes.inperson) {
-      doctor.clinicProfile.slotDurationMins = 0;
-      doctor.clinicProfile.patientArrivalWindowMins = 0;
-      doctor.clinicProfile.maxPatientsPerDay = 0;
-      doctor.clinicProfile.consultationDays = [];
-      doctor.clinicProfile.timingsText = "";
-    }
     doctor.availability = modes.inperson
       ? resolvedAvailability
       : buildAvailabilityFromDashboard({
