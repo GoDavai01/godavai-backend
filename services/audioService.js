@@ -77,13 +77,14 @@ function getTtsInstructions(language) {
 
     case "hinglish":
       return [
-        "You are speaking in Hinglish — a natural mix of Hindi and English as spoken in urban India.",
-        "CRITICAL PRONUNCIATION RULES:",
-        "- Hindi words MUST have proper Hindi/Devanagari pronunciation (dawai = दवाई, doodh = दूध, haldi = हल्दी, bukhar = बुखार).",
-        "- English words MUST have standard English pronunciation (basically, actually, so, report, normal).",
-        "- DO NOT pronounce Hindi words with an English accent.",
-        "- DO NOT pronounce English words with a heavy Hindi accent.",
-        "- Code-switch naturally between Hindi and English, like educated urban Indians do.",
+        "Speak in natural Indian Hinglish.",
+        "Use a warm, human, caring doctor tone.",
+        "Hindi-origin words should sound like natural Hindi, not English-accented.",
+        "English words should sound natural Indian English.",
+        "Do not over-dramatize.",
+        "Do not sound robotic.",
+        "Keep it smooth, simple, and conversational.",
+        "Pause naturally where commas and sentence breaks appear.",
         ...baseRules,
       ].join(" ");
 

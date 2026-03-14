@@ -3,6 +3,7 @@
 // ✅ FIX: Hindi script medical intent expanded
 // ✅ FIX: Hindi script casual greetings expanded
 // ✅ FIX: Marathi detection order fixed
+// ✅ FIX: Casual + one-line direct reply handling added
 // ✅ FIX: No other architecture changes
 
 const AiSession = require("../models/AiSession");
@@ -84,6 +85,53 @@ function isCasualConversation(text) {
   if (!src) return true;
   if (hasMedicalIntent(src)) return false;
   return /^(hi|hii|hello|hey|yo|namaste|namaskar|kaise ho|kya haal|kya hal|kya scene|how are you|good morning|good evening|good night|thanks|thank you|thx|ok|okay|acha|accha|hmm|hmmm|bro|bhai|sup|what's up|wassup|hola|bye|goodbye|see you|take care|हेलो|नमस्ते|नमस्कार|कैसे हो|क्या हाल|धन्यवाद)\b/i.test(src);
+}
+
+function wantsBriefDirectReply(text) {
+  const src = String(text || "").toLowerCase().trim();
+  if (!src) return false;
+
+  return (
+    /\b(ek line|one line|short me|briefly|brief|sirf bata|sirf batayo|matlab|meaning|kya hota hai|what is|what does .* mean|define)\b/i.test(src) &&
+    !hasMedicalIntent(src)
+  );
+}
+
+function buildCasualReply(message, ctx = {}) {
+  const lang = String(ctx?.detectedLanguage || ctx?.replyLanguage || ctx?.language || "hinglish").toLowerCase();
+  const src = String(message || "").toLowerCase().trim();
+
+  const isThanks = /\b(thanks|thank you|thx|dhanyavaad|शुक्रिया|thanku)\b/i.test(src);
+  const isHowAreYou = /\b(how are you|kaise ho|kaise hain|kya haal|kya hal|aur batao)\b/i.test(src);
+  const isGreeting = /^(hi|hii|hello|hey|yo|namaste|namaskar|hola|हेलो|नमस्ते|नमस्कार)\b/i.test(src);
+
+  if (lang === "english") {
+    if (isThanks) return "You're welcome. Tell me what you'd like help with.";
+    if (isHowAreYou) return "I'm good and ready to help. What would you like to ask?";
+    if (isGreeting) return "Hello! I'm here. Tell me what you want help with.";
+    return "Sure — tell me what you want help with.";
+  }
+
+  if (lang === "hindi") {
+    if (isThanks) return "कोई बात नहीं। बताइए, किस चीज़ में मदद चाहिए?";
+    if (isHowAreYou) return "मैं ठीक हूँ। बताइए, आपको किस चीज़ में मदद चाहिए?";
+    if (isGreeting) return "हेलो! मैं यहाँ हूँ। बताइए, क्या पूछना है?";
+    return "ठीक है, बताइए क्या मदद चाहिए?";
+  }
+
+  // default Hinglish
+  if (isThanks) return "Koi baat nahi. Batao kis cheez me help chahiye?";
+  if (isHowAreYou) return "Main theek hoon. Batao kya help chahiye?";
+  if (isGreeting) return "Hello! Main yahin hoon. Batao kya puchna hai?";
+  return "Haan bolo, kis cheez me help chahiye?";
+}
+
+function flattenStructuredReplyToPlain(text) {
+  return String(text || "")
+    .replace(/^\s*(Assessment|Next steps|Warning signs|Red flags|When to see doctor|Desi ilaaj|Home remedies)\s*:\s*/gim, "")
+    .replace(/^- /gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /* ── Intelligent Desi Ilaaj — contextual, varied, never repetitive ── */
@@ -179,8 +227,17 @@ function resolveReplyLanguage(message, context = {}) {
     "auto"
   ).toLowerCase();
 
+  // explicit user choice always wins
   if (pref && pref !== "auto") return pref;
-  return detectUserLanguage(message);
+
+  const detected = detectUserLanguage(message);
+
+  // IMPORTANT:
+  // Auto mode me agar user Devanagari Hindi me likhe,
+  // to hum Hinglish me reply denge (as per your product choice)
+  if (detected === "hindi") return "hinglish";
+
+  return detected === "auto" ? "hinglish" : detected;
 }
 
 /* ── World-class System Prompt with WHO + Indian Govt Guidelines ── */
@@ -311,6 +368,11 @@ function buildSystemPrompt(ctx) {
     "- Fever: NO aspirin. Paracetamol or ibuprofen only.",
     "- Dehydration: ORS is first line. NOT glucose water or plain water.",
     "- Vaccination: Follow IAP immunization schedule.",
+    "",
+    "DIRECT REPLY RULE:",
+    "- If the user is doing casual chat, greeting, thanks, or asking a simple one-line definition, reply directly in 1-3 short lines.",
+    "- Do NOT use Assessment / Next steps / Warning signs / Desi ilaaj for greetings, thanks, simple definitions, or non-clinical small talk.",
+    "- Use the structured medical format ONLY when the user is actually asking about symptoms, illness, report, scan, prescription, medicine, or treatment.",
     "",
     "═══ FORMATTING RULES (STRICT) ═══",
     "- Do NOT use markdown: no **, __, #, ##, ###, ```, or code blocks.",
@@ -577,11 +639,8 @@ function getContextualDesiIlaaj(message, focus) {
 function postProcessReply(reply, ctx, redFlags, sourceMessage = "") {
   const raw = sanitizeReplyFormatting(reply);
 
-  if (isCasualConversation(sourceMessage)) {
-    const hasStructuredSections = /(^|\n)\s*Assessment\s*:/i.test(raw);
-    if (!hasStructuredSections) {
-      return raw;
-    }
+  if (isCasualConversation(sourceMessage) || wantsBriefDirectReply(sourceMessage)) {
+    return flattenStructuredReplyToPlain(raw);
   }
 
   let assessment = extractSection(raw, "Assessment");
@@ -659,6 +718,14 @@ function postProcessReply(reply, ctx, redFlags, sourceMessage = "") {
 }
 
 function buildFallbackReply(message, ctx, redFlags) {
+  if (isCasualConversation(message)) {
+    return buildCasualReply(message, ctx);
+  }
+
+  if (wantsBriefDirectReply(message)) {
+    return buildCasualReply(message, ctx);
+  }
+
   const who = ctx.whoForLabel || (ctx.whoFor === "self" ? "you" : ctx.whoFor);
   const focus = String(ctx?.focus || "").toLowerCase();
 
@@ -917,7 +984,15 @@ async function generateAssistantReply({ message, history, context, userId, attac
   }
 
   reply = sanitizeReplyFormatting(reply);
-  reply = ensureStructuredSections(reply, { redFlags });
+
+  const keepShort =
+    isCasualConversation(baseUserMessage) ||
+    wantsBriefDirectReply(baseUserMessage);
+
+  if (!keepShort) {
+    reply = ensureStructuredSections(reply, { redFlags });
+  }
+
   reply = postProcessReply(reply, resolvedContext, redFlags, baseUserMessage);
 
   const sessionId = await upsertSession({

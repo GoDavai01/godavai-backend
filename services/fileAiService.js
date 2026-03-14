@@ -133,6 +133,24 @@ function detectMessageLanguage(text) {
   return "english";
 }
 
+function resolveFileReplyLanguage(message, context = {}) {
+  const pref = String(
+    context?.replyLanguagePreference ||
+    context?.languagePreference ||
+    context?.replyLanguage ||
+    context?.language ||
+    "auto"
+  ).toLowerCase();
+
+  if (pref && pref !== "auto") return pref;
+
+  const detected = detectMessageLanguage(message);
+
+  if (detected === "hindi") return "hinglish";
+
+  return detected === "auto" ? "hinglish" : detected;
+}
+
 function fileKind(file) {
   const mime = String(file?.mimetype || "").toLowerCase();
   const ext = path.extname(String(file?.originalname || "")).toLowerCase();
@@ -218,19 +236,15 @@ function isValidMarkerName(name) {
   const cleaned = String(name || "").trim();
   if (cleaned.length < 2) return false;
 
-  // Count alphabetic characters
   const alphaChars = (cleaned.match(/[a-zA-Z]/g) || []).length;
   const totalChars = cleaned.replace(/\s/g, "").length;
 
-  // Must have at least 2 alpha chars and at least 40% of name must be letters
   if (alphaChars < 2) return false;
   if (totalChars > 0 && alphaChars / totalChars < 0.4) return false;
 
-  // Reject names that are mostly special characters
   const specialCount = (cleaned.match(/[^a-zA-Z0-9\s\-\.\/()]/g) || []).length;
   if (specialCount > alphaChars) return false;
 
-  // Known valid lab marker substrings (at least one should match for confidence)
   const knownPatterns = [
     /hemoglobin|hb\b|wbc|rbc|platelet|pcv|hct|mcv|mch\b|mchc/i,
     /neutrophil|lymphocyte|monocyte|eosinophil|basophil|esr\b/i,
@@ -244,12 +258,10 @@ function isValidMarkerName(name) {
     /magnesium|zinc|folate|folic|b12|d3\b|copper/i,
   ];
 
-  // If it matches a known pattern, it's very likely valid
   for (const p of knownPatterns) {
     if (p.test(cleaned)) return true;
   }
 
-  // If name is short (< 4 chars) and doesn't match known patterns, reject
   if (alphaChars < 4) return false;
 
   return true;
@@ -353,7 +365,6 @@ function parseLabMarkers(text) {
 
       if (!marker || !Number.isFinite(value)) continue;
 
-      // ✅ FIX: Validate marker name quality
       if (!isValidMarkerName(marker)) continue;
 
       rows.push({
@@ -370,7 +381,6 @@ function parseLabMarkers(text) {
     value = Number(String(match[2]).replace(/,/g, ""));
     if (!marker || !Number.isFinite(value)) continue;
 
-    // ✅ FIX: Validate marker name quality
     if (!isValidMarkerName(marker)) continue;
 
     if (patternIndex === 1) {
@@ -404,8 +414,6 @@ function parseLabMarkers(text) {
     deduped.push(row);
   }
 
-  // ✅ FIX: Quality gate — if too many markers look suspicious, return empty
-  // This forces the system to rely on GPT analysis of raw text instead
   if (deduped.length > 0) {
     const validCount = deduped.filter((r) => isValidMarkerName(r.marker)).length;
     const validRatio = validCount / deduped.length;
@@ -750,14 +758,11 @@ async function extractPdfViaImageFallback(buffer, debugErrors = []) {
 function isExtractedTextUsable(text) {
   if (!text || text.length < 20) return false;
 
-  // Count readable vs total characters
   const readable = (text.match(/[a-zA-Z0-9\s.,:\-/()%+]/g) || []).length;
   const total = text.length;
 
-  // If less than 30% readable, it's garbage
   if (total > 0 && readable / total < 0.3) return false;
 
-  // Check for common medical/report words
   const medicalWords = /\b(test|result|normal|range|value|report|patient|date|name|age|doctor|lab|hospital|blood|urine|serum|plasma|total|count)\b/i;
   if (!medicalWords.test(text) && text.length < 200) return false;
 
@@ -776,7 +781,6 @@ async function extractTextAndParsed(file, mode) {
       parsed.csv = parseCsvToObjects(extractedText).slice(0, 120);
     }
   } else if (kind.image || kind.pdf) {
-    // ✅ FIX: Try local OCR first
     try {
       const ocr = await withTempFile(file, async (p) => extractTextPlus(p));
       extractedText = normalizeExtractedText(ocr?.text || "");
@@ -784,14 +788,13 @@ async function extractTextAndParsed(file, mode) {
         parsed.ocrEngine = parsed.ocrEngine || "local-ocr";
       } else {
         debugErrors.push("local_ocr_unusable_text");
-        extractedText = ""; // Reset — text is garbage
+        extractedText = "";
       }
     } catch (err) {
       debugErrors.push(`ocr_text_failed:${err?.message || "unknown"}`);
       extractedText = "";
     }
 
-    // ✅ FIX: For PDFs, try pdf-parse
     if (!extractedText && kind.pdf) {
       const pdfText = await extractPdfTextWithPdfParse(file.buffer);
       if (pdfText && isExtractedTextUsable(pdfText)) {
@@ -802,7 +805,6 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
-    // ✅ FIX: For images, try OpenAI vision OCR BEFORE heuristic (it's much better)
     if (!extractedText && kind.image) {
       const viaOpenAI = await ocrImageWithOpenAI(file.buffer, kind.mime || "image/png");
       if (viaOpenAI && isExtractedTextUsable(viaOpenAI)) {
@@ -813,11 +815,7 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
-    // ✅ FIX: For PDFs where text extraction failed, go straight to image-based OCR
-    // This is the KEY fix for multi-page scanned PDFs
     if (!extractedText && kind.pdf) {
-      // Skip heuristic text extraction — it produces garbage on scanned PDFs
-      // Go directly to image-based OCR (renders pages as images, then OCR each)
       const viaImage = await extractPdfViaImageFallback(file.buffer, debugErrors);
       if (viaImage && isExtractedTextUsable(viaImage)) {
         extractedText = viaImage;
@@ -827,7 +825,6 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
-    // Last resort: heuristic PDF text (only if nothing else worked)
     if (!extractedText && kind.pdf) {
       const pdfText = extractPdfTextHeuristic(file.buffer);
       if (pdfText && isExtractedTextUsable(pdfText)) {
@@ -838,8 +835,6 @@ async function extractTextAndParsed(file, mode) {
       }
     }
 
-    // For X-ray/scan style image files, run direct vision finding extraction
-    // even if OCR text is weak or absent.
     if (kind.image && mode === "xray") {
       const visionFindings = await analyzeMedicalImageWithVision(file.buffer, kind.mime || "image/png", mode);
       if (visionFindings) {
@@ -952,7 +947,7 @@ function buildModeInstructions(mode) {
 async function analyzeFileForAssistant({ file, message, history, context, userId }) {
   const persisted = await persistUploadedFile(file);
   const userMessage = String(message || "").trim();
-  const replyLanguage = detectMessageLanguage(userMessage);
+  const replyLanguage = resolveFileReplyLanguage(userMessage, context);
   let mode = normalizeFocus(message, context?.focus);
   const inferredFromName = inferModeFromFileName(file?.originalname);
   if (inferredFromName === "xray") mode = "xray";
@@ -964,7 +959,6 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
 
   const textPreview = extractedText ? extractedText.slice(0, 15000) : "";
 
-  // Build structured hints for model
   const parsedSummary =
     mode === "lab" && parsed.labMarkers?.length
       ? buildLabSummary(parsed.labMarkers)
@@ -1007,17 +1001,17 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
     return {
       reply: [
         "Assessment:",
-        "- Mujhe is file se reliable readable text ya visual findings nahi mile.",
+        "- Mujhe is file se reliable readable text ya clear visual findings nahi mile.",
         "- Isliye main guess-based analysis nahi dunga.",
         "",
         "Next steps:",
-        "- Clear original report/PDF upload karein (screenshot ya watermarked image ke bajay).",
-        "- X-ray ke liye full-resolution image ya radiologist impression page upload karein.",
-        "- Multi-page PDF me complete pages include karein.",
+        "- Clear original report ya PDF upload karo, screenshot ya blurry image nahi.",
+        "- X-ray ke liye full-resolution image ya radiologist impression page upload karo.",
+        "- Multi-page PDF ho to saare relevant pages include karo.",
         "",
         "Warning signs:",
-        "- Severe pain, deformity, numbness, swelling ya movement loss ho to turant doctor/ER visit karein.",
-        "- Chest pain, breathing issue, confusion, ya heavy bleeding me emergency care lein.",
+        "- Severe pain, deformity, numbness, swelling, ya movement loss ho to turant doctor/ER jao.",
+        "- Chest pain, breathing issue, confusion, ya heavy bleeding ho to emergency care lo.",
       ].join("\n"),
       sessionId: null,
       parsed: {
@@ -1028,22 +1022,23 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
       },
     };
   }
+
   const ai = await generateAssistantReply({
-  message: mergedMessage,
-  history,
-  context: {
-    ...context,
-    focus: mode,
-    language: replyLanguage,
-    replyLanguage,
-    replyLanguagePreference:
-      context?.replyLanguagePreference ||
-      context?.languagePreference ||
-      context?.language ||
+    message: mergedMessage,
+    history,
+    context: {
+      ...context,
+      focus: mode,
+      language: replyLanguage,
       replyLanguage,
-  },
-  userId,
-  attachment: {
+      replyLanguagePreference:
+        context?.replyLanguagePreference ||
+        context?.languagePreference ||
+        context?.language ||
+        replyLanguage,
+    },
+    userId,
+    attachment: {
       name: file?.originalname || "",
       url: persisted.relativePath,
       type: file?.mimetype || "",
@@ -1065,5 +1060,3 @@ async function analyzeFileForAssistant({ file, message, history, context, userId
 module.exports = {
   analyzeFileForAssistant,
 };
-
-
