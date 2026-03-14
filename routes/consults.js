@@ -205,6 +205,21 @@ function doctorAuth(req, res, next) {
   }
 }
 
+function optionalAuth(req, _res, next) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    req.user = null;
+    return next();
+  }
+  const token = authHeader.slice("Bearer ".length).trim();
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (_) {
+    req.user = null;
+  }
+  next();
+}
+
 async function slotIsTaken({ doctorId, date, slot, mode, ignoreId }) {
   const rows = await DoctorAppointment.find({
     doctorId,
@@ -347,19 +362,27 @@ const consultRecordUpload = (req, res, next) => {
   });
 };
 
-router.post("/create", auth, consultRecordUpload, async (req, res) => {
+router.post("/create", optionalAuth, consultRecordUpload, async (req, res) => {
   try {
-    const userId = req.user?.userId || req.user?._id;
+    let userId = req.user?.userId || req.user?._id;
     const doctorId = asText(req.body?.doctorId);
     const mode = normalizeMode(req.body?.mode || "video");
     const date = asText(req.body?.date);
     const slot = asText(req.body?.slot);
+    const incomingPatientName = asText(req.body?.patientName) || "Guest Patient";
 
-    if (!mongoose.Types.ObjectId.isValid(String(userId))) return res.status(401).json({ error: "Invalid user token" });
     if (!mongoose.Types.ObjectId.isValid(doctorId)) return res.status(400).json({ error: "Invalid doctorId" });
     if (!VALID_MODES.has(mode)) return res.status(400).json({ error: "mode must be video, inperson, or call" });
     if (!parseISODateOnly(date) || !slot) return res.status(400).json({ error: "date and slot are required" });
     if (isPastSlot(date, slot)) return res.status(409).json({ error: "Cannot book past slots" });
+
+    if (!mongoose.Types.ObjectId.isValid(String(userId))) {
+      const guestUser = await User.create({
+        name: incomingPatientName,
+        email: `guest-consult-${Date.now()}-${Math.floor(Math.random() * 100000)}@guest.godavaii.local`,
+      });
+      userId = guestUser._id;
+    }
 
     const doctor = await Doctor.findOne({ _id: doctorId, active: true });
     if (!doctor) return res.status(404).json({ error: "Doctor not found" });
@@ -404,7 +427,7 @@ router.post("/create", auth, consultRecordUpload, async (req, res) => {
       slot,
       appointmentAt,
       patientType: asText(req.body?.patientType || "self").toLowerCase(),
-      patientName: asText(req.body?.patientName) || "Self",
+      patientName: incomingPatientName,
       patientSummary: asText(req.body?.patientSummary || ""),
       symptoms: asText(req.body?.symptoms || req.body?.reason || ""),
       reason: asText(req.body?.reason) || "General consultation",
