@@ -14,6 +14,7 @@ const router = express.Router();
 
 const VALID_MODES = new Set(["video", "inperson", "call"]);
 const HOLD_MINUTES = Number(process.env.CONSULT_HOLD_MINUTES || 10);
+const IST_OFFSET_MINUTES = 330;
 bootstrapDoctorReminderScheduler();
 
 function asText(v) {
@@ -63,7 +64,10 @@ function buildAppointmentAt(date, slot) {
   const day = parseISODateOnly(date);
   const t = parseSlotTo24h(slot);
   if (!day || !t) return null;
-  return new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), t.hour, t.minute, 0, 0));
+  return new Date(
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), t.hour, t.minute, 0, 0) -
+      IST_OFFSET_MINUTES * 60 * 1000
+  );
 }
 
 function dayKeyFromIsoDate(date) {
@@ -326,20 +330,25 @@ function mapDashboardStatus(status, appointmentAt) {
   return "pending";
 }
 
+function getConsultBookedFor(consult = {}) {
+  return buildAppointmentAt(consult?.date, consult?.slot) || consult?.appointmentAt || null;
+}
+
 function mapDoctorDashboardConsult(c, patientMeta = null) {
+  const bookedFor = getConsultBookedFor(c);
   return {
     ...mapConsultDoctor(c),
     patientId: c.userId,
     patientAge: patientMeta?.patientAge ?? null,
     patientGender: patientMeta?.patientGender ?? null,
-    bookedFor: c.appointmentAt,
-    status: mapDashboardStatus(c.status, c.appointmentAt),
+    bookedFor,
+    status: mapDashboardStatus(c.status, bookedFor),
     mode: c.mode === "call" ? "audio" : c.mode,
     patientAttachments: Array.isArray(c.patientAttachments) ? c.patientAttachments : [],
     canJoin:
-      ["accepted", "upcoming", "live_now"].includes(mapDashboardStatus(c.status, c.appointmentAt)) &&
-      !!c.appointmentAt &&
-      new Date(c.appointmentAt).getTime() <= Date.now() + 5 * 60 * 1000,
+      ["accepted", "upcoming", "live_now"].includes(mapDashboardStatus(c.status, bookedFor)) &&
+      !!bookedFor &&
+      new Date(bookedFor).getTime() <= Date.now() + 5 * 60 * 1000,
     locationLabel: asText(c?.clinicLocationSnapshot?.locality),
   };
 }

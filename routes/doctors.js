@@ -22,6 +22,7 @@ const router = express.Router();
 const DEFAULT_SLOT_POOL = ["09:00 AM", "09:30 AM", "10:00 AM", "11:00 AM", "12:30 PM", "04:00 PM", "05:30 PM", "07:00 PM"];
 const VALID_MODES = new Set(["video", "inperson", "call"]);
 const VALID_ADMIN_STATES = new Set(["pending_verification", "approved", "rejected", "needs_more_info", "suspended"]);
+const IST_OFFSET_MINUTES = 330;
 const OTP_STORE = global.__GODAVAI_DOCTOR_OTP__ || new Map();
 global.__GODAVAI_DOCTOR_OTP__ = OTP_STORE;
 const MASTER_SPECIALTIES = [
@@ -282,7 +283,7 @@ function deriveDashboardBookingState(booking) {
   if (baseStatus === "no_show") return "no_show";
   if (baseStatus === "completed") return "completed";
   if (baseStatus === "confirmed") return "pending";
-  const appointmentAt = booking?.appointmentAt ? new Date(booking.appointmentAt) : null;
+  const appointmentAt = getBookingBookedFor(booking);
   if (baseStatus === "accepted") {
     if (appointmentAt && appointmentAt.getTime() <= Date.now() + 60 * 1000) return "live_now";
     return "upcoming";
@@ -347,6 +348,7 @@ function mapDoctorNotificationRow(row = {}) {
 }
 
 function mapDoctorBookingForDashboard(booking = {}, patientMeta = null) {
+  const bookedFor = getBookingBookedFor(booking);
   const mode = booking.mode === "call" ? "audio" : booking.mode;
   return {
     _id: booking._id,
@@ -357,7 +359,7 @@ function mapDoctorBookingForDashboard(booking = {}, patientMeta = null) {
     patientSummary: asText(booking.patientSummary),
     mode,
     status: deriveDashboardBookingState(booking),
-    bookedFor: booking.appointmentAt,
+    bookedFor,
     createdAt: booking.createdAt,
     fee: Number(booking.fee || 0),
     symptoms: asText(booking.symptoms || booking.reason),
@@ -371,7 +373,7 @@ function mapDoctorBookingForDashboard(booking = {}, patientMeta = null) {
     patientAttachments: Array.isArray(booking.patientAttachments) ? booking.patientAttachments : [],
     canJoin:
       deriveDashboardBookingState(booking) === "live_now" ||
-      (booking.appointmentAt && new Date(booking.appointmentAt).getTime() <= Date.now() + 5 * 60 * 1000),
+      (bookedFor && new Date(bookedFor).getTime() <= Date.now() + 5 * 60 * 1000),
   };
 }
 
@@ -509,7 +511,14 @@ function buildAppointmentAt(date, slot) {
   const day = parseISODateOnly(date);
   const t = parseSlotTo24h(slot);
   if (!day || !t) return null;
-  return new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), t.hour, t.minute, 0, 0));
+  return new Date(
+    Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), t.hour, t.minute, 0, 0) -
+      IST_OFFSET_MINUTES * 60 * 1000
+  );
+}
+
+function getBookingBookedFor(booking = {}) {
+  return buildAppointmentAt(booking?.date, booking?.slot) || (booking?.appointmentAt ? new Date(booking.appointmentAt) : null);
 }
 
 function toDateLabel(date) {
