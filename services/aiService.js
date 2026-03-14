@@ -5,6 +5,11 @@
 // ✅ FIX: Marathi detection order fixed
 // ✅ FIX: Casual + one-line direct reply handling added
 // ✅ FIX: No other architecture changes
+// ✅ FIX ONLY: simpler language rule added
+// ✅ FIX ONLY: greeting-first direct reply rule added
+// ✅ FIX ONLY: casual reply wording replaced
+// ✅ FIX ONLY: simplify non-English heavy words in post-processing
+// ✅ FIX ONLY: current message language stored in resolvedContext
 
 const AiSession = require("../models/AiSession");
 const { buildHealthContext } = require("./healthContextService");
@@ -106,23 +111,23 @@ function buildCasualReply(message, ctx = {}) {
   const isGreeting = /^(hi|hii|hello|hey|yo|namaste|namaskar|hola|हेलो|नमस्ते|नमस्कार)\b/i.test(src);
 
   if (lang === "english") {
-    if (isThanks) return "You're welcome. Tell me what you'd like help with.";
-    if (isHowAreYou) return "I'm good and ready to help. What would you like to ask?";
-    if (isGreeting) return "Hello! I'm here. Tell me what you want help with.";
-    return "Sure — tell me what you want help with.";
+    if (isThanks) return "You're welcome. Tell me what you need help with.";
+    if (isHowAreYou) return "I'm good. Tell me what you need help with.";
+    if (isGreeting) return "Hello! Tell me what you need help with.";
+    return "Sure, tell me what you need help with.";
   }
 
   if (lang === "hindi") {
     if (isThanks) return "कोई बात नहीं। बताइए, किस चीज़ में मदद चाहिए?";
-    if (isHowAreYou) return "मैं ठीक हूँ। बताइए, आपको किस चीज़ में मदद चाहिए?";
-    if (isGreeting) return "हेलो! मैं यहाँ हूँ। बताइए, क्या पूछना है?";
-    return "ठीक है, बताइए क्या मदद चाहिए?";
+    if (isHowAreYou) return "मैं ठीक हूँ। बताइए, किस चीज़ में मदद चाहिए?";
+    if (isGreeting) return "नमस्ते! बताइए, किस चीज़ में मदद चाहिए?";
+    return "ठीक है, बताइए किस चीज़ में मदद चाहिए?";
   }
 
   // default Hinglish
   if (isThanks) return "Koi baat nahi. Batao kis cheez me help chahiye?";
-  if (isHowAreYou) return "Main theek hoon. Batao kya help chahiye?";
-  if (isGreeting) return "Hello! Main yahin hoon. Batao kya puchna hai?";
+  if (isHowAreYou) return "Main theek hoon. Batao kis cheez me help chahiye?";
+  if (isGreeting) return "Namaste! Batao kis cheez me help chahiye?";
   return "Haan bolo, kis cheez me help chahiye?";
 }
 
@@ -316,6 +321,17 @@ function buildSystemPrompt(ctx) {
     "- The CURRENT message language wins. Ignore previous messages' language.",
     languageRule ? `- ${languageRule}` : "",
     "",
+    "═══ SIMPLE LANGUAGE RULE (VERY HIGH PRIORITY) ═══",
+    "- Use extremely simple everyday words.",
+    "- Explain like you are talking to a normal patient, not a medical student.",
+    "- For Hindi/Hinglish/other Indian language replies, avoid heavy English words unless absolutely necessary.",
+    "- Avoid difficult words like: concern, guidance, persistent, severity, monitor, borderline, elevated, abnormal, evaluation, condition, consult, probable, indicate.",
+    "- Use easier alternatives instead.",
+    "- Hinglish examples: use 'problem', 'samajhne ke liye', 'lagataar', 'zyada', 'thoda upar', 'thoda neeche', 'normal se thoda alag', 'dekhte raho'.",
+    "- Hindi examples: use 'pareshani', 'samajhne ke liye', 'lagataar', 'zyada', 'thoda badha hua', 'thoda kam', 'normal se thoda alag'.",
+    "- Keep sentences short and direct.",
+    "- If a medical term is necessary, explain it immediately in very simple words.",
+    "",
     `═══ PATIENT CONTEXT ═══`,
     `Audience: ${ctx.whoFor} (${whoLabel}). Focus mode: ${ctx.focus}.`,
     profileBits.length ? `Known data: ${profileBits.join(" | ")}` : "Patient data: limited — ask key details if needed.",
@@ -373,6 +389,7 @@ function buildSystemPrompt(ctx) {
     "- If the user is doing casual chat, greeting, thanks, or asking a simple one-line definition, reply directly in 1-3 short lines.",
     "- Do NOT use Assessment / Next steps / Warning signs / Desi ilaaj for greetings, thanks, simple definitions, or non-clinical small talk.",
     "- Use the structured medical format ONLY when the user is actually asking about symptoms, illness, report, scan, prescription, medicine, or treatment.",
+    "- For greetings like 'hello, kaise ho, kya haal hai', reply naturally to that exact greeting first.",
     "",
     "═══ FORMATTING RULES (STRICT) ═══",
     "- Do NOT use markdown: no **, __, #, ##, ###, ```, or code blocks.",
@@ -636,6 +653,65 @@ function getContextualDesiIlaaj(message, focus) {
     "\n- Ye gharelu nuskhe supportive hain. Serious ya persistent symptoms me doctor zaroor dikhayein.";
 }
 
+function simplifyNonEnglishReply(text, lang) {
+  let out = String(text || "");
+
+  const normalized = String(lang || "").toLowerCase();
+
+  if (normalized === "hinglish") {
+    const replacements = [
+      [/\bconcern\b/gi, "problem"],
+      [/\bguidance\b/gi, "samajhne ke liye help"],
+      [/\bpersistent\b/gi, "lagataar"],
+      [/\bseverity\b/gi, "kitni zyada hai"],
+      [/\bsevere\b/gi, "zyada"],
+      [/\bmonitor\b/gi, "dekhte raho"],
+      [/\bborderline\b/gi, "thoda limit ke paas"],
+      [/\belevated\b/gi, "thoda badha hua"],
+      [/\babnormal\b/gi, "normal se thoda alag"],
+      [/\bcondition\b/gi, "problem"],
+      [/\bconsult\b/gi, "baat karo"],
+      [/\bevaluation\b/gi, "check"],
+      [/\bexisting diseases\b/gi, "pehle se koi bimari"],
+      [/\bcurrent medicines\b/gi, "abhi chal rahi dawa"],
+      [/\bexact symptom\b/gi, "seedhi problem"],
+      [/\bexact symptoms\b/gi, "seedhi problem"],
+      [/\bnot improving\b/gi, "theek nahi ho raha"],
+    ];
+
+    for (const [from, to] of replacements) {
+      out = out.replace(from, to);
+    }
+  }
+
+  if (normalized === "hindi") {
+    const replacements = [
+      [/\bconcern\b/gi, "परेशानी"],
+      [/\bguidance\b/gi, "समझने के लिए मदद"],
+      [/\bpersistent\b/gi, "लगातार"],
+      [/\bseverity\b/gi, "कितनी ज़्यादा है"],
+      [/\bsevere\b/gi, "ज़्यादा"],
+      [/\bmonitor\b/gi, "ध्यान रखें"],
+      [/\bborderline\b/gi, "सीमा के पास"],
+      [/\belevated\b/gi, "थोड़ा बढ़ा हुआ"],
+      [/\babnormal\b/gi, "नॉर्मल से थोड़ा अलग"],
+      [/\bcondition\b/gi, "समस्या"],
+      [/\bconsult\b/gi, "बात करें"],
+      [/\bevaluation\b/gi, "जांच"],
+      [/\bexisting diseases\b/gi, "पहले से कोई बीमारी"],
+      [/\bcurrent medicines\b/gi, "अभी चल रही दवा"],
+      [/\bexact symptom\b/gi, "मुख्य दिक्कत"],
+      [/\bexact symptoms\b/gi, "मुख्य दिक्कत"],
+    ];
+
+    for (const [from, to] of replacements) {
+      out = out.replace(from, to);
+    }
+  }
+
+  return out;
+}
+
 function postProcessReply(reply, ctx, redFlags, sourceMessage = "") {
   const raw = sanitizeReplyFormatting(reply);
 
@@ -714,7 +790,8 @@ function postProcessReply(reply, ctx, redFlags, sourceMessage = "") {
     output.push("", "Desi ilaaj:", desiIlaajBody);
   }
 
-  return output.join("\n");
+  const finalText = output.join("\n");
+  return simplifyNonEnglishReply(finalText, ctx?.detectedLanguage || ctx?.replyLanguage || ctx?.language);
 }
 
 function buildFallbackReply(message, ctx, redFlags) {
@@ -906,6 +983,7 @@ async function generateAssistantReply({ message, history, context, userId, attac
   const resolvedContext = await buildHealthContext({ userId, context });
 
   const detectedLanguage = resolveReplyLanguage(baseUserMessage, context);
+  resolvedContext.currentMessageLanguage = detectUserLanguage(baseUserMessage);
   resolvedContext.detectedLanguage = detectedLanguage;
   resolvedContext.replyLanguagePreference = String(
     context?.replyLanguagePreference || "auto"
