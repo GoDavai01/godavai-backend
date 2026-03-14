@@ -1593,39 +1593,45 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
     }
 
     doctor.online = online;
-    doctor.set("consultModes.audio", modes.audio);
-    doctor.set("consultModes.video", modes.video);
-    doctor.set("consultModes.inPerson", modes.inperson);
+    doctor.consultModes = {
+      ...(doctor.consultModes?.toObject ? doctor.consultModes.toObject() : doctor.consultModes || {}),
+      audio: modes.audio,
+      video: modes.video,
+      inPerson: modes.inperson,
+    };
     doctor.feeCall = fees.audio;
     doctor.feeVideo = fees.video;
     doctor.feeInPerson = fees.inperson;
     doctor.consultationFee = Math.max(fees.audio || 0, fees.video || 0, fees.inperson || 0);
-    doctor.set("platformFeeBand.bandKey", band.bandKey);
-    doctor.set("platformFeeBand.serviceFee", Number(band.serviceFee || 0));
-    doctor.set("platformFeeBand.gstLabel", band.gstLabel || "+ applicable GST");
-    doctor.set("platformFeeBand.manualApprovalRequired", !!band.requiresManualApproval);
-    doctor.set("platformFeeBand.updatedAt", new Date());
+    doctor.platformFeeBand = {
+      ...(doctor.platformFeeBand?.toObject ? doctor.platformFeeBand.toObject() : doctor.platformFeeBand || {}),
+      bandKey: band.bandKey,
+      serviceFee: Number(band.serviceFee || 0),
+      gstLabel: band.gstLabel || "+ applicable GST",
+      manualApprovalRequired: !!band.requiresManualApproval,
+      updatedAt: new Date(),
+    };
 
-    doctor.set("clinicProfile.inPersonEnabled", modes.inperson);
-    doctor.set("clinicProfile.consultationDays", modes.inperson ? consultationDays : []);
-    doctor.set(
-      "clinicProfile.timingsText",
-      modes.inperson ? (scheduleMode === "custom" ? "Custom timings" : `${startTime} - ${endTime}`) : ""
-    );
-    doctor.set("clinicProfile.slotDurationMins", modes.inperson ? slotDuration : 0);
-    doctor.set("clinicProfile.patientArrivalWindowMins", modes.inperson ? arrivalWindow : 0);
-    doctor.set("clinicProfile.maxPatientsPerDay", modes.inperson ? maxPatientsPerDay : 0);
+    doctor.clinicProfile = {
+      ...(doctor.clinicProfile?.toObject ? doctor.clinicProfile.toObject() : doctor.clinicProfile || {}),
+      inPersonEnabled: modes.inperson,
+      consultationDays: modes.inperson ? consultationDays : [],
+      timingsText: modes.inperson ? (scheduleMode === "custom" ? "Custom timings" : `${startTime} - ${endTime}`) : "",
+      slotDurationMins: modes.inperson ? slotDuration : 0,
+      patientArrivalWindowMins: modes.inperson ? arrivalWindow : 0,
+      maxPatientsPerDay: modes.inperson ? maxPatientsPerDay : 0,
+    };
 
     if (doctor?.verifiedClinicProfile?.name) {
-      doctor.set("verifiedClinicProfile.consultationDays", modes.inperson ? consultationDays : []);
-      doctor.set(
-        "verifiedClinicProfile.timingsText",
-        modes.inperson ? (scheduleMode === "custom" ? "Custom timings" : `${startTime} - ${endTime}`) : ""
-      );
-      doctor.set("verifiedClinicProfile.slotDurationMins", modes.inperson ? slotDuration : 0);
-      doctor.set("verifiedClinicProfile.patientArrivalWindowMins", modes.inperson ? arrivalWindow : 0);
-      doctor.set("verifiedClinicProfile.maxPatientsPerDay", modes.inperson ? maxPatientsPerDay : 0);
-      doctor.set("verifiedClinicProfile.inPersonEnabled", modes.inperson);
+      doctor.verifiedClinicProfile = {
+        ...(doctor.verifiedClinicProfile?.toObject ? doctor.verifiedClinicProfile.toObject() : doctor.verifiedClinicProfile || {}),
+        consultationDays: modes.inperson ? consultationDays : [],
+        timingsText: modes.inperson ? (scheduleMode === "custom" ? "Custom timings" : `${startTime} - ${endTime}`) : "",
+        slotDurationMins: modes.inperson ? slotDuration : 0,
+        patientArrivalWindowMins: modes.inperson ? arrivalWindow : 0,
+        maxPatientsPerDay: modes.inperson ? maxPatientsPerDay : 0,
+        inPersonEnabled: modes.inperson,
+      };
     }
 
     doctor.availability = modes.inperson
@@ -1639,20 +1645,26 @@ router.patch("/dashboard/settings", doctorAuth, async (req, res) => {
 
     await doctor.save();
 
-    const dashboardDoctor = await Doctor.findById(doctor._id).lean();
     return res.json({
       ok: true,
-      doctor: buildDoctorDashboardPayload({
-        doctor: dashboardDoctor,
-        incomingRequests: [],
-        upcomingConsults: [],
-        notifications: [],
-        clinicChangeRequest: null,
-      }).doctor,
+      doctor: {
+        _id: String(doctor._id),
+        online: !!doctor.online,
+        modes: normalizeDoctorModes(doctor),
+        fees: buildDoctorFeeShape(doctor),
+        platformBand: formatFrontendPlatformBand(getDoctorCommercialSnapshot(doctor).band),
+        clinic: getDoctorClinicForOps(doctor),
+        availability: doctor.availability || {},
+      },
     });
   } catch (err) {
-    console.error("PATCH /doctors/dashboard/settings error:", err?.message || err);
-    return res.status(500).json({ error: "Failed to update dashboard settings" });
+    const details = err?.errors
+      ? Object.fromEntries(
+          Object.entries(err.errors).map(([key, value]) => [key, value?.message || "Invalid value"])
+        )
+      : err?.message || "Unknown error";
+    console.error("PATCH /doctors/dashboard/settings error:", err);
+    return res.status(500).json({ error: "Failed to update dashboard settings", details });
   }
 });
 
