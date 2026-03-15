@@ -68,7 +68,7 @@ const StepTrackerSessionSchema = new mongoose.Schema(
     stats: {
       steps: { type: Number, default: 0 },
       distanceMeters: { type: Number, default: 0 },
-      caloriesKcal: { type: Number, default: 0 },
+      caloriesKcal: { type: Number, default: null },
       durationSec: { type: Number, default: 0 },
       avgPaceMinPerKm: { type: Number, default: 0 },
       maxSpeedKmh: { type: Number, default: 0 },

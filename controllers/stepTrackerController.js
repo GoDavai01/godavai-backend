@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const StepTrackerSession = require("../models/StepTrackerSession");
 
 function haversineMeters(a, b) {
@@ -17,23 +18,41 @@ function haversineMeters(a, b) {
 
 function computeDistance(points = []) {
   if (!Array.isArray(points) || points.length < 2) return 0;
+
   let total = 0;
   for (let i = 1; i < points.length; i += 1) {
-    const d = haversineMeters(points[i - 1], points[i]);
+    const prev = points[i - 1];
+    const curr = points[i];
+    const d = haversineMeters(prev, curr);
+
     if (d > 1 && d < 120) total += d;
   }
+
   return Math.round(total);
 }
 
-function calculateSteps(distanceMeters = 0, providedSteps = 0) {
-  const distanceBased = Math.round(Number(distanceMeters || 0) / 0.78);
-  return Math.max(Number(providedSteps || 0), distanceBased);
+function getUserStrideMeters(req) {
+  const heightCm = Number(req.user?.heightCm || 0);
+  if (heightCm > 0) {
+    return Math.max(0.5, heightCm * 0.00415);
+  }
+  return 0.78;
 }
 
-function calculateCalories(distanceMeters = 0, steps = 0, weightKg = 70) {
+function calculateSteps(distanceMeters = 0, providedSteps = 0, strideMeters = 0.78) {
+  const safeStride = Number(strideMeters || 0.78) > 0 ? Number(strideMeters || 0.78) : 0.78;
+  const distanceBased = Math.round(Number(distanceMeters || 0) / safeStride);
+  return Math.max(Number(providedSteps || 0), distanceBased, 0);
+}
+
+function calculateCalories(distanceMeters = 0, steps = 0, weightKg = null) {
+  const safeWeight = Number(weightKg || 0);
+  if (!safeWeight || safeWeight <= 0) return null;
+
   const km = Number(distanceMeters || 0) / 1000;
-  const byDistance = km * Number(weightKg || 70) * 0.75;
+  const byDistance = km * safeWeight * 0.75;
   const bySteps = Number(steps || 0) * 0.04;
+
   return Math.round(Math.max(byDistance, bySteps, 0));
 }
 
@@ -51,71 +70,189 @@ function avgPaceMinPerKm(durationSec = 0, distanceMeters = 0) {
 }
 
 function getUserWeightFromReq(req) {
-  return Number(req.user?.weightKg || req.user?.weight || 70);
+  const weight = Number(req.user?.weightKg || 0);
+  if (weight > 0) return weight;
+  return null;
+}
+
+function buildStats(session, req, incoming = {}) {
+  const existingPoints = Array.isArray(session.points) ? session.points : [];
+  const strideMeters = getUserStrideMeters(req);
+
+  const computedDistance = computeDistance(existingPoints);
+  const totalDistance = Math.max(
+    computedDistance,
+    Number(incoming.distanceMeters || 0),
+    Number(session.stats?.distanceMeters || 0)
+  );
+
+  const totalSteps = calculateSteps(
+    totalDistance,
+    Math.max(Number(incoming.steps || 0), Number(session.stats?.steps || 0)),
+    strideMeters
+  );
+
+  const finalDuration = Math.max(Number(incoming.durationSec || 0), computeDurationSec(session));
+
+  const weightKg = getUserWeightFromReq(req);
+  const computedCalories = calculateCalories(totalDistance, totalSteps, weightKg);
+
+  let finalCalories = null;
+  if (computedCalories != null) {
+    finalCalories = Math.max(
+      Number(incoming.caloriesKcal || 0),
+      Number(session.stats?.caloriesKcal || 0),
+      computedCalories
+    );
+  }
+
+  let maxSpeedKmh = Number(session.stats?.maxSpeedKmh || 0);
+  for (const p of existingPoints) {
+    const kmh = Number(p.speed || 0) * 3.6;
+    if (kmh > maxSpeedKmh) maxSpeedKmh = kmh;
+  }
+
+  return {
+    steps: totalSteps,
+    distanceMeters: Math.round(totalDistance),
+    caloriesKcal: finalCalories,
+    durationSec: finalDuration,
+    avgPaceMinPerKm: avgPaceMinPerKm(finalDuration, totalDistance),
+    maxSpeedKmh: Number(maxSpeedKmh.toFixed(2)),
+  };
+}
+
+function normalizePoint(point) {
+  if (!point || typeof point !== "object") return null;
+
+  const lat = Number(point.lat);
+  const lng = Number(point.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  return {
+    lat,
+    lng,
+    accuracy: Number(point.accuracy || 0),
+    speed: Number(point.speed || 0),
+    heading:
+      point.heading === null || point.heading === undefined || point.heading === ""
+        ? null
+        : Number(point.heading),
+    source: point.source || "gps",
+    recordedAt: point.recordedAt ? new Date(point.recordedAt) : new Date(),
+  };
 }
 
 exports.startSession = async (req, res) => {
   try {
     const { startLocation, device } = req.body || {};
 
+    const normalizedStart =
+      startLocation &&
+      Number.isFinite(Number(startLocation.lat)) &&
+      Number.isFinite(Number(startLocation.lng))
+        ? {
+            lat: Number(startLocation.lat),
+            lng: Number(startLocation.lng),
+            accuracy: Number(startLocation.accuracy || 0),
+          }
+        : null;
+
     const session = await StepTrackerSession.create({
       userId: req.user._id,
-      startLocation: startLocation || null,
-      device: device || {},
+      startLocation: normalizedStart,
+      device: {
+        platform: device?.platform || "",
+        userAgent: device?.userAgent || "",
+      },
       status: "active",
       startedAt: new Date(),
+      points: [],
+      stats: {
+        steps: 0,
+        distanceMeters: 0,
+        caloriesKcal: getUserWeightFromReq(req) ? 0 : null,
+        durationSec: 0,
+        avgPaceMinPerKm: 0,
+        maxSpeedKmh: 0,
+      },
     });
 
     return res.status(201).json({ ok: true, session });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: "Failed to start step session.", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: "Failed to start step session.",
+      error: err.message,
+    });
   }
 };
 
 exports.appendPoints = async (req, res) => {
   try {
     const { id } = req.params;
-    const { points = [], steps = 0, distanceMeters = 0, caloriesKcal = 0, durationSec = 0 } = req.body || {};
+    const {
+      points = [],
+      steps = 0,
+      distanceMeters = 0,
+      caloriesKcal = 0,
+      durationSec = 0,
+    } = req.body || {};
 
-    const session = await StepTrackerSession.findOne({ _id: id, userId: req.user._id });
-    if (!session) return res.status(404).json({ ok: false, message: "Session not found." });
-
-    if (Array.isArray(points) && points.length) {
-      session.points.push(...points);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, message: "Invalid session id." });
     }
 
-    const totalDistance = Math.max(computeDistance(session.points), Number(distanceMeters || 0), Number(session.stats?.distanceMeters || 0));
-    const totalSteps = calculateSteps(totalDistance, Math.max(Number(steps || 0), Number(session.stats?.steps || 0)));
-    const finalDuration = Math.max(Number(durationSec || 0), computeDurationSec(session));
-    const finalCalories = Math.max(Number(caloriesKcal || 0), calculateCalories(totalDistance, totalSteps, getUserWeightFromReq(req)));
+    const session = await StepTrackerSession.findOne({
+      _id: id,
+      userId: req.user._id,
+    });
 
-    let maxSpeedKmh = Number(session.stats?.maxSpeedKmh || 0);
-    for (const p of session.points) {
-      const kmh = Number(p.speed || 0) * 3.6;
-      if (kmh > maxSpeedKmh) maxSpeedKmh = kmh;
+    if (!session) {
+      return res.status(404).json({ ok: false, message: "Session not found." });
     }
 
-    session.stats = {
-      ...session.stats,
-      distanceMeters: Math.round(totalDistance),
-      steps: totalSteps,
-      caloriesKcal: finalCalories,
-      durationSec: finalDuration,
-      avgPaceMinPerKm: avgPaceMinPerKm(finalDuration, totalDistance),
-      maxSpeedKmh: Number(maxSpeedKmh.toFixed(2)),
-    };
+    const normalizedPoints = Array.isArray(points)
+      ? points.map(normalizePoint).filter(Boolean)
+      : [];
+
+    if (normalizedPoints.length) {
+      session.points.push(...normalizedPoints);
+    }
+
+    session.stats = buildStats(session, req, {
+      steps,
+      distanceMeters,
+      caloriesKcal,
+      durationSec,
+    });
 
     await session.save();
 
     return res.json({ ok: true, session });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: "Failed to append route points.", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: "Failed to append route points.",
+      error: err.message,
+    });
   }
 };
 
 exports.pauseSession = async (req, res) => {
   try {
-    const session = await StepTrackerSession.findOne({ _id: req.params.id, userId: req.user._id });
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, message: "Invalid session id." });
+    }
+
+    const session = await StepTrackerSession.findOne({
+      _id: id,
+      userId: req.user._id,
+    });
+
     if (!session) return res.status(404).json({ ok: false, message: "Session not found." });
 
     if (session.status === "active") {
@@ -126,13 +263,27 @@ exports.pauseSession = async (req, res) => {
 
     return res.json({ ok: true, session });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: "Failed to pause session.", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: "Failed to pause session.",
+      error: err.message,
+    });
   }
 };
 
 exports.resumeSession = async (req, res) => {
   try {
-    const session = await StepTrackerSession.findOne({ _id: req.params.id, userId: req.user._id });
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, message: "Invalid session id." });
+    }
+
+    const session = await StepTrackerSession.findOne({
+      _id: id,
+      userId: req.user._id,
+    });
+
     if (!session) return res.status(404).json({ ok: false, message: "Session not found." });
 
     if (session.status === "paused" && session.pausedAt) {
@@ -144,15 +295,35 @@ exports.resumeSession = async (req, res) => {
 
     return res.json({ ok: true, session });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: "Failed to resume session.", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: "Failed to resume session.",
+      error: err.message,
+    });
   }
 };
 
 exports.endSession = async (req, res) => {
   try {
-    const { endLocation, steps = 0, distanceMeters = 0, caloriesKcal = 0, durationSec = 0 } = req.body || {};
+    const {
+      endLocation,
+      steps = 0,
+      distanceMeters = 0,
+      caloriesKcal = 0,
+      durationSec = 0,
+    } = req.body || {};
 
-    const session = await StepTrackerSession.findOne({ _id: req.params.id, userId: req.user._id });
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, message: "Invalid session id." });
+    }
+
+    const session = await StepTrackerSession.findOne({
+      _id: id,
+      userId: req.user._id,
+    });
+
     if (!session) return res.status(404).json({ ok: false, message: "Session not found." });
 
     if (session.status === "paused" && session.pausedAt) {
@@ -162,33 +333,35 @@ exports.endSession = async (req, res) => {
 
     session.status = "ended";
     session.endedAt = new Date();
-    session.endLocation = endLocation || session.endLocation || null;
 
-    const totalDistance = Math.max(computeDistance(session.points), Number(distanceMeters || 0), Number(session.stats?.distanceMeters || 0));
-    const totalSteps = calculateSteps(totalDistance, Math.max(Number(steps || 0), Number(session.stats?.steps || 0)));
-    const finalDuration = Math.max(Number(durationSec || 0), computeDurationSec(session));
-    const finalCalories = Math.max(Number(caloriesKcal || 0), calculateCalories(totalDistance, totalSteps, getUserWeightFromReq(req)));
-
-    let maxSpeedKmh = Number(session.stats?.maxSpeedKmh || 0);
-    for (const p of session.points) {
-      const kmh = Number(p.speed || 0) * 3.6;
-      if (kmh > maxSpeedKmh) maxSpeedKmh = kmh;
+    if (
+      endLocation &&
+      Number.isFinite(Number(endLocation.lat)) &&
+      Number.isFinite(Number(endLocation.lng))
+    ) {
+      session.endLocation = {
+        lat: Number(endLocation.lat),
+        lng: Number(endLocation.lng),
+        accuracy: Number(endLocation.accuracy || 0),
+      };
     }
 
-    session.stats = {
-      steps: totalSteps,
-      distanceMeters: Math.round(totalDistance),
-      caloriesKcal: finalCalories,
-      durationSec: finalDuration,
-      avgPaceMinPerKm: avgPaceMinPerKm(finalDuration, totalDistance),
-      maxSpeedKmh: Number(maxSpeedKmh.toFixed(2)),
-    };
+    session.stats = buildStats(session, req, {
+      steps,
+      distanceMeters,
+      caloriesKcal,
+      durationSec,
+    });
 
     await session.save();
 
     return res.json({ ok: true, session });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: "Failed to end session.", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: "Failed to end session.",
+      error: err.message,
+    });
   }
 };
 
@@ -202,20 +375,36 @@ exports.getTodaySummary = async (req, res) => {
       startedAt: { $gte: start },
     }).sort({ startedAt: -1 });
 
+    const hasWeight = !!getUserWeightFromReq(req);
+
     const summary = sessions.reduce(
       (acc, s) => {
         acc.steps += Number(s.stats?.steps || 0);
         acc.distanceMeters += Number(s.stats?.distanceMeters || 0);
-        acc.caloriesKcal += Number(s.stats?.caloriesKcal || 0);
         acc.durationSec += Number(s.stats?.durationSec || 0);
+
+        if (hasWeight) {
+          acc.caloriesKcal += Number(s.stats?.caloriesKcal || 0);
+        }
+
         return acc;
       },
-      { steps: 0, distanceMeters: 0, caloriesKcal: 0, durationSec: 0, sessionsCount: sessions.length }
+      {
+        steps: 0,
+        distanceMeters: 0,
+        caloriesKcal: hasWeight ? 0 : null,
+        durationSec: 0,
+        sessionsCount: sessions.length,
+      }
     );
 
     return res.json(summary);
   } catch (err) {
-    return res.status(500).json({ ok: false, message: "Failed to fetch today summary.", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: "Failed to fetch today summary.",
+      error: err.message,
+    });
   }
 };
 
@@ -227,16 +416,35 @@ exports.listSessions = async (req, res) => {
 
     return res.json({ ok: true, sessions });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: "Failed to fetch sessions.", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: "Failed to fetch sessions.",
+      error: err.message,
+    });
   }
 };
 
 exports.getSessionById = async (req, res) => {
   try {
-    const session = await StepTrackerSession.findOne({ _id: req.params.id, userId: req.user._id });
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, message: "Invalid session id." });
+    }
+
+    const session = await StepTrackerSession.findOne({
+      _id: id,
+      userId: req.user._id,
+    });
+
     if (!session) return res.status(404).json({ ok: false, message: "Session not found." });
+
     return res.json({ ok: true, session });
   } catch (err) {
-    return res.status(500).json({ ok: false, message: "Failed to fetch session.", error: err.message });
+    return res.status(500).json({
+      ok: false,
+      message: "Failed to fetch session.",
+      error: err.message,
+    });
   }
 };
