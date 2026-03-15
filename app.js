@@ -67,6 +67,7 @@ const upload = require('./utils/upload');
 const suggestRouter = require("./routes/suggest");
 const medicineMasterRoutes = require("./routes/medicineMaster");
 const aiAudioRoutes = require("./routes/aiAudioRoutes");
+const stepTrackerRoutes = require("./routes/stepTrackerRoutes");
 
 // ---- S3 guard (put near your other env reads) ----
 const haveS3Creds =
@@ -243,6 +244,7 @@ app.use('/api/payments', require('./routes/payments'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use("/api/users", require("./routes/users"));
 app.use("/api/ai", aiAudioRoutes);
+app.use("/api/step-tracker", stepTrackerRoutes);
 app.use("/api/delivery", require("./routes/deliveryRoutes"));
 app.use("/api/prescriptions", require("./routes/prescriptions"));
 app.use("/api/pharma", require("./routes/pharmaDict"));
