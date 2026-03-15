@@ -1,6 +1,11 @@
 const mongoose = require("mongoose");
 const StepTrackerSession = require("../models/StepTrackerSession");
 
+/* ───── Constants ───── */
+const MAX_ACCURACY_METERS = 50;   // backend is more lenient than frontend (30m)
+const MIN_DISTANCE_DELTA = 1.5;
+const MAX_DISTANCE_DELTA = 200;
+
 function haversineMeters(a, b) {
   if (!a || !b) return 0;
   const R = 6371000;
@@ -20,12 +25,26 @@ function computeDistance(points = []) {
   if (!Array.isArray(points) || points.length < 2) return 0;
 
   let total = 0;
-  for (let i = 1; i < points.length; i += 1) {
-    const prev = points[i - 1];
-    const curr = points[i];
-    const d = haversineMeters(prev, curr);
+  let lastGoodPoint = points[0];
 
-    if (d > 1 && d < 120) total += d;
+  for (let i = 1; i < points.length; i += 1) {
+    const curr = points[i];
+
+    // FIX: Skip points with poor accuracy
+    if (curr.accuracy && curr.accuracy > MAX_ACCURACY_METERS) continue;
+
+    const d = haversineMeters(lastGoodPoint, curr);
+
+    // FIX: Use smarter min delta based on combined accuracy
+    const combinedAccuracy = ((lastGoodPoint.accuracy || 0) + (curr.accuracy || 0)) / 2;
+    const effectiveMin = Math.max(MIN_DISTANCE_DELTA, combinedAccuracy * 0.5);
+
+    if (d > effectiveMin && d < MAX_DISTANCE_DELTA) {
+      total += d;
+    }
+
+    // Always update lastGoodPoint if this point has acceptable accuracy
+    lastGoodPoint = curr;
   }
 
   return Math.round(total);
@@ -109,7 +128,7 @@ function buildStats(session, req, incoming = {}) {
   let maxSpeedKmh = Number(session.stats?.maxSpeedKmh || 0);
   for (const p of existingPoints) {
     const kmh = Number(p.speed || 0) * 3.6;
-    if (kmh > maxSpeedKmh) maxSpeedKmh = kmh;
+    if (kmh > maxSpeedKmh && kmh < 50) maxSpeedKmh = kmh;  // FIX: cap at 50 km/h to filter GPS noise
   }
 
   return {
@@ -129,6 +148,9 @@ function normalizePoint(point) {
   const lng = Number(point.lng);
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  // FIX: Validate lat/lng ranges
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
 
   return {
     lat,
@@ -159,6 +181,17 @@ exports.startSession = async (req, res) => {
           }
         : null;
 
+    // FIX: Auto-end any previous active sessions for this user
+    await StepTrackerSession.updateMany(
+      { userId: req.user._id, status: { $in: ["active", "paused"] } },
+      {
+        $set: {
+          status: "ended",
+          endedAt: new Date(),
+        },
+      }
+    );
+
     const session = await StepTrackerSession.create({
       userId: req.user._id,
       startLocation: normalizedStart,
@@ -168,7 +201,19 @@ exports.startSession = async (req, res) => {
       },
       status: "active",
       startedAt: new Date(),
-      points: [],
+      points: normalizedStart
+        ? [
+            {
+              lat: normalizedStart.lat,
+              lng: normalizedStart.lng,
+              accuracy: normalizedStart.accuracy,
+              speed: 0,
+              heading: null,
+              source: "gps",
+              recordedAt: new Date(),
+            },
+          ]
+        : [],
       stats: {
         steps: 0,
         distanceMeters: 0,
@@ -213,11 +258,27 @@ exports.appendPoints = async (req, res) => {
       return res.status(404).json({ ok: false, message: "Session not found." });
     }
 
+    // FIX: Don't accept points for ended sessions
+    if (session.status === "ended") {
+      return res.status(400).json({ ok: false, message: "Session already ended." });
+    }
+
     const normalizedPoints = Array.isArray(points)
       ? points.map(normalizePoint).filter(Boolean)
       : [];
 
     if (normalizedPoints.length) {
+      // FIX: Limit total stored points to prevent unbounded growth
+      const MAX_POINTS = 5000;
+      const currentLen = session.points.length;
+      if (currentLen + normalizedPoints.length > MAX_POINTS) {
+        // Keep last N points to stay under limit
+        const overflow = (currentLen + normalizedPoints.length) - MAX_POINTS;
+        if (overflow > 0 && overflow < currentLen) {
+          session.points = session.points.slice(overflow);
+        }
+      }
+
       session.points.push(...normalizedPoints);
     }
 
@@ -230,7 +291,7 @@ exports.appendPoints = async (req, res) => {
 
     await session.save();
 
-    return res.json({ ok: true, session });
+    return res.json({ ok: true, stats: session.stats });
   } catch (err) {
     return res.status(500).json({
       ok: false,
@@ -326,6 +387,11 @@ exports.endSession = async (req, res) => {
 
     if (!session) return res.status(404).json({ ok: false, message: "Session not found." });
 
+    // FIX: Allow ending already-ended sessions gracefully
+    if (session.status === "ended") {
+      return res.json({ ok: true, session, message: "Session was already ended." });
+    }
+
     if (session.status === "paused" && session.pausedAt) {
       session.totalPausedMs += Date.now() - new Date(session.pausedAt).getTime();
       session.pausedAt = null;
@@ -373,7 +439,9 @@ exports.getTodaySummary = async (req, res) => {
     const sessions = await StepTrackerSession.find({
       userId: req.user._id,
       startedAt: { $gte: start },
-    }).sort({ startedAt: -1 });
+    })
+      .select("stats status")    // FIX: Don't load all points for summary — saves memory
+      .sort({ startedAt: -1 });
 
     const hasWeight = !!getUserWeightFromReq(req);
 
