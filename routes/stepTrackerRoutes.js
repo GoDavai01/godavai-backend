@@ -7,10 +7,27 @@ const User = require("../models/User");
 const router = express.Router();
 
 function extractBearerToken(req) {
-  const header = req.headers.authorization || req.headers.Authorization || "";
-  if (!header || typeof header !== "string") return null;
-  if (!header.startsWith("Bearer ")) return null;
-  return header.slice(7).trim();
+  const authHeader = req.headers.authorization || req.headers.Authorization || "";
+  const xAccessToken = req.headers["x-access-token"] || req.headers["X-Access-Token"] || "";
+  const rawTokenHeader = req.headers.token || req.headers.Token || "";
+
+  if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+
+  if (typeof authHeader === "string" && authHeader && !authHeader.startsWith("Bearer ")) {
+    return authHeader.trim();
+  }
+
+  if (typeof xAccessToken === "string" && xAccessToken) {
+    return xAccessToken.trim();
+  }
+
+  if (typeof rawTokenHeader === "string" && rawTokenHeader) {
+    return rawTokenHeader.trim();
+  }
+
+  return null;
 }
 
 function pickUserIdFromDecoded(decoded) {
@@ -20,9 +37,13 @@ function pickUserIdFromDecoded(decoded) {
     decoded.id,
     decoded._id,
     decoded.userId,
+    decoded.sub,
     decoded.user?._id,
     decoded.user?.id,
     decoded.user?.userId,
+    decoded.data?._id,
+    decoded.data?.id,
+    decoded.data?.userId,
   ];
 
   for (const value of candidates) {
@@ -37,8 +58,12 @@ function pickUserIdFromDecoded(decoded) {
 async function authRequired(req, res, next) {
   try {
     const token = extractBearerToken(req);
+
     if (!token) {
-      return res.status(401).json({ ok: false, message: "Missing bearer token" });
+      return res.status(401).json({
+        ok: false,
+        message: "Missing auth token",
+      });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
