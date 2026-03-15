@@ -35,6 +35,8 @@ const doctorAppointmentSchema = new mongoose.Schema(
     transactionId: { type: String, default: "" },
     paymentRef: { type: String, default: "" },
     amountPaid: { type: Number, default: 0 },
+    refundStatus: { type: String, enum: ["none", "initiated", "completed", "failed"], default: "none" },
+    refundedAt: { type: Date, default: null },
     bundledPriceLabel: { type: String, default: "" },
     platformFeeBandApplied: {
       bandKey: { type: String, default: "", trim: true },
@@ -68,6 +70,14 @@ const doctorAppointmentSchema = new mongoose.Schema(
     callState: { type: String, enum: ["not_started", "ready", "live", "ended"], default: "not_started", index: true },
     doctorNotes: { type: String, default: "" },
     internalNotes: { type: String, default: "" },
+    doctorAction: {
+      type: String,
+      enum: ["none", "accepted", "rescheduled", "rejected", "cancelled"],
+      default: "none",
+      index: true,
+    },
+    doctorActionAt: { type: Date, default: null },
+    rescheduledAt: { type: Date, default: null },
     prescriptionId: { type: mongoose.Schema.Types.ObjectId, ref: "DoctorPrescription", default: null },
     prescription: {
       fileUrl: { type: String, default: "", trim: true },

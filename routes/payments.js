@@ -138,6 +138,8 @@ router.post("/verify", async (req, res) => {
     consult.transactionId = transactionId;
     consult.paymentStatus = "paid";
     consult.amountPaid = consult.fee || 0;
+    consult.refundStatus = "none";
+    consult.refundedAt = null;
     consult.status = "confirmed";
     consult.holdExpiresAt = null;
     consult.locationUnlockedForPatient = consult.mode === "inperson";
@@ -170,8 +172,10 @@ router.post("/verify", async (req, res) => {
     res.json({
       ok: true,
       consultId: consult._id,
+      consult: consult.toObject(),
       status: consult.status,
       paymentStatus: consult.paymentStatus,
+      paymentRef: consult.paymentRef || "",
     });
   } catch (err) {
     console.error("POST /api/payments/verify error:", err?.message || err);

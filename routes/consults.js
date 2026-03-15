@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
+const Razorpay = require("razorpay");
 const auth = require("../middleware/auth");
 const Doctor = require("../models/Doctor");
 const DoctorAppointment = require("../models/DoctorAppointment");
@@ -15,6 +16,13 @@ const router = express.Router();
 const VALID_MODES = new Set(["video", "inperson", "call"]);
 const HOLD_MINUTES = Number(process.env.CONSULT_HOLD_MINUTES || 10);
 const IST_OFFSET_MINUTES = 330;
+const razorpayEnabled = !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
+const razorpay = razorpayEnabled
+  ? new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET,
+    })
+  : null;
 bootstrapDoctorReminderScheduler();
 
 function asText(v) {
@@ -26,6 +34,18 @@ function normalizeMode(mode) {
   if (m === "audio" || m === "call") return "call";
   if (m === "in-person" || m === "inperson") return "inperson";
   return "video";
+}
+
+function normalizeDoctorAction(value) {
+  const action = asText(value).toLowerCase();
+  if (["accepted", "rescheduled", "rejected", "cancelled"].includes(action)) return action;
+  return "none";
+}
+
+function normalizeRefundStatus(value) {
+  const status = asText(value).toLowerCase();
+  if (["initiated", "completed", "failed"].includes(status)) return status;
+  return "none";
 }
 
 function computePlatformBand(fee) {
@@ -176,6 +196,44 @@ function getUploadedFilesMeta(files = []) {
     .filter((file) => file.url);
 }
 
+async function attemptConsultRefund(consult, reason = "doctor_cancelled") {
+  const amountPaise = Math.round(Number(consult?.amountPaid || consult?.fee || 0) * 100);
+  if (amountPaise <= 0 || consult?.paymentStatus !== "paid") {
+    return { status: "skipped", message: "No refundable payment found" };
+  }
+
+  const paymentMethod = asText(consult?.paymentMethod).toLowerCase();
+  const transactionId = asText(consult?.transactionId);
+
+  if (paymentMethod === "cash") {
+    return { status: "initiated", message: "Cash refund requires manual handling" };
+  }
+
+  if (!razorpayEnabled || !razorpay || !transactionId) {
+    return { status: "initiated", message: "Refund has to be handled manually" };
+  }
+
+  try {
+    const refund = await razorpay.payments.refund(transactionId, {
+      amount: amountPaise,
+      notes: {
+        consultId: String(consult?._id || ""),
+        reason,
+      },
+    });
+    return {
+      status: "completed",
+      refundId: asText(refund?.id),
+      message: "Refund completed successfully",
+    };
+  } catch (err) {
+    return {
+      status: "failed",
+      message: err?.error?.description || err?.message || "Refund failed",
+    };
+  }
+}
+
 async function buildPatientMetaMap(bookings = []) {
   const userIds = [...new Set(
     (bookings || [])
@@ -254,6 +312,8 @@ function mapConsultDoctor(c) {
     status: c.status,
     paymentMethod: c.paymentMethod || "",
     paymentStatus: c.paymentStatus || "pending",
+    refundStatus: normalizeRefundStatus(c.refundStatus),
+    refundedAt: c.refundedAt || null,
     transactionId: c.transactionId || "",
     paymentRef: c.paymentRef || "",
     bundledPriceLabel: c.bundledPriceLabel || "",
@@ -267,11 +327,15 @@ function mapConsultDoctor(c) {
     joinedAt: c.joinedAt || null,
     endedAt: c.endedAt || null,
     doctorNotes: c.doctorNotes || "",
+    doctorAction: normalizeDoctorAction(c.doctorAction),
+    doctorActionAt: c.doctorActionAt || null,
+    rescheduledAt: c.rescheduledAt || null,
     patientSummary: c.patientSummary || "",
     symptoms: c.symptoms || "",
     patientAttachments: Array.isArray(c.patientAttachments) ? c.patientAttachments : [],
     prescriptionId: c.prescriptionId || null,
     holdExpiresAt: c.holdExpiresAt || null,
+    cancelReason: c.cancelReason || "",
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   };
@@ -297,6 +361,8 @@ function mapConsultUser(c) {
     status: c.status,
     paymentMethod: c.paymentMethod || "",
     paymentStatus: c.paymentStatus || "pending",
+    refundStatus: normalizeRefundStatus(c.refundStatus),
+    refundedAt: c.refundedAt || null,
     transactionId: c.transactionId || "",
     paymentRef: c.paymentRef || "",
     holdExpiresAt: c.holdExpiresAt || null,
@@ -313,6 +379,10 @@ function mapConsultUser(c) {
     },
     consultRoomId: c.consultRoomId || "",
     callState: c.callState || "not_started",
+    doctorAction: normalizeDoctorAction(c.doctorAction),
+    doctorActionAt: c.doctorActionAt || null,
+    rescheduledAt: c.rescheduledAt || null,
+    cancelReason: c.cancelReason || "",
     prescriptionId: c.prescriptionId || null,
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
@@ -380,6 +450,10 @@ router.post("/lookup/batch", optionalAuth, async (req, res) => {
       .map((item) => ({
         bookingId: asText(item?.bookingId || item?.id),
         paymentRef: asText(item?.paymentRef),
+        doctorId: asText(item?.doctorId),
+        date: asText(item?.date),
+        slot: asText(item?.slot),
+        mode: normalizeMode(item?.mode),
       }))
       .filter((item) => mongoose.Types.ObjectId.isValid(item.bookingId));
 
@@ -391,15 +465,26 @@ router.post("/lookup/batch", optionalAuth, async (req, res) => {
     }).lean();
 
     const itemMap = new Map(
-      normalizedItems.map((item) => [String(item.bookingId), item.paymentRef || ""])
+      normalizedItems.map((item) => [String(item.bookingId), item])
     );
 
     const safeRows = rows.filter((row) => {
-      const expectedPaymentRef = itemMap.get(String(row._id)) || "";
+      const lookupItem = itemMap.get(String(row._id)) || {};
+      const expectedPaymentRef = lookupItem.paymentRef || "";
       if (expectedPaymentRef && expectedPaymentRef === asText(row.paymentRef)) return true;
 
       const authUserId = req.user?.userId || req.user?._id;
       if (authUserId && String(row.userId) === String(authUserId)) return true;
+
+      if (
+        lookupItem.doctorId &&
+        String(row.doctorId) === lookupItem.doctorId &&
+        asText(row.date) === lookupItem.date &&
+        asText(row.slot) === lookupItem.slot &&
+        normalizeMode(row.mode) === lookupItem.mode
+      ) {
+        return true;
+      }
 
       return false;
     });
@@ -609,6 +694,8 @@ const handleDoctorConsultStatus = async (req, res, forcedAction = "") => {
         return res.status(409).json({ error: "Consult cannot be accepted in current state" });
       }
       consult.status = consult.appointmentAt && consult.appointmentAt.getTime() <= Date.now() + 60 * 1000 ? "live_now" : "accepted";
+      consult.doctorAction = "accepted";
+      consult.doctorActionAt = new Date();
       await consult.save();
       await createDoctorNotification({
         doctorId: consult.doctorId,
@@ -642,9 +729,22 @@ const handleDoctorConsultStatus = async (req, res, forcedAction = "") => {
       if (consult.paymentStatus !== "paid" || ["pending_payment"].includes(consult.status)) {
         return res.status(409).json({ error: "Only paid actionable consults can be cancelled or rejected by doctor" });
       }
+      const isReject = action === "reject";
+      const refundResult = await attemptConsultRefund(consult, isReject ? "doctor_rejected" : "doctor_cancelled");
       consult.status = action === "reject" ? "rejected" : "cancelled";
       consult.cancelReason = asText(req.body?.reason || req.body?.cancelReason || "Cancelled by doctor");
       consult.cancelledAt = new Date();
+      consult.doctorAction = isReject ? "rejected" : "cancelled";
+      consult.doctorActionAt = new Date();
+      if (refundResult.status === "completed") {
+        consult.paymentStatus = "refunded";
+        consult.refundStatus = "completed";
+        consult.refundedAt = new Date();
+      } else if (refundResult.status === "initiated") {
+        consult.refundStatus = "initiated";
+      } else if (refundResult.status === "failed") {
+        consult.refundStatus = "failed";
+      }
       await consult.save();
       await createDoctorNotification({
         doctorId: consult.doctorId,
@@ -655,8 +755,13 @@ const handleDoctorConsultStatus = async (req, res, forcedAction = "") => {
       });
       await createPatientNotification({
         userId: consult.userId,
-        title: "Consultation cancelled",
-        message: `${consult.doctorName || "Doctor"} marked your consultation as cancelled`,
+        title: isReject ? "Consultation rejected" : "Consultation cancelled",
+        message:
+          refundResult.status === "completed"
+            ? `${consult.doctorName || "Doctor"} ${isReject ? "rejected" : "cancelled"} your consultation and your refund has been completed`
+            : refundResult.status === "initiated"
+              ? `${consult.doctorName || "Doctor"} ${isReject ? "rejected" : "cancelled"} your consultation and your refund has been initiated`
+              : `${consult.doctorName || "Doctor"} ${isReject ? "rejected" : "cancelled"} your consultation`,
       });
       const patientMetaMap = await buildPatientMetaMap([consult]);
       return res.json({ consult: mapConsultDoctor(consult), dashboardConsult: mapDoctorDashboardConsult(consult, patientMetaMap.get(String(consult.userId || "")) || null) });
@@ -685,6 +790,9 @@ const handleDoctorConsultStatus = async (req, res, forcedAction = "") => {
       consult.slot = slot;
       consult.appointmentAt = appointmentAt;
       consult.status = "accepted";
+      consult.doctorAction = "rescheduled";
+      consult.doctorActionAt = new Date();
+      consult.rescheduledAt = new Date();
       await consult.save();
       await createDoctorNotification({
         doctorId: consult.doctorId,
@@ -893,4 +1001,3 @@ router.patch("/:id/prescription", doctorAuth, upload.single("prescription"), asy
 });
 
 module.exports = router;
-
