@@ -2227,5 +2227,3 @@ router.post("/appointments", auth, consultRecordUpload, async (req, res) => {
 });
 
 module.exports = router;
-
-

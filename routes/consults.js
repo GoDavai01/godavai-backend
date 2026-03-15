@@ -371,6 +371,48 @@ const consultRecordUpload = (req, res, next) => {
   });
 };
 
+router.post("/lookup/batch", optionalAuth, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) return res.json({ consults: [] });
+
+    const normalizedItems = items
+      .map((item) => ({
+        bookingId: asText(item?.bookingId || item?.id),
+        paymentRef: asText(item?.paymentRef),
+      }))
+      .filter((item) => mongoose.Types.ObjectId.isValid(item.bookingId));
+
+    if (!normalizedItems.length) return res.json({ consults: [] });
+
+    const bookingIds = normalizedItems.map((item) => item.bookingId);
+    const rows = await DoctorAppointment.find({
+      _id: { $in: bookingIds },
+    }).lean();
+
+    const itemMap = new Map(
+      normalizedItems.map((item) => [String(item.bookingId), item.paymentRef || ""])
+    );
+
+    const safeRows = rows.filter((row) => {
+      const expectedPaymentRef = itemMap.get(String(row._id)) || "";
+      if (expectedPaymentRef && expectedPaymentRef === asText(row.paymentRef)) return true;
+
+      const authUserId = req.user?.userId || req.user?._id;
+      if (authUserId && String(row.userId) === String(authUserId)) return true;
+
+      return false;
+    });
+
+    return res.json({
+      consults: safeRows.map(mapConsultUser),
+    });
+  } catch (err) {
+    console.error("POST /consults/lookup/batch error:", err?.message || err);
+    return res.status(500).json({ error: "Failed to sync consult statuses" });
+  }
+});
+
 router.post("/create", optionalAuth, consultRecordUpload, async (req, res) => {
   try {
     let userId = req.user?.userId || req.user?._id;
